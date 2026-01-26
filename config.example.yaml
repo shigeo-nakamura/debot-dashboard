@@ -1,0 +1,11 @@
+region: eu-central-1
+poll_interval_secs: 20
+targets:
+  - name: debot00
+    instance_id: i-xxxxxxxxxxxxxxxxx
+    service: debot00
+    status_path: /home/ec2-user/debot_status/debot00/status.json
+  - name: debot01
+    instance_id: i-xxxxxxxxxxxxxxxxx
+    service: debot01
+    status_path: /home/ec2-user/debot_status/debot01/status.json
