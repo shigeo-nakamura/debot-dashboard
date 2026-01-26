@@ -1,0 +1,4 @@
+.tools/
+.gocache/
+debot-dashboard
+config.yaml
