@@ -1,0 +1,16 @@
+[Unit]
+Description=Debot Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/debot-dashboard
+ExecStart=/opt/debot-dashboard/debot-dashboard -config /opt/debot-dashboard/config.yaml -listen :8080
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
