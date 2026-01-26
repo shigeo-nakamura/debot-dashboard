@@ -18,6 +18,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: debot-dashboard
     steps:
       - uses: actions/checkout@v4
 
@@ -34,20 +35,20 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upload artifacts to S3
         env:
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
         run: |
           aws s3 cp dist/debot-dashboard "s3://${S3_BUCKET}/debot-dashboard/debot-dashboard"
           aws s3 cp deploy/debot-dashboard.service "s3://${S3_BUCKET}/deploy/debot-dashboard.service"
 
       - name: Deploy via SSM
         env:
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
-          INSTANCE_ID: ${{ secrets.INSTANCE_ID }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          INSTANCE_ID: ${{ vars.INSTANCE_ID }}
         run: |
           cat > /tmp/ssm-params.json <<JSON
           {
