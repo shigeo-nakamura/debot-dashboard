@@ -30,7 +30,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/debot-dashboard .
+          GOOS=linux GOARCH=arm64 go build -o dist/debot-dashboard .
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
