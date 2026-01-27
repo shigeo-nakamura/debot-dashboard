@@ -99,7 +99,7 @@ const createCard = (key) => {
       <div class="kv">
         <div>Positions <span data-field="positions"></span></div>
         <div>PnL today <span data-field="pnl-today"></span></div>
-        <div>PnL total <span data-field="pnl-total"></span></div>
+        <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
       <div class="positions" data-field="positions-list"></div>
       <div class="error" data-field="error" hidden></div>
