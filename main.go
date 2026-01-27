@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -30,6 +31,12 @@ type Config struct {
 	Region           string         `yaml:"region"`
 	PollIntervalSecs int            `yaml:"poll_interval_secs"`
 	Targets          []TargetConfig `yaml:"targets"`
+	Auth             *AuthConfig    `yaml:"auth"`
+}
+
+type AuthConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type TargetConfig struct {
@@ -134,6 +141,10 @@ func main() {
 	if err := normalizeConfig(&cfg); err != nil {
 		log.Fatalf("config invalid: %v", err)
 	}
+	auth, err := resolveAuth(cfg)
+	if err != nil {
+		log.Fatalf("auth config invalid: %v", err)
+	}
 
 	cache := &StatusCache{}
 	pool := &ClientPool{clients: map[string]*ssm.Client{}}
@@ -151,7 +162,7 @@ func main() {
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
 	log.Printf("debot-dashboard listening on %s", listen)
-	if err := http.ListenAndServe(listen, mux); err != nil {
+	if err := http.ListenAndServe(listen, withAuth(mux, auth)); err != nil {
 		log.Fatalf("server stopped: %v", err)
 	}
 }
@@ -197,6 +208,59 @@ func normalizeConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+type BasicAuth struct {
+	Username string
+	Password string
+	Enabled  bool
+}
+
+func resolveAuth(cfg Config) (BasicAuth, error) {
+	userEnv := strings.TrimSpace(os.Getenv("DEBOT_DASHBOARD_USERNAME"))
+	passEnv := os.Getenv("DEBOT_DASHBOARD_PASSWORD")
+	if userEnv != "" || passEnv != "" {
+		if userEnv == "" || passEnv == "" {
+			return BasicAuth{}, errors.New("DEBOT_DASHBOARD_USERNAME and DEBOT_DASHBOARD_PASSWORD must both be set")
+		}
+		return BasicAuth{Username: userEnv, Password: passEnv, Enabled: true}, nil
+	}
+	if cfg.Auth == nil {
+		return BasicAuth{}, nil
+	}
+	userCfg := strings.TrimSpace(cfg.Auth.Username)
+	passCfg := cfg.Auth.Password
+	if userCfg == "" && passCfg == "" {
+		return BasicAuth{}, nil
+	}
+	if userCfg == "" || passCfg == "" {
+		return BasicAuth{}, errors.New("auth.username and auth.password must both be set")
+	}
+	return BasicAuth{Username: userCfg, Password: passCfg, Enabled: true}, nil
+}
+
+func withAuth(next http.Handler, auth BasicAuth) http.Handler {
+	if !auth.Enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || !matchBasicAuth(user, pass, auth) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="debot-dashboard"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func matchBasicAuth(user, pass string, auth BasicAuth) bool {
+	if user == "" || pass == "" {
+		return false
+	}
+	userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(auth.Username)) == 1
+	passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(auth.Password)) == 1
+	return userMatch && passMatch
 }
 
 func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCache) {

@@ -56,6 +56,40 @@ Push to `main` and the workflow `.github/workflows/deploy.yml` will:
 - upload it to S3
 - deploy and restart via SSM
 
+## Basic auth (password protection)
+Set credentials to require HTTP Basic Auth for all routes.
+
+Option A: environment variables (recommended)
+```
+DEBOT_DASHBOARD_USERNAME=admin
+DEBOT_DASHBOARD_PASSWORD=change-me
+```
+
+Option B: config.yaml
+```
+auth:
+  username: admin
+  password: change-me
+```
+
+Environment variables take precedence over config. If only one value is set, the service will fail fast.
+
+For systemd, create an override:
+```
+sudo systemctl edit debot-dashboard
+```
+Add:
+```
+[Service]
+Environment=DEBOT_DASHBOARD_USERNAME=admin
+Environment=DEBOT_DASHBOARD_PASSWORD=change-me
+```
+Then restart:
+```
+sudo systemctl daemon-reload
+sudo systemctl restart debot-dashboard
+```
+
 ## Manual install (one-time)
 On the instance:
 
