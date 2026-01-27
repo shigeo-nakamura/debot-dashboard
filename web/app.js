@@ -1,14 +1,25 @@
 const cardsEl = document.getElementById("cards");
 const lastUpdatedEl = document.getElementById("last-updated");
 const pollIntervalEl = document.getElementById("poll-interval");
+const rangeToggleEl = document.getElementById("range-toggle");
 
 const POLL_MS = 5000;
 const cardMap = new Map();
+const historyByKey = new Map();
 let hasRendered = false;
 
-const loadStatus = async () => {
+const RANGE_OPTIONS = [
+  { id: "1d", label: "1D", ms: 24 * 60 * 60 * 1000 },
+  { id: "1w", label: "1W", ms: 7 * 24 * 60 * 60 * 1000 },
+  { id: "1m", label: "1M", ms: 30 * 24 * 60 * 60 * 1000 },
+  { id: "all", label: "ALL", ms: null },
+];
+let currentRange = "1d";
+
+const loadStatus = async (includeHistory = false) => {
   try {
-    const response = await fetch("/api/status", { cache: "no-store" });
+    const url = includeHistory ? `/api/status?range=${currentRange}` : "/api/status";
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -42,7 +53,7 @@ const render = (data) => {
       cardMap.set(key, card);
       cardsEl.appendChild(card);
     }
-    updateCard(card, target, pollSecs, index);
+    updateCard(card, target, pollSecs, index, key);
     seenKeys.add(key);
     orderedCards.push(card);
   });
@@ -101,20 +112,25 @@ const createCard = (key) => {
         <div>PnL today <span data-field="pnl-today"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
+      <div class="chart">
+        <div class="chart-title">Equity trend</div>
+        <svg class="sparkline" data-field="equity-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
+        <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
+      </div>
       <div class="positions" data-field="positions-list"></div>
       <div class="error" data-field="error" hidden></div>
     `;
   return card;
 };
 
-const updateCard = (card, target, pollSecs, index) => {
+const updateCard = (card, target, pollSecs, index, key) => {
   const status = target.service_status || "unknown";
   const statusClass = status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown";
   const data = target.status || {};
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
   const stale = isStale(updatedAt, pollSecs);
   const pnlToday = formatPnl(data.pnl_today);
-  const pnlTotal = formatPnl(data.pnl_total);
+  const pnlTotal = formatNumber(data.pnl_total);
   const positionCount = Number.isFinite(data.position_count) ? data.position_count : 0;
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
@@ -132,6 +148,8 @@ const updateCard = (card, target, pollSecs, index) => {
   const pnlTotalEl = card.querySelector('[data-field="pnl-total"]');
   const positionsListEl = card.querySelector('[data-field="positions-list"]');
   const errorEl = card.querySelector('[data-field="error"]');
+  const chartEl = card.querySelector('[data-field="equity-chart"]');
+  const chartEmptyEl = card.querySelector('[data-field="equity-empty"]');
 
   nameEl.textContent = target.name || target.service || "debot";
   statusEl.textContent = status;
@@ -142,6 +160,9 @@ const updateCard = (card, target, pollSecs, index) => {
   positionsEl.textContent = positionCount;
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
+
+  const history = updateHistoryCache(key, data);
+  renderEquityChart(chartEl, chartEmptyEl, history);
 
   const positionsHtml = positions.length
     ? positions
@@ -167,6 +188,128 @@ const updateCard = (card, target, pollSecs, index) => {
   }
 };
 
+const setupRangeToggle = () => {
+  if (!rangeToggleEl) {
+    return;
+  }
+  rangeToggleEl.innerHTML = "";
+  RANGE_OPTIONS.forEach((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "range-btn";
+    button.textContent = option.label;
+    if (option.id === currentRange) {
+      button.classList.add("active");
+    }
+    button.addEventListener("click", () => {
+      if (currentRange === option.id) {
+        return;
+      }
+      currentRange = option.id;
+      historyByKey.clear();
+      [...rangeToggleEl.querySelectorAll(".range-btn")].forEach((el) =>
+        el.classList.toggle("active", el === button)
+      );
+      loadStatus(true);
+    });
+    rangeToggleEl.appendChild(button);
+  });
+};
+
+const updateHistoryCache = (key, data) => {
+  let history = historyByKey.get(key) || [];
+  if (Array.isArray(data.equity_history)) {
+    history = data.equity_history
+      .map((point) => ({
+        ts: Number(point.ts),
+        equity: Number(point.equity),
+      }))
+      .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
+    history = filterHistoryByRange(history);
+    historyByKey.set(key, history);
+    return history;
+  }
+  const point = snapshotToPoint(data);
+  if (point) {
+    history = appendHistoryPoint(history, point);
+    history = filterHistoryByRange(history);
+    historyByKey.set(key, history);
+  }
+  return history;
+};
+
+const snapshotToPoint = (data) => {
+  if (!data || !Number.isFinite(data.pnl_total)) {
+    return null;
+  }
+  const tsSeconds = Number.isFinite(data.ts) ? Number(data.ts) * 1000 : null;
+  const ts =
+    tsSeconds ||
+    (data.updated_at ? Date.parse(data.updated_at) : null) ||
+    Date.now();
+  if (!Number.isFinite(ts)) {
+    return null;
+  }
+  return { ts, equity: Number(data.pnl_total) };
+};
+
+const appendHistoryPoint = (history, point) => {
+  if (!history.length) {
+    return [point];
+  }
+  const last = history[history.length - 1];
+  if (point.ts > last.ts) {
+    return [...history, point];
+  }
+  if (point.ts === last.ts) {
+    const updated = history.slice();
+    updated[updated.length - 1] = point;
+    return updated;
+  }
+  return history;
+};
+
+const filterHistoryByRange = (history) => {
+  const option = RANGE_OPTIONS.find((opt) => opt.id === currentRange);
+  if (!option || !option.ms) {
+    return history;
+  }
+  const cutoff = Date.now() - option.ms;
+  return history.filter((point) => point.ts >= cutoff);
+};
+
+const renderEquityChart = (chartEl, emptyEl, history) => {
+  if (!chartEl) {
+    return;
+  }
+  if (!history || history.length < 2) {
+    chartEl.innerHTML = "";
+    if (emptyEl) {
+      emptyEl.hidden = false;
+    }
+    return;
+  }
+  if (emptyEl) {
+    emptyEl.hidden = true;
+  }
+  const values = history.map((point) => point.equity);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const start = history[0].ts;
+  const end = history[history.length - 1].ts;
+  const span = Math.max(1, end - start);
+  const range = max - min || 1;
+  const points = history
+    .map((point) => {
+      const x = ((point.ts - start) / span) * 100;
+      const y = 40 - ((point.equity - min) / range) * 40;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  chartEl.setAttribute("viewBox", "0 0 100 40");
+  chartEl.innerHTML = `<polyline points="${points}"></polyline>`;
+};
+
 const reconcileOrder = (orderedCards) => {
   let node = cardsEl.firstElementChild;
   orderedCards.forEach((card) => {
@@ -185,6 +328,14 @@ const formatPnl = (value) => {
   const number = Number(value);
   const sign = number > 0 ? "+" : "";
   return `${sign}${number.toFixed(4)}`;
+};
+
+const formatNumber = (value) => {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  const number = Number(value);
+  return number.toFixed(4);
 };
 
 const formatAge = (ms) => {
@@ -217,5 +368,7 @@ const escapeHtml = (value) => {
     .replace(/'/g, "&#39;");
 };
 
-loadStatus();
+setupRangeToggle();
+loadStatus(true);
+setInterval(() => loadStatus(false), POLL_MS);
 setInterval(loadStatus, POLL_MS);

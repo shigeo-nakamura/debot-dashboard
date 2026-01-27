@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,12 @@ type StatusData struct {
 	PnlTotal       float64          `json:"pnl_total"`
 	PnlToday       float64          `json:"pnl_today"`
 	PnlSource      string           `json:"pnl_source"`
+	EquityHistory  []EquityPoint    `json:"equity_history,omitempty"`
+}
+
+type EquityPoint struct {
+	TS     int64   `json:"ts"`
+	Equity float64 `json:"equity"`
 }
 
 type TargetStatus struct {
@@ -155,6 +162,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		rangeParam := strings.TrimSpace(r.URL.Query().Get("range"))
+		includeHistory, cutoffMs := historyCutoff(rangeParam)
+		if includeHistory {
+			snapshot := fetchAll(ctx, cfg, pool, true, cutoffMs)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(snapshot)
+			return
+		}
 		snapshot := cache.Get()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snapshot)
@@ -266,7 +281,7 @@ func matchBasicAuth(user, pass string, auth BasicAuth) bool {
 func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCache) {
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
 	fetch := func() {
-		snapshot := fetchAll(ctx, cfg, pool)
+		snapshot := fetchAll(ctx, cfg, pool, false, 0)
 		cache.Set(snapshot)
 	}
 	fetch()
@@ -282,7 +297,7 @@ func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCa
 	}
 }
 
-func fetchAll(ctx context.Context, cfg Config, pool *ClientPool) DashboardSnapshot {
+func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, includeHistory bool, cutoffMs int64) DashboardSnapshot {
 	results := make([]TargetStatus, len(cfg.Targets))
 	var wg sync.WaitGroup
 	for i, target := range cfg.Targets {
@@ -291,7 +306,7 @@ func fetchAll(ctx context.Context, cfg Config, pool *ClientPool) DashboardSnapsh
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = fetchTarget(ctx, target, pool)
+			results[i] = fetchTarget(ctx, target, pool, includeHistory, cutoffMs)
 		}()
 	}
 	wg.Wait()
@@ -302,7 +317,7 @@ func fetchAll(ctx context.Context, cfg Config, pool *ClientPool) DashboardSnapsh
 	}
 }
 
-func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool) TargetStatus {
+func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, includeHistory bool, cutoffMs int64) TargetStatus {
 	result := TargetStatus{
 		Name:       target.Name,
 		InstanceID: target.InstanceID,
@@ -320,7 +335,7 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool) Tar
 	cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
-	stdout, stderr, err := runCommand(cmdCtx, client, target)
+	stdout, stderr, err := runCommand(cmdCtx, client, target, includeHistory)
 	if err != nil {
 		result.Error = fmt.Sprintf("ssm command error: %v", err)
 		if strings.TrimSpace(stderr) != "" {
@@ -329,7 +344,7 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool) Tar
 		return result
 	}
 
-	serviceStatus, status, parseErr := parseOutput(stdout)
+	serviceStatus, status, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
 	result.ServiceStatus = serviceStatus
 	result.Status = status
 	if parseErr != nil {
@@ -341,8 +356,8 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool) Tar
 	return result
 }
 
-func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig) (string, string, error) {
-	cmd := buildCommand(target)
+func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig, includeHistory bool) (string, string, error) {
+	cmd := buildCommand(target, includeHistory)
 	sendOut, err := client.SendCommand(ctx, &ssm.SendCommandInput{
 		DocumentName: aws.String("AWS-RunShellScript"),
 		InstanceIds:  []string{target.InstanceID},
@@ -386,19 +401,32 @@ func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig) (s
 	}
 }
 
-func buildCommand(target TargetConfig) string {
+func buildCommand(target TargetConfig, includeHistory bool) string {
 	service := shellEscape(target.Service)
 	path := shellEscape(target.StatusPath)
-	return fmt.Sprintf("systemctl is-active %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi", service, path, path)
+	cmd := fmt.Sprintf("systemctl is-active %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi", service, path, path)
+	if includeHistory {
+		historyPath := shellEscape(equityHistoryPath(target.StatusPath))
+		cmd = fmt.Sprintf("%s; echo \"__HISTORY__\"; if [ -f %s ]; then cat %s; fi", cmd, historyPath, historyPath)
+	}
+	return cmd
 }
 
-func parseOutput(output string) (string, *StatusData, error) {
+func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *StatusData, error) {
 	parts := strings.SplitN(output, "__STATUS__", 2)
 	if len(parts) != 2 {
 		return strings.TrimSpace(output), nil, errors.New("missing status marker")
 	}
 	serviceStatus := strings.TrimSpace(parts[0])
 	payload := strings.TrimSpace(parts[1])
+	historyPayload := ""
+	if includeHistory {
+		historyParts := strings.SplitN(payload, "__HISTORY__", 2)
+		payload = strings.TrimSpace(historyParts[0])
+		if len(historyParts) == 2 {
+			historyPayload = strings.TrimSpace(historyParts[1])
+		}
+	}
 	if payload == "" {
 		return serviceStatus, nil, errors.New("status.json is empty")
 	}
@@ -406,7 +434,61 @@ func parseOutput(output string) (string, *StatusData, error) {
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
 		return serviceStatus, nil, err
 	}
+	if includeHistory {
+		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
+	}
 	return serviceStatus, &status, nil
+}
+
+func historyCutoff(rangeParam string) (bool, int64) {
+	if rangeParam == "" {
+		return false, 0
+	}
+	now := time.Now()
+	switch strings.ToLower(rangeParam) {
+	case "1d":
+		return true, now.Add(-24 * time.Hour).UnixMilli()
+	case "1w":
+		return true, now.Add(-7 * 24 * time.Hour).UnixMilli()
+	case "1m":
+		return true, now.Add(-30 * 24 * time.Hour).UnixMilli()
+	case "all":
+		return true, 0
+	default:
+		return true, now.Add(-24 * time.Hour).UnixMilli()
+	}
+}
+
+func equityHistoryPath(statusPath string) string {
+	ext := filepath.Ext(statusPath)
+	base := strings.TrimSuffix(statusPath, ext)
+	if base == "" {
+		base = statusPath
+	}
+	return base + ".equity_history.jsonl"
+}
+
+func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {
+	if strings.TrimSpace(payload) == "" {
+		return nil
+	}
+	lines := strings.Split(payload, "\n")
+	points := make([]EquityPoint, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var point EquityPoint
+		if err := json.Unmarshal([]byte(line), &point); err != nil {
+			continue
+		}
+		if cutoffMs > 0 && point.TS < cutoffMs {
+			continue
+		}
+		points = append(points, point)
+	}
+	return points
 }
 
 func shellEscape(value string) string {
