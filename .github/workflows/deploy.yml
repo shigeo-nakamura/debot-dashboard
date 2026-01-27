@@ -43,6 +43,7 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET || vars.S3_BUCKET }}
         run: |
           aws s3 cp dist/debot-dashboard "s3://${S3_BUCKET}/debot-dashboard/debot-dashboard"
+          aws s3 sync web/ "s3://${S3_BUCKET}/debot-dashboard/web/"
           aws s3 cp deploy/debot-dashboard.service "s3://${S3_BUCKET}/deploy/debot-dashboard.service"
 
       - name: Deploy via SSM
@@ -56,6 +57,7 @@ jobs:
               "sudo mkdir -p ${INSTALL_DIR}",
               "aws s3 cp s3://${S3_BUCKET}/debot-dashboard/debot-dashboard ${INSTALL_DIR}/debot-dashboard",
               "sudo chmod 755 ${INSTALL_DIR}/debot-dashboard",
+              "aws s3 sync s3://${S3_BUCKET}/debot-dashboard/web ${INSTALL_DIR}/web",
               "if [ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]; then aws s3 cp s3://${S3_BUCKET}/deploy/debot-dashboard.service /tmp/${SERVICE_NAME}.service && sudo mv /tmp/${SERVICE_NAME}.service /etc/systemd/system/${SERVICE_NAME}.service && sudo systemctl daemon-reload && sudo systemctl enable ${SERVICE_NAME}; fi",
               "if [ ! -f ${INSTALL_DIR}/config.yaml ]; then echo \"Missing ${INSTALL_DIR}/config.yaml\" >&2; exit 1; fi",
               "sudo systemctl restart ${SERVICE_NAME}"
