@@ -40,7 +40,9 @@ const render = (data) => {
   lastUpdatedEl.textContent = updatedAt
     ? `Last refresh ${updatedAt.toLocaleString()}`
     : "Last refresh unknown";
-  pollIntervalEl.textContent = `Poll ${pollSecs}s`;
+  if (pollIntervalEl) {
+    pollIntervalEl.textContent = `Poll ${pollSecs}s`;
+  }
 
   const seenKeys = new Set();
   const orderedCards = [];
@@ -75,7 +77,9 @@ const render = (data) => {
 
 const renderError = (err) => {
   lastUpdatedEl.textContent = "Waiting for data";
-  pollIntervalEl.textContent = "";
+  if (pollIntervalEl) {
+    pollIntervalEl.textContent = "";
+  }
   if (hasRendered) {
     return;
   }
