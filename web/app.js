@@ -133,8 +133,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const data = target.status || {};
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
   const stale = isStale(updatedAt, pollSecs);
-  const pnlToday = formatPnl(data.pnl_today);
-  const pnlTotal = formatNumber(data.pnl_total);
+  const pnlTodayValue = parseNumber(data.pnl_today);
+  const pnlTotalValue = parseNumber(data.pnl_total);
+  const pnlToday = formatPnl(pnlTodayValue);
+  const pnlTotal = formatUsdc(pnlTotalValue);
   const positionCount = Number.isFinite(data.position_count) ? data.position_count : 0;
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
@@ -164,6 +166,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
   positionsEl.textContent = positionCount;
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
+  applySignedClass(pnlTodayEl, pnlTodayValue);
+  applySignedClass(pnlTotalEl, pnlTotalValue);
 
   const history = updateHistoryCache(key, data);
   renderEquityChart(chartEl, chartEmptyEl, history);
@@ -302,15 +306,25 @@ const renderEquityChart = (chartEl, emptyEl, history) => {
   const start = history[0].ts;
   const end = history[history.length - 1].ts;
   const span = Math.max(1, end - start);
-  const range = max - min || 1;
+  const height = 40;
+  const width = 100;
+  const range = max - min;
+  const pad =
+    range === 0
+      ? Math.max(Math.abs(max) * 0.02, 0.0001)
+      : Math.max(range * 0.08, 0.0001);
+  const minPad = min - pad;
+  const maxPad = max + pad;
+  const paddedRange = maxPad - minPad || 1;
+  const xPad = 2.5;
   const points = history
     .map((point) => {
-      const x = ((point.ts - start) / span) * 100;
-      const y = 40 - ((point.equity - min) / range) * 40;
+      const x = xPad + ((point.ts - start) / span) * (width - xPad * 2);
+      const y = height - ((point.equity - minPad) / paddedRange) * height;
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
-  chartEl.setAttribute("viewBox", "0 0 100 40");
+  chartEl.setAttribute("viewBox", `0 0 ${width} ${height}`);
   chartEl.innerHTML = `<polyline points="${points}"></polyline>`;
 };
 
@@ -340,6 +354,34 @@ const formatNumber = (value) => {
   }
   const number = Number(value);
   return number.toFixed(4);
+};
+
+const formatUsdc = (value) => {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  const number = Number(value);
+  return `${number.toFixed(4)} USDC`;
+};
+
+const parseNumber = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const applySignedClass = (el, value) => {
+  if (!el) {
+    return;
+  }
+  el.classList.remove("positive", "negative");
+  if (!Number.isFinite(value)) {
+    return;
+  }
+  if (value > 0) {
+    el.classList.add("positive");
+  } else if (value < 0) {
+    el.classList.add("negative");
+  }
 };
 
 const formatAge = (ms) => {

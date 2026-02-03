@@ -204,6 +204,14 @@ body::after {
   font-weight: 600;
 }
 
+.kv .positive {
+  color: var(--success);
+}
+
+.kv .negative {
+  color: var(--danger);
+}
+
 .range-toggle {
   display: flex;
   flex-wrap: wrap;
