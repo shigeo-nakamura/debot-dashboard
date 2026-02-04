@@ -174,7 +174,17 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snapshot)
 	})
-	mux.Handle("/", http.FileServer(http.Dir("web")))
+	fileServer := http.FileServer(http.Dir("web"))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" ||
+			strings.HasSuffix(path, ".html") ||
+			strings.HasSuffix(path, ".js") ||
+			strings.HasSuffix(path, ".css") {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 
 	log.Printf("debot-dashboard listening on %s", listen)
 	if err := http.ListenAndServe(listen, withAuth(mux, auth)); err != nil {
