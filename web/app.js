@@ -345,7 +345,7 @@ const formatPnl = (value) => {
   }
   const number = Number(value);
   const sign = number > 0 ? "+" : "";
-  return `${sign}${number.toFixed(4)}`;
+  return `${sign}${number.toFixed(1)}`;
 };
 
 const formatNumber = (value) => {
@@ -353,7 +353,7 @@ const formatNumber = (value) => {
     return "-";
   }
   const number = Number(value);
-  return number.toFixed(4);
+  return number.toFixed(1);
 };
 
 const formatUsdc = (value) => {
@@ -361,7 +361,7 @@ const formatUsdc = (value) => {
     return "-";
   }
   const number = Number(value);
-  return `${number.toFixed(4)} USDC`;
+  return `${number.toFixed(1)} USDC`;
 };
 
 const parseNumber = (value) => {
