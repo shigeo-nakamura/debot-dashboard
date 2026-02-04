@@ -61,7 +61,7 @@ jobs:
               "aws s3 cp s3://${S3_BUCKET}/debot-dashboard/debot-dashboard ${INSTALL_DIR}/debot-dashboard",
               "sudo chmod 755 ${INSTALL_DIR}/debot-dashboard",
               "aws s3 sync s3://${S3_BUCKET}/debot-dashboard/web ${INSTALL_DIR}/web --delete --exact-timestamps",
-              "rg -n \"toFixed\\\\(1\\\\)\" ${INSTALL_DIR}/web/app.js",
+              "grep -n \"toFixed(1)\" ${INSTALL_DIR}/web/app.js",
               "if [ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]; then aws s3 cp s3://${S3_BUCKET}/deploy/debot-dashboard.service /tmp/${SERVICE_NAME}.service && sudo mv /tmp/${SERVICE_NAME}.service /etc/systemd/system/${SERVICE_NAME}.service && sudo systemctl daemon-reload && sudo systemctl enable ${SERVICE_NAME}; fi",
               "if [ ! -f ${INSTALL_DIR}/config.yaml ]; then echo \"Missing ${INSTALL_DIR}/config.yaml\" >&2; exit 1; fi",
               "sudo systemctl restart ${SERVICE_NAME}"
