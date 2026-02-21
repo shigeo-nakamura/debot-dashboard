@@ -80,15 +80,16 @@ type EquityPoint struct {
 }
 
 type TargetStatus struct {
-	Name          string      `json:"name"`
-	InstanceID    string      `json:"instance_id"`
-	Service       string      `json:"service"`
-	StatusPath    string      `json:"status_path"`
-	Region        string      `json:"region"`
-	ServiceStatus string      `json:"service_status"`
-	Status        *StatusData `json:"status,omitempty"`
-	Error         string      `json:"error,omitempty"`
-	CheckedAt     time.Time   `json:"checked_at"`
+	Name             string      `json:"name"`
+	InstanceID       string      `json:"instance_id"`
+	Service          string      `json:"service"`
+	StatusPath       string      `json:"status_path"`
+	Region           string      `json:"region"`
+	ServiceStatus    string      `json:"service_status"`
+	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
+	Status           *StatusData `json:"status,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	CheckedAt        time.Time   `json:"checked_at"`
 }
 
 type DashboardSnapshot struct {
@@ -354,8 +355,12 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, inc
 		return result
 	}
 
-	serviceStatus, status, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
+	serviceStatus, serviceStart, status, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
 	result.ServiceStatus = serviceStatus
+	if serviceStart != nil {
+		utc := serviceStart.UTC()
+		result.ServiceStartedAt = &utc
+	}
 	result.Status = status
 	if parseErr != nil {
 		result.Error = fmt.Sprintf("parse error: %v", parseErr)
@@ -414,7 +419,13 @@ func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig, in
 func buildCommand(target TargetConfig, includeHistory bool) string {
 	service := shellEscape(target.Service)
 	path := shellEscape(target.StatusPath)
-	cmd := fmt.Sprintf("systemctl is-active %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi", service, path, path)
+	cmd := fmt.Sprintf(
+		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi",
+		service,
+		service,
+		path,
+		path,
+	)
 	if includeHistory {
 		historyPath := shellEscape(equityHistoryPath(target.StatusPath))
 		cmd = fmt.Sprintf("%s; echo \"__HISTORY__\"; if [ -f %s ]; then cat %s; fi", cmd, historyPath, historyPath)
@@ -422,12 +433,17 @@ func buildCommand(target TargetConfig, includeHistory bool) string {
 	return cmd
 }
 
-func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *StatusData, error) {
+func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, error) {
 	parts := strings.SplitN(output, "__STATUS__", 2)
 	if len(parts) != 2 {
-		return strings.TrimSpace(output), nil, errors.New("missing status marker")
+		return strings.TrimSpace(output), nil, nil, errors.New("missing status marker")
 	}
-	serviceStatus := strings.TrimSpace(parts[0])
+	startParts := strings.SplitN(parts[0], "__START__", 2)
+	serviceStatus := strings.TrimSpace(startParts[0])
+	var serviceStart *time.Time
+	if len(startParts) == 2 {
+		serviceStart = parseServiceStart(strings.TrimSpace(startParts[1]))
+	}
 	payload := strings.TrimSpace(parts[1])
 	historyPayload := ""
 	if includeHistory {
@@ -438,16 +454,16 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *S
 		}
 	}
 	if payload == "" {
-		return serviceStatus, nil, errors.New("status.json is empty")
+		return serviceStatus, serviceStart, nil, errors.New("status.json is empty")
 	}
 	var status StatusData
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
-		return serviceStatus, nil, err
+		return serviceStatus, serviceStart, nil, err
 	}
 	if includeHistory {
 		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
 	}
-	return serviceStatus, &status, nil
+	return serviceStatus, serviceStart, &status, nil
 }
 
 func historyCutoff(rangeParam string) (bool, int64) {
@@ -506,4 +522,23 @@ func shellEscape(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func parseServiceStart(raw string) *time.Time {
+	text := strings.TrimSpace(raw)
+	if text == "" || strings.EqualFold(text, "n/a") {
+		return nil
+	}
+	layouts := []string{
+		"Mon 2006-01-02 15:04:05 MST",
+		time.RFC1123,
+		time.RFC1123Z,
+		time.RFC3339,
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, text); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
+const fullHistoryByKey = new Map();
 let hasRendered = false;
 
 const RANGE_OPTIONS = [
@@ -114,6 +115,7 @@ const createCard = (key) => {
       <div class="kv">
         <div>Positions <span data-field="positions"></span></div>
         <div>PnL today <span data-field="pnl-today"></span></div>
+        <div>PnL total <span data-field="pnl-session"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
       <div class="chart">
@@ -151,6 +153,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const ageEl = card.querySelector('[data-field="age"]');
   const positionsEl = card.querySelector('[data-field="positions"]');
   const pnlTodayEl = card.querySelector('[data-field="pnl-today"]');
+  const pnlSessionEl = card.querySelector('[data-field="pnl-session"]');
   const pnlTotalEl = card.querySelector('[data-field="pnl-total"]');
   const positionsListEl = card.querySelector('[data-field="positions-list"]');
   const errorEl = card.querySelector('[data-field="error"]');
@@ -170,6 +173,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
   applySignedClass(pnlTotalEl, pnlTotalValue);
 
   const history = updateHistoryCache(key, data);
+  const sessionPnlValue = computeSessionPnl(
+    target.service_started_at,
+    fullHistoryByKey.get(key) || history,
+    pnlTotalValue
+  );
+  pnlSessionEl.textContent = formatPnl(sessionPnlValue);
+  applySignedClass(pnlSessionEl, sessionPnlValue);
   renderEquityChart(chartEl, chartEmptyEl, history);
 
   const positionsHtml = positions.length
@@ -233,6 +243,9 @@ const updateHistoryCache = (key, data) => {
         equity: Number(point.equity),
       }))
       .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
+    if (currentRange === "all") {
+      fullHistoryByKey.set(key, history);
+    }
     history = filterHistoryByRange(history);
     historyByKey.set(key, history);
     return history;
@@ -242,6 +255,12 @@ const updateHistoryCache = (key, data) => {
     history = appendHistoryPoint(history, point);
     history = filterHistoryByRange(history);
     historyByKey.set(key, history);
+    const fullHistory = fullHistoryByKey.get(key);
+    if (Array.isArray(fullHistory)) {
+      fullHistoryByKey.set(key, appendHistoryPoint(fullHistory, point));
+    } else if (currentRange === "all") {
+      fullHistoryByKey.set(key, history);
+    }
   }
   return history;
 };
@@ -362,6 +381,45 @@ const formatUsdc = (value) => {
   }
   const number = Number(value);
   return `${number.toFixed(1)} USDC`;
+};
+
+const computeSessionPnl = (serviceStartedAt, fullHistory, currentEquity) => {
+  if (!Number.isFinite(currentEquity)) {
+    return null;
+  }
+  if (!serviceStartedAt) {
+    return null;
+  }
+  const startedAtMs = Date.parse(serviceStartedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    return null;
+  }
+  if (!Array.isArray(fullHistory) || fullHistory.length === 0) {
+    return null;
+  }
+  const baseline = findBaselineEquity(fullHistory, startedAtMs);
+  if (!Number.isFinite(baseline)) {
+    return null;
+  }
+  return currentEquity - baseline;
+};
+
+const findBaselineEquity = (history, startedAtMs) => {
+  let baseline = null;
+  for (const point of history) {
+    if (!Number.isFinite(point.ts) || !Number.isFinite(point.equity)) {
+      continue;
+    }
+    if (point.ts >= startedAtMs) {
+      baseline = point.equity;
+      break;
+    }
+  }
+  if (baseline === null) {
+    const last = history[history.length - 1];
+    baseline = last && Number.isFinite(last.equity) ? last.equity : null;
+  }
+  return baseline;
 };
 
 const parseNumber = (value) => {
