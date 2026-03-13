@@ -71,7 +71,8 @@ type StatusData struct {
 	PnlTotal       float64          `json:"pnl_total"`
 	PnlToday       float64          `json:"pnl_today"`
 	PnlSource      string           `json:"pnl_source"`
-	EquityHistory  []EquityPoint    `json:"equity_history,omitempty"`
+	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
+	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
 }
 
 type EquityPoint struct {
@@ -419,12 +420,15 @@ func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig, in
 func buildCommand(target TargetConfig, includeHistory bool) string {
 	service := shellEscape(target.Service)
 	path := shellEscape(target.StatusPath)
+	alertPath := shellEscape(backtestAlertPath(target.StatusPath))
 	cmd := fmt.Sprintf(
-		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi",
+		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi",
 		service,
 		service,
 		path,
 		path,
+		alertPath,
+		alertPath,
 	)
 	if includeHistory {
 		historyPath := shellEscape(equityHistoryPath(target.StatusPath))
@@ -445,20 +449,44 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 		serviceStart = parseServiceStart(strings.TrimSpace(startParts[1]))
 	}
 	payload := strings.TrimSpace(parts[1])
+	alertPayload := ""
 	historyPayload := ""
-	if includeHistory {
+
+	// Extract alert section (always present in command output)
+	alertParts := strings.SplitN(payload, "__ALERT__", 2)
+	payload = strings.TrimSpace(alertParts[0])
+	if len(alertParts) == 2 {
+		remainder := strings.TrimSpace(alertParts[1])
+		// History marker may follow alert
+		if includeHistory {
+			historyParts := strings.SplitN(remainder, "__HISTORY__", 2)
+			alertPayload = strings.TrimSpace(historyParts[0])
+			if len(historyParts) == 2 {
+				historyPayload = strings.TrimSpace(historyParts[1])
+			}
+		} else {
+			alertPayload = remainder
+		}
+	} else if includeHistory {
 		historyParts := strings.SplitN(payload, "__HISTORY__", 2)
 		payload = strings.TrimSpace(historyParts[0])
 		if len(historyParts) == 2 {
 			historyPayload = strings.TrimSpace(historyParts[1])
 		}
 	}
+
 	if payload == "" {
 		return serviceStatus, serviceStart, nil, errors.New("status.json is empty")
 	}
 	var status StatusData
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
 		return serviceStatus, serviceStart, nil, err
+	}
+	if alertPayload != "" {
+		var alert map[string]interface{}
+		if err := json.Unmarshal([]byte(alertPayload), &alert); err == nil {
+			status.BacktestAlert = alert
+		}
 	}
 	if includeHistory {
 		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
@@ -492,6 +520,11 @@ func equityHistoryPath(statusPath string) string {
 		base = statusPath
 	}
 	return base + ".equity_history.jsonl"
+}
+
+func backtestAlertPath(statusPath string) string {
+	dir := filepath.Dir(statusPath)
+	return filepath.Join(dir, "backtest_alert.json")
 }
 
 func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {

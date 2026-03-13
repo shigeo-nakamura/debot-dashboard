@@ -123,6 +123,7 @@ const createCard = (key) => {
         <svg class="sparkline" data-field="equity-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
       </div>
+      <div class="backtest-alert" data-field="backtest-alert" hidden></div>
       <div class="positions" data-field="positions-list"></div>
       <div class="error" data-field="error" hidden></div>
     `;
@@ -196,6 +197,23 @@ const updateCard = (card, target, pollSecs, index, key) => {
         .join("")
     : `<div class="empty">No open positions</div>`;
   positionsListEl.innerHTML = positionsHtml;
+
+  // Backtest alert banner
+  const alertEl = card.querySelector('[data-field="backtest-alert"]');
+  const alert = data.backtest_alert;
+  if (alert && alert.alert_level && alert.alert_level !== "OK") {
+    alertEl.hidden = false;
+    const level = alert.alert_level === "DANGER" ? "danger" : "warning";
+    const ago = alert.updated_at ? formatAge(Date.now() - new Date(alert.updated_at).getTime()) : "?";
+    alertEl.className = `backtest-alert backtest-${level}`;
+    alertEl.innerHTML = `<strong>${escapeHtml(alert.alert_level)}</strong> ${escapeHtml(alert.alert_msg || "")} <span class="alert-age">(${ago} ago)</span>`;
+  } else if (alert && alert.alert_level === "OK") {
+    alertEl.hidden = false;
+    alertEl.className = "backtest-alert backtest-ok";
+    alertEl.textContent = alert.alert_msg || "Backtest OK";
+  } else {
+    alertEl.hidden = true;
+  }
 
   if (target.error) {
     errorEl.hidden = false;

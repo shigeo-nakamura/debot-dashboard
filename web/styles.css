@@ -326,3 +326,30 @@ body::after {
     gap: 8px;
   }
 }
+
+.backtest-alert {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.backtest-danger {
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.backtest-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid var(--warning);
+  color: #92400e;
+}
+.backtest-ok {
+  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+.alert-age {
+  opacity: 0.6;
+  font-size: 0.78rem;
+}
