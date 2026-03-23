@@ -15,7 +15,7 @@ const RANGE_OPTIONS = [
   { id: "1m", label: "1M", ms: 30 * 24 * 60 * 60 * 1000 },
   { id: "all", label: "ALL", ms: null },
 ];
-let currentRange = "all";
+let currentRange = "1d";
 
 const loadStatus = async (includeHistory = false) => {
   try {
