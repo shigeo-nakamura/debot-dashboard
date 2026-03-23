@@ -118,6 +118,12 @@ const createCard = (key) => {
         <div>PnL total <span data-field="pnl-session"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
+      <div class="kv kv-stats">
+        <div>Max DD <span data-field="max-dd"></span></div>
+        <div>Win Rate <span data-field="win-rate"></span></div>
+        <div>Trades <span data-field="num-trades"></span></div>
+        <div>CAGR <span data-field="cagr"></span></div>
+      </div>
       <div class="chart">
         <div class="chart-title">Equity trend</div>
         <svg class="sparkline" data-field="equity-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
@@ -182,6 +188,27 @@ const updateCard = (card, target, pollSecs, index, key) => {
   pnlSessionEl.textContent = formatPnl(sessionPnlValue);
   applySignedClass(pnlSessionEl, sessionPnlValue);
   renderEquityChart(chartEl, chartEmptyEl, history);
+
+  // Stats: Max DD, Win Rate, Num Trades, CAGR
+  const maxDdEl = card.querySelector('[data-field="max-dd"]');
+  const winRateEl = card.querySelector('[data-field="win-rate"]');
+  const numTradesEl = card.querySelector('[data-field="num-trades"]');
+  const cagrEl = card.querySelector('[data-field="cagr"]');
+  const stats = computeStats(history);
+  if (maxDdEl) {
+    maxDdEl.textContent = stats.maxDd !== null ? formatPnl(-stats.maxDd) : "-";
+    applySignedClass(maxDdEl, stats.maxDd !== null ? -stats.maxDd : null);
+  }
+  if (winRateEl) {
+    winRateEl.textContent = stats.winRate !== null ? `${stats.winRate.toFixed(0)}%` : "-";
+  }
+  if (numTradesEl) {
+    numTradesEl.textContent = stats.numTrades !== null ? stats.numTrades : "-";
+  }
+  if (cagrEl) {
+    cagrEl.textContent = stats.cagr !== null ? `${stats.cagr > 0 ? "+" : ""}${stats.cagr.toFixed(0)}%` : "-";
+    applySignedClass(cagrEl, stats.cagr);
+  }
 
   const positionsHtml = positions.length
     ? positions
@@ -321,6 +348,46 @@ const filterHistoryByRange = (history) => {
   }
   const cutoff = Date.now() - option.ms;
   return history.filter((point) => point.ts >= cutoff);
+};
+
+const computeStats = (history) => {
+  const result = { maxDd: null, winRate: null, numTrades: null, cagr: null };
+  if (!history || history.length < 2) return result;
+
+  // Max Drawdown from equity curve
+  let peak = -Infinity;
+  let maxDd = 0;
+  for (const point of history) {
+    if (point.equity > peak) peak = point.equity;
+    const dd = peak - point.equity;
+    if (dd > maxDd) maxDd = dd;
+  }
+  result.maxDd = maxDd;
+
+  // Win Rate & Num Trades: count up/down moves between consecutive points
+  let wins = 0;
+  let trades = 0;
+  for (let i = 1; i < history.length; i++) {
+    const delta = history[i].equity - history[i - 1].equity;
+    if (Math.abs(delta) > 0.001) {
+      trades++;
+      if (delta > 0) wins++;
+    }
+  }
+  result.numTrades = trades;
+  result.winRate = trades > 0 ? (wins / trades) * 100 : null;
+
+  // CAGR: annualized return from first to last equity
+  const first = history[0];
+  const last = history[history.length - 1];
+  const daysElapsed = (last.ts - first.ts) / (24 * 60 * 60 * 1000);
+  if (daysElapsed > 0 && first.equity > 0) {
+    const totalReturn = (last.equity - first.equity) / first.equity;
+    const annualizedReturn = Math.pow(1 + totalReturn, 365 / daysElapsed) - 1;
+    result.cagr = annualizedReturn * 100;
+  }
+
+  return result;
 };
 
 const renderEquityChart = (chartEl, emptyEl, history) => {
