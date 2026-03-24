@@ -189,25 +189,45 @@ const updateCard = (card, target, pollSecs, index, key) => {
   applySignedClass(pnlSessionEl, sessionPnlValue);
   renderEquityChart(chartEl, chartEmptyEl, history);
 
-  // Stats: Max DD, Win Rate, Num Trades, CAGR
+  // Stats: prefer BOT-reported trade_stats, fallback to equity-derived
   const maxDdEl = card.querySelector('[data-field="max-dd"]');
   const winRateEl = card.querySelector('[data-field="win-rate"]');
   const numTradesEl = card.querySelector('[data-field="num-trades"]');
   const cagrEl = card.querySelector('[data-field="cagr"]');
-  const stats = computeStats(history);
-  if (maxDdEl) {
-    maxDdEl.textContent = stats.maxDd !== null ? formatPnl(-stats.maxDd) : "-";
-    applySignedClass(maxDdEl, stats.maxDd !== null ? -stats.maxDd : null);
-  }
-  if (winRateEl) {
-    winRateEl.textContent = stats.winRate !== null ? `${stats.winRate.toFixed(0)}%` : "-";
-  }
-  if (numTradesEl) {
-    numTradesEl.textContent = stats.numTrades !== null ? stats.numTrades : "-";
-  }
-  if (cagrEl) {
-    cagrEl.textContent = stats.cagr !== null ? `${stats.cagr > 0 ? "+" : ""}${stats.cagr.toFixed(0)}%` : "-";
-    applySignedClass(cagrEl, stats.cagr);
+  const botStats = data.trade_stats;
+  const equityStats = computeStats(history);
+
+  if (botStats) {
+    if (maxDdEl) {
+      maxDdEl.textContent = formatPnl(-botStats.max_dd);
+      applySignedClass(maxDdEl, -botStats.max_dd);
+    }
+    if (winRateEl) {
+      winRateEl.textContent = `${botStats.win_rate.toFixed(0)}%`;
+    }
+    if (numTradesEl) {
+      numTradesEl.textContent = botStats.trades;
+    }
+    if (cagrEl) {
+      const cagr = equityStats.cagr;
+      cagrEl.textContent = cagr !== null ? `${cagr > 0 ? "+" : ""}${cagr.toFixed(0)}%` : "-";
+      applySignedClass(cagrEl, cagr);
+    }
+  } else {
+    if (maxDdEl) {
+      maxDdEl.textContent = equityStats.maxDd !== null ? formatPnl(-equityStats.maxDd) : "-";
+      applySignedClass(maxDdEl, equityStats.maxDd !== null ? -equityStats.maxDd : null);
+    }
+    if (winRateEl) {
+      winRateEl.textContent = equityStats.winRate !== null ? `${equityStats.winRate.toFixed(0)}%` : "-";
+    }
+    if (numTradesEl) {
+      numTradesEl.textContent = equityStats.numTrades !== null ? equityStats.numTrades : "-";
+    }
+    if (cagrEl) {
+      cagrEl.textContent = equityStats.cagr !== null ? `${equityStats.cagr > 0 ? "+" : ""}${equityStats.cagr.toFixed(0)}%` : "-";
+      applySignedClass(cagrEl, equityStats.cagr);
+    }
   }
 
   const positionsHtml = positions.length
