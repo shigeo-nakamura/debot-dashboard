@@ -170,6 +170,22 @@ const updateCard = (card, target, pollSecs, index, key) => {
   nameEl.textContent = target.name || target.service || "debot";
   statusEl.textContent = status;
   statusEl.className = `status-pill ${statusClass}`;
+
+  // Maintenance badge
+  let maintEl = card.querySelector('[data-field="maintenance"]');
+  if (!maintEl) {
+    maintEl = document.createElement("span");
+    maintEl.className = "status-pill maintenance";
+    maintEl.dataset.field = "maintenance";
+    statusEl.parentNode.appendChild(maintEl);
+  }
+  if (data.maintenance) {
+    maintEl.hidden = false;
+    maintEl.textContent = "maintenance";
+  } else {
+    maintEl.hidden = true;
+  }
+
   instanceEl.textContent = target.instance_id || "-";
   serviceEl.textContent = target.service || "-";
   ageEl.textContent = ageText;

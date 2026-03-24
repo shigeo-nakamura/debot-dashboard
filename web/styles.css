@@ -176,6 +176,11 @@ body::after {
   background: rgba(245, 158, 11, 0.14);
 }
 
+.status-pill.maintenance {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.14);
+}
+
 .row {
   display: flex;
   justify-content: space-between;
