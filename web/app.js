@@ -177,6 +177,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     maintEl = document.createElement("span");
     maintEl.className = "status-pill maintenance";
     maintEl.dataset.field = "maintenance";
+    maintEl.hidden = true;
     statusEl.parentNode.appendChild(maintEl);
   }
   if (data.maintenance) {
@@ -184,6 +185,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     maintEl.textContent = "maintenance";
   } else {
     maintEl.hidden = true;
+    maintEl.textContent = "";
   }
 
   instanceEl.textContent = target.instance_id || "-";
