@@ -108,6 +108,7 @@ const createCard = (key) => {
       <div class="card-header">
         <h2 class="card-title" data-field="name"></h2>
         <span class="status-pill" data-field="status"></span>
+        <span class="status-pill maintenance" data-field="maintenance" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
@@ -172,20 +173,15 @@ const updateCard = (card, target, pollSecs, index, key) => {
   statusEl.className = `status-pill ${statusClass}`;
 
   // Maintenance badge
-  let maintEl = card.querySelector('[data-field="maintenance"]');
-  if (!maintEl) {
-    maintEl = document.createElement("span");
-    maintEl.className = "status-pill maintenance";
-    maintEl.dataset.field = "maintenance";
-    maintEl.hidden = true;
-    statusEl.parentNode.appendChild(maintEl);
-  }
-  if (data.maintenance) {
-    maintEl.hidden = false;
-    maintEl.textContent = "maintenance";
-  } else {
-    maintEl.hidden = true;
-    maintEl.textContent = "";
+  const maintEl = card.querySelector('[data-field="maintenance"]');
+  if (maintEl) {
+    if (data.maintenance) {
+      maintEl.hidden = false;
+      maintEl.textContent = "maintenance";
+    } else {
+      maintEl.hidden = true;
+      maintEl.textContent = "";
+    }
   }
 
   instanceEl.textContent = target.instance_id || "-";
