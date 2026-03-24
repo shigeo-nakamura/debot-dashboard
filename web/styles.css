@@ -181,6 +181,10 @@ body::after {
   background: rgba(217, 119, 6, 0.14);
 }
 
+.status-pill[hidden] {
+  display: none;
+}
+
 .row {
   display: flex;
   justify-content: space-between;
