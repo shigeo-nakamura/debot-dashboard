@@ -55,6 +55,14 @@ type StatusPosition struct {
 	EntryPrice *string `json:"entry_price"`
 }
 
+type TradeStats struct {
+	Trades  int64   `json:"trades"`
+	Wins    int64   `json:"wins"`
+	WinRate float64 `json:"win_rate"`
+	MaxDD   float64 `json:"max_dd"`
+	Pnl     float64 `json:"pnl"`
+}
+
 type StatusData struct {
 	TS             int64            `json:"ts"`
 	UpdatedAt      string           `json:"updated_at"`
@@ -71,6 +79,8 @@ type StatusData struct {
 	PnlTotal       float64          `json:"pnl_total"`
 	PnlToday       float64          `json:"pnl_today"`
 	PnlSource      string           `json:"pnl_source"`
+	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
+	Maintenance    *string                `json:"maintenance,omitempty"`
 	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
 	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
 }
