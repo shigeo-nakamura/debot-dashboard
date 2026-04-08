@@ -113,6 +113,7 @@ const createCard = (key) => {
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
+      <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <div class="kv">
         <div>Positions <span data-field="positions"></span></div>
         <div>PnL today <span data-field="pnl-today"></span></div>
@@ -181,6 +182,30 @@ const updateCard = (card, target, pollSecs, index, key) => {
     } else {
       maintEl.hidden = true;
       maintEl.textContent = "";
+    }
+  }
+
+  // Graceful-shutdown ETA row: shows the earliest force_close ETA and
+  // the grace deadline while the bot is winding down. See pairtrade#6.
+  const shutdownRowEl = card.querySelector('[data-field="shutdown-row"]');
+  const shutdownEtaEl = card.querySelector('[data-field="shutdown-eta"]');
+  if (shutdownRowEl && shutdownEtaEl) {
+    if (data.shutdown && data.shutdown.pending) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const parts = [];
+      if (data.shutdown.force_close_eta_ts) {
+        const etaIn = Math.max(0, data.shutdown.force_close_eta_ts - nowSec);
+        parts.push(`force_close in ${formatAge(etaIn * 1000)}`);
+      }
+      if (data.shutdown.grace_deadline_ts) {
+        const graceIn = Math.max(0, data.shutdown.grace_deadline_ts - nowSec);
+        parts.push(`grace ${formatAge(graceIn * 1000)}`);
+      }
+      shutdownEtaEl.textContent = parts.length ? parts.join(" · ") : "pending";
+      shutdownRowEl.hidden = false;
+    } else {
+      shutdownRowEl.hidden = true;
+      shutdownEtaEl.textContent = "";
     }
   }
 

@@ -63,6 +63,19 @@ type TradeStats struct {
 	Pnl     float64 `json:"pnl"`
 }
 
+type ShutdownPosition struct {
+	Key              string `json:"key"`
+	EnteredTS        int64  `json:"entered_ts"`
+	ForceCloseEtaTS  int64  `json:"force_close_eta_ts"`
+}
+
+type ShutdownStatus struct {
+	Pending          bool               `json:"pending"`
+	GraceDeadlineTS  int64              `json:"grace_deadline_ts"`
+	ForceCloseEtaTS  *int64             `json:"force_close_eta_ts"`
+	Positions        []ShutdownPosition `json:"positions"`
+}
+
 type StatusData struct {
 	TS             int64            `json:"ts"`
 	UpdatedAt      string           `json:"updated_at"`
@@ -81,6 +94,7 @@ type StatusData struct {
 	PnlSource      string           `json:"pnl_source"`
 	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
 	Maintenance    *string                `json:"maintenance,omitempty"`
+	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
 	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
 	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
 }
