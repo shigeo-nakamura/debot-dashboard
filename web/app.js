@@ -436,11 +436,15 @@ const computeStats = (history) => {
   result.numTrades = trades;
   result.winRate = trades > 0 ? (wins / trades) * 100 : null;
 
-  // CAGR: annualized return from first to last equity
+  // CAGR: annualized return from first to last equity. Only compute once
+  // we have at least ~7 days of history -- otherwise the 365/daysElapsed
+  // exponent blows up any small gain into absurd numbers (e.g. 0.1 day
+  // with +1% becomes ~1e15 %) and the card becomes unreadable.
   const first = history[0];
   const last = history[history.length - 1];
   const daysElapsed = (last.ts - first.ts) / (24 * 60 * 60 * 1000);
-  if (daysElapsed > 0 && first.equity > 0) {
+  const MIN_CAGR_DAYS = 7;
+  if (daysElapsed >= MIN_CAGR_DAYS && first.equity > 0) {
     const totalReturn = (last.equity - first.equity) / first.equity;
     const annualizedReturn = Math.pow(1 + totalReturn, 365 / daysElapsed) - 1;
     result.cagr = annualizedReturn * 100;
