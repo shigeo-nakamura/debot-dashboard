@@ -621,7 +621,8 @@ const formatAge = (ms) => {
     return `${mins}m`;
   }
   const hours = Math.floor(mins / 60);
-  return `${hours}h`;
+  const remMins = mins - hours * 60;
+  return remMins === 0 ? `${hours}h` : `${hours}h${remMins}m`;
 };
 
 const isStale = (updatedAt, pollSecs) => {
