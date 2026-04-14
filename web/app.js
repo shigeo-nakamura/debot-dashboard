@@ -116,7 +116,6 @@ const createCard = (key) => {
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <div class="kv">
-        <div>Positions <span data-field="positions"></span></div>
         <div>PnL today <span data-field="pnl-today"></span></div>
         <div>PnL total <span data-field="pnl-session"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
@@ -149,7 +148,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const pnlTotalValue = parseNumber(data.pnl_total);
   const pnlToday = formatPnl(pnlTodayValue);
   const pnlTotal = formatUsdc(pnlTotalValue);
-  const positionCount = Number.isFinite(data.position_count) ? data.position_count : 0;
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
 
@@ -161,7 +159,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const instanceEl = card.querySelector('[data-field="instance"]');
   const serviceEl = card.querySelector('[data-field="service"]');
   const ageEl = card.querySelector('[data-field="age"]');
-  const positionsEl = card.querySelector('[data-field="positions"]');
   const pnlTodayEl = card.querySelector('[data-field="pnl-today"]');
   const pnlSessionEl = card.querySelector('[data-field="pnl-session"]');
   const pnlTotalEl = card.querySelector('[data-field="pnl-total"]');
@@ -236,7 +233,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   instanceEl.textContent = target.instance_id || "-";
   serviceEl.textContent = target.service || "-";
   ageEl.textContent = ageText;
-  positionsEl.textContent = positionCount;
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
   applySignedClass(pnlTodayEl, pnlTodayValue);
