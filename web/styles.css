@@ -205,6 +205,10 @@ body::after {
   color: var(--muted);
 }
 
+.row[hidden] {
+  display: none;
+}
+
 .row strong {
   color: var(--ink);
   font-weight: 600;
