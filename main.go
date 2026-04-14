@@ -107,6 +107,8 @@ type ErrorSummary struct {
 	WarnCountTotal    uint64  `json:"warn_count_total"`
 	LastErrorTs       *int64  `json:"last_error_ts,omitempty"`
 	LastErrorMessage  *string `json:"last_error_message,omitempty"`
+	LastWarnTs        *int64  `json:"last_warn_ts,omitempty"`
+	LastWarnMessage   *string `json:"last_warn_message,omitempty"`
 }
 
 type EquityPoint struct {
