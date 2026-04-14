@@ -95,8 +95,18 @@ type StatusData struct {
 	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
 	Maintenance    *string                `json:"maintenance,omitempty"`
 	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
+	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
 	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
 	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
+}
+
+type ErrorSummary struct {
+	ErrorCount5m      uint64  `json:"error_count_5m"`
+	WarnCount5m       uint64  `json:"warn_count_5m"`
+	ErrorCountTotal   uint64  `json:"error_count_total"`
+	WarnCountTotal    uint64  `json:"warn_count_total"`
+	LastErrorTs       *int64  `json:"last_error_ts,omitempty"`
+	LastErrorMessage  *string `json:"last_error_message,omitempty"`
 }
 
 type EquityPoint struct {

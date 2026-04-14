@@ -109,6 +109,7 @@ const createCard = (key) => {
         <h2 class="card-title" data-field="name"></h2>
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
+        <span class="status-pill errors" data-field="errors" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
@@ -182,6 +183,29 @@ const updateCard = (card, target, pollSecs, index, key) => {
     } else {
       maintEl.hidden = true;
       maintEl.textContent = "";
+    }
+  }
+
+  // Error summary pill: lights up when the bot self-reports recent
+  // ERROR/WARN log events in the last 5 minutes. See bot-strategy#45.
+  const errorsEl = card.querySelector('[data-field="errors"]');
+  if (errorsEl) {
+    const es = data.error_summary;
+    if (es && ((es.error_count_5m || 0) > 0 || (es.warn_count_5m || 0) > 0)) {
+      const parts = [];
+      if (es.error_count_5m) parts.push(`${es.error_count_5m}E`);
+      if (es.warn_count_5m) parts.push(`${es.warn_count_5m}W`);
+      errorsEl.textContent = `5m: ${parts.join("/")}`;
+      errorsEl.classList.toggle("has-error", (es.error_count_5m || 0) > 0);
+      errorsEl.title = es.last_error_message
+        ? `last error: ${es.last_error_message}`
+        : `totals: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W since start`;
+      errorsEl.hidden = false;
+    } else {
+      errorsEl.hidden = true;
+      errorsEl.textContent = "";
+      errorsEl.removeAttribute("title");
+      errorsEl.classList.remove("has-error");
     }
   }
 
