@@ -182,9 +182,14 @@ body::after {
 }
 
 .status-pill.errors {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.14);
+  cursor: help;
+}
+
+.status-pill.errors.has-warn {
   color: #b45309;
   background: rgba(217, 119, 6, 0.14);
-  cursor: help;
 }
 
 .status-pill.errors.has-error {

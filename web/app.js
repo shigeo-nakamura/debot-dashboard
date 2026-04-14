@@ -183,26 +183,27 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
   }
 
-  // Error summary pill: lights up when the bot self-reports recent
-  // ERROR/WARN log events in the last 5 minutes. See bot-strategy#45.
+  // Error summary pill: always shown when the bot self-reports an
+  // error_summary block so operators can tell "0 errors" from "no data".
+  // See bot-strategy#45.
   const errorsEl = card.querySelector('[data-field="errors"]');
   if (errorsEl) {
     const es = data.error_summary;
-    if (es && ((es.error_count_5m || 0) > 0 || (es.warn_count_5m || 0) > 0)) {
-      const parts = [];
-      if (es.error_count_5m) parts.push(`${es.error_count_5m}E`);
-      if (es.warn_count_5m) parts.push(`${es.warn_count_5m}W`);
-      errorsEl.textContent = `5m: ${parts.join("/")}`;
-      errorsEl.classList.toggle("has-error", (es.error_count_5m || 0) > 0);
+    if (es) {
+      const e5 = es.error_count_5m || 0;
+      const w5 = es.warn_count_5m || 0;
+      errorsEl.textContent = `5m: ${e5}E/${w5}W`;
+      errorsEl.classList.toggle("has-error", e5 > 0);
+      errorsEl.classList.toggle("has-warn", e5 === 0 && w5 > 0);
       errorsEl.title = es.last_error_message
-        ? `last error: ${es.last_error_message}`
-        : `totals: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W since start`;
+        ? `last error: ${es.last_error_message}\n\ntotals since start: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W`
+        : `totals since start: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W`;
       errorsEl.hidden = false;
     } else {
       errorsEl.hidden = true;
       errorsEl.textContent = "";
       errorsEl.removeAttribute("title");
-      errorsEl.classList.remove("has-error");
+      errorsEl.classList.remove("has-error", "has-warn");
     }
   }
 
