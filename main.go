@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -125,8 +126,14 @@ type TargetStatus struct {
 	ServiceStatus    string      `json:"service_status"`
 	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
 	Status           *StatusData `json:"status,omitempty"`
-	Error            string      `json:"error,omitempty"`
-	CheckedAt        time.Time   `json:"checked_at"`
+	// WsReset24h is the count of `Connection reset without closing handshake`
+	// WebSocket events observed in the service's journald log over the last
+	// 24 hours. Sourced via SSM (journalctl) rather than the bot, so it works
+	// without any bot-side changes. Threshold for alerting is 10/day per
+	// bot-strategy#47.
+	WsReset24h *int      `json:"ws_reset_24h,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
 type DashboardSnapshot struct {
@@ -392,13 +399,14 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, inc
 		return result
 	}
 
-	serviceStatus, serviceStart, status, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
+	serviceStatus, serviceStart, status, wsReset, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
 	result.ServiceStatus = serviceStatus
 	if serviceStart != nil {
 		utc := serviceStart.UTC()
 		result.ServiceStartedAt = &utc
 	}
 	result.Status = status
+	result.WsReset24h = wsReset
 	if parseErr != nil {
 		result.Error = fmt.Sprintf("parse error: %v", parseErr)
 	}
@@ -457,14 +465,18 @@ func buildCommand(target TargetConfig, includeHistory bool) string {
 	service := shellEscape(target.Service)
 	path := shellEscape(target.StatusPath)
 	alertPath := shellEscape(backtestAlertPath(target.StatusPath))
+	// awk is used (instead of `grep -c ... || echo 0`) so the count prints
+	// exactly once even when there are zero matches — `grep -c` on empty
+	// input exits 1, which would otherwise double-print via the `||` fallback.
 	cmd := fmt.Sprintf(
-		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi",
+		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'",
 		service,
 		service,
 		path,
 		path,
 		alertPath,
 		alertPath,
+		service,
 	)
 	if includeHistory {
 		historyPath := shellEscape(equityHistoryPath(target.StatusPath))
@@ -473,10 +485,10 @@ func buildCommand(target TargetConfig, includeHistory bool) string {
 	return cmd
 }
 
-func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, error) {
+func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, *int, error) {
 	parts := strings.SplitN(output, "__STATUS__", 2)
 	if len(parts) != 2 {
-		return strings.TrimSpace(output), nil, nil, errors.New("missing status marker")
+		return strings.TrimSpace(output), nil, nil, nil, errors.New("missing status marker")
 	}
 	startParts := strings.SplitN(parts[0], "__START__", 2)
 	serviceStatus := strings.TrimSpace(startParts[0])
@@ -484,39 +496,39 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 	if len(startParts) == 2 {
 		serviceStart = parseServiceStart(strings.TrimSpace(startParts[1]))
 	}
-	payload := strings.TrimSpace(parts[1])
+
+	// Tail payload after __STATUS__: status.json [__ALERT__ alert.json] [__WS_RESET__ count] [__HISTORY__ equity.jsonl]
+	tail := strings.TrimSpace(parts[1])
+	payload := tail
 	alertPayload := ""
+	wsResetPayload := ""
 	historyPayload := ""
 
-	// Extract alert section (always present in command output)
-	alertParts := strings.SplitN(payload, "__ALERT__", 2)
-	payload = strings.TrimSpace(alertParts[0])
-	if len(alertParts) == 2 {
-		remainder := strings.TrimSpace(alertParts[1])
-		// History marker may follow alert
-		if includeHistory {
-			historyParts := strings.SplitN(remainder, "__HISTORY__", 2)
-			alertPayload = strings.TrimSpace(historyParts[0])
-			if len(historyParts) == 2 {
-				historyPayload = strings.TrimSpace(historyParts[1])
-			}
-		} else {
-			alertPayload = remainder
-		}
-	} else if includeHistory {
-		historyParts := strings.SplitN(payload, "__HISTORY__", 2)
-		payload = strings.TrimSpace(historyParts[0])
-		if len(historyParts) == 2 {
-			historyPayload = strings.TrimSpace(historyParts[1])
-		}
+	if idx := strings.Index(tail, "__ALERT__"); idx >= 0 {
+		payload = strings.TrimSpace(tail[:idx])
+		tail = tail[idx+len("__ALERT__"):]
+	}
+	if idx := strings.Index(tail, "__WS_RESET__"); idx >= 0 {
+		alertPayload = strings.TrimSpace(tail[:idx])
+		tail = tail[idx+len("__WS_RESET__"):]
+	} else if !strings.HasPrefix(strings.TrimSpace(tail), "__HISTORY__") {
+		alertPayload = strings.TrimSpace(tail)
+		tail = ""
+	}
+	if idx := strings.Index(tail, "__HISTORY__"); idx >= 0 {
+		wsResetPayload = strings.TrimSpace(tail[:idx])
+		tail = tail[idx+len("__HISTORY__"):]
+		historyPayload = strings.TrimSpace(tail)
+	} else {
+		wsResetPayload = strings.TrimSpace(tail)
 	}
 
 	if payload == "" {
-		return serviceStatus, serviceStart, nil, errors.New("status.json is empty")
+		return serviceStatus, serviceStart, nil, nil, errors.New("status.json is empty")
 	}
 	var status StatusData
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
-		return serviceStatus, serviceStart, nil, err
+		return serviceStatus, serviceStart, nil, nil, err
 	}
 	if alertPayload != "" {
 		var alert map[string]interface{}
@@ -527,7 +539,25 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 	if includeHistory {
 		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
 	}
-	return serviceStatus, serviceStart, &status, nil
+
+	var wsReset *int
+	if wsResetPayload != "" {
+		// wsResetPayload may include additional shell chatter; scan the last
+		// non-empty line as the count (journalctl | grep -c prints a single
+		// integer).
+		lines := strings.Split(wsResetPayload, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(line); err == nil {
+				wsReset = &n
+			}
+			break
+		}
+	}
+	return serviceStatus, serviceStart, &status, wsReset, nil
 }
 
 func historyCutoff(rangeParam string) (bool, int64) {

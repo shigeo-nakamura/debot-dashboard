@@ -197,6 +197,22 @@ body::after {
   background: rgba(185, 28, 28, 0.14);
 }
 
+.status-pill.ws-reset {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.14);
+  cursor: help;
+}
+
+.status-pill.ws-reset.has-warn {
+  color: #b45309;
+  background: rgba(217, 119, 6, 0.14);
+}
+
+.status-pill.ws-reset.has-error {
+  color: #b91c1c;
+  background: rgba(185, 28, 28, 0.14);
+}
+
 .status-pill[hidden] {
   display: none;
 }

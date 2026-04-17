@@ -110,6 +110,7 @@ const createCard = (key) => {
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
+        <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
@@ -204,6 +205,27 @@ const updateCard = (card, target, pollSecs, index, key) => {
       errorsEl.textContent = "";
       errorsEl.removeAttribute("title");
       errorsEl.classList.remove("has-error", "has-warn");
+    }
+  }
+
+  // WS reset pill: count of `Connection reset without closing handshake`
+  // events in the service's journalctl log over the last 24h. Threshold
+  // 10/day per bot-strategy#47 — above that, the pill turns red and the
+  // error-watch workflow auto-creates an issue.
+  const wsResetEl = card.querySelector('[data-field="ws-reset"]');
+  if (wsResetEl) {
+    const count = target.ws_reset_24h;
+    if (count !== undefined && count !== null) {
+      wsResetEl.textContent = `WS: ${count}/24h`;
+      wsResetEl.classList.toggle("has-error", count > 10);
+      wsResetEl.classList.toggle("has-warn", count > 0 && count <= 10);
+      wsResetEl.title = `Connection reset events in last 24h (alert threshold: >10)`;
+      wsResetEl.hidden = false;
+    } else {
+      wsResetEl.hidden = true;
+      wsResetEl.textContent = "";
+      wsResetEl.removeAttribute("title");
+      wsResetEl.classList.remove("has-error", "has-warn");
     }
   }
 
