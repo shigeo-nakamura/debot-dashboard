@@ -9,6 +9,14 @@ targets:
     instance_id: i-0c08fba996bc21879
     service: debot01
     status_path: /home/ec2-user/debot_status/debot01/status.json
+  # Tokyo pairtrade on Extended (bot-strategy#123). Per-target `region`
+  # overrides the top-level region so one dashboard monitors both Frankfurt
+  # and Tokyo via SSM.
+  - name: debot-pair-btceth-ext
+    instance_id: i-015f7f9388cac0a1b
+    service: debot-pair-btceth-extended
+    region: ap-northeast-1
+    status_path: /home/ec2-user/debot_status/debot-pair-btceth-ext/status.json
 # auth:
 #   username: admin
 #   password: change-me

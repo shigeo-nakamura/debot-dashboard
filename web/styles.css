@@ -102,8 +102,13 @@ body::after {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 20px;
+  /* Pairtrade bots are grouped A/B/C, so cap the layout at 3 columns.
+     On narrow screens the max() falls back to 260px so cards stay
+     readable; on wide screens each card takes exactly 1/3 of the grid
+     and extra bots wrap onto a new row. auto-fit collapses empty tracks
+     if fewer than 3 bots are visible. */
+  grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 40px) / 3)), 1fr));
 }
 
 .grid.live .card {
