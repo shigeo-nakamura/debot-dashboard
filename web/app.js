@@ -6,7 +6,6 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
-const fullHistoryByKey = new Map();
 let hasRendered = false;
 
 const RANGE_OPTIONS = [
@@ -113,12 +112,12 @@ const createCard = (key) => {
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
+      <div class="row"><span>AWS Region</span><strong data-field="region"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <div class="kv">
         <div>PnL today <span data-field="pnl-today"></span></div>
-        <div>PnL total <span data-field="pnl-session"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
       <div class="kv kv-stats">
@@ -158,10 +157,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const nameEl = card.querySelector('[data-field="name"]');
   const statusEl = card.querySelector('[data-field="status"]');
   const instanceEl = card.querySelector('[data-field="instance"]');
+  const regionEl = card.querySelector('[data-field="region"]');
   const serviceEl = card.querySelector('[data-field="service"]');
   const ageEl = card.querySelector('[data-field="age"]');
   const pnlTodayEl = card.querySelector('[data-field="pnl-today"]');
-  const pnlSessionEl = card.querySelector('[data-field="pnl-session"]');
   const pnlTotalEl = card.querySelector('[data-field="pnl-total"]');
   const positionsListEl = card.querySelector('[data-field="positions-list"]');
   const errorEl = card.querySelector('[data-field="error"]');
@@ -254,6 +253,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   }
 
   instanceEl.textContent = target.instance_id || "-";
+  regionEl.textContent = target.region || "-";
   serviceEl.textContent = target.service || "-";
   ageEl.textContent = ageText;
   pnlTodayEl.textContent = pnlToday;
@@ -262,13 +262,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   applySignedClass(pnlTotalEl, pnlTotalValue);
 
   const history = updateHistoryCache(key, data);
-  const sessionPnlValue = computeSessionPnl(
-    target.service_started_at,
-    fullHistoryByKey.get(key) || history,
-    pnlTotalValue
-  );
-  pnlSessionEl.textContent = formatPnl(sessionPnlValue);
-  applySignedClass(pnlSessionEl, sessionPnlValue);
   renderEquityChart(chartEl, chartEmptyEl, history);
 
   // Stats: prefer BOT-reported trade_stats, fallback to equity-derived
@@ -390,9 +383,6 @@ const updateHistoryCache = (key, data) => {
         equity: Number(point.equity),
       }))
       .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
-    if (currentRange === "all") {
-      fullHistoryByKey.set(key, history);
-    }
     history = filterHistoryByRange(history);
     historyByKey.set(key, history);
     return history;
@@ -402,12 +392,6 @@ const updateHistoryCache = (key, data) => {
     history = appendHistoryPoint(history, point);
     history = filterHistoryByRange(history);
     historyByKey.set(key, history);
-    const fullHistory = fullHistoryByKey.get(key);
-    if (Array.isArray(fullHistory)) {
-      fullHistoryByKey.set(key, appendHistoryPoint(fullHistory, point));
-    } else if (currentRange === "all") {
-      fullHistoryByKey.set(key, history);
-    }
   }
   return history;
 };
@@ -572,45 +556,6 @@ const formatUsdc = (value) => {
   }
   const number = Number(value);
   return `${number.toFixed(1)} USDC`;
-};
-
-const computeSessionPnl = (serviceStartedAt, fullHistory, currentEquity) => {
-  if (!Number.isFinite(currentEquity)) {
-    return null;
-  }
-  if (!serviceStartedAt) {
-    return null;
-  }
-  const startedAtMs = Date.parse(serviceStartedAt);
-  if (!Number.isFinite(startedAtMs)) {
-    return null;
-  }
-  if (!Array.isArray(fullHistory) || fullHistory.length === 0) {
-    return null;
-  }
-  const baseline = findBaselineEquity(fullHistory, startedAtMs);
-  if (!Number.isFinite(baseline)) {
-    return null;
-  }
-  return currentEquity - baseline;
-};
-
-const findBaselineEquity = (history, startedAtMs) => {
-  let baseline = null;
-  for (const point of history) {
-    if (!Number.isFinite(point.ts) || !Number.isFinite(point.equity)) {
-      continue;
-    }
-    if (point.ts >= startedAtMs) {
-      baseline = point.equity;
-      break;
-    }
-  }
-  if (baseline === null) {
-    const last = history[history.length - 1];
-    baseline = last && Number.isFinite(last.equity) ? last.equity : null;
-  }
-  return baseline;
 };
 
 const parseNumber = (value) => {
