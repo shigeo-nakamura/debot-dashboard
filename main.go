@@ -195,9 +195,13 @@ type TargetStatus struct {
 	// 24 hours. Sourced via SSM (journalctl) rather than the bot, so it works
 	// without any bot-side changes. Threshold for alerting is 10/day per
 	// bot-strategy#47.
-	WsReset24h *int      `json:"ws_reset_24h,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	CheckedAt  time.Time `json:"checked_at"`
+	WsReset24h       *int      `json:"ws_reset_24h,omitempty"`
+	// KillSwitchActive reports whether /opt/debot/KILL_SWITCH exists on the
+	// target instance. Sourced via SSM, independent of any bot-side code.
+	// True → operator-triggered halt file is present; see bot-strategy#185.
+	KillSwitchActive *bool     `json:"kill_switch_active,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	CheckedAt        time.Time `json:"checked_at"`
 }
 
 type DashboardSnapshot struct {
@@ -463,7 +467,7 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, inc
 		return result
 	}
 
-	serviceStatus, serviceStart, status, wsReset, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
+	serviceStatus, serviceStart, status, wsReset, killSwitch, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
 	result.ServiceStatus = serviceStatus
 	if serviceStart != nil {
 		utc := serviceStart.UTC()
@@ -471,6 +475,7 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, inc
 	}
 	result.Status = status
 	result.WsReset24h = wsReset
+	result.KillSwitchActive = killSwitch
 	if parseErr != nil {
 		result.Error = fmt.Sprintf("parse error: %v", parseErr)
 	}
@@ -533,7 +538,7 @@ func buildCommand(target TargetConfig, includeHistory bool) string {
 	// exactly once even when there are zero matches — `grep -c` on empty
 	// input exits 1, which would otherwise double-print via the `||` fallback.
 	cmd := fmt.Sprintf(
-		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'",
+		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'; echo \"__KILL_SWITCH__\"; if [ -f /opt/debot/KILL_SWITCH ]; then echo 1; else echo 0; fi",
 		service,
 		service,
 		path,
@@ -549,10 +554,10 @@ func buildCommand(target TargetConfig, includeHistory bool) string {
 	return cmd
 }
 
-func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, *int, error) {
+func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, *int, *bool, error) {
 	parts := strings.SplitN(output, "__STATUS__", 2)
 	if len(parts) != 2 {
-		return strings.TrimSpace(output), nil, nil, nil, errors.New("missing status marker")
+		return strings.TrimSpace(output), nil, nil, nil, nil, errors.New("missing status marker")
 	}
 	startParts := strings.SplitN(parts[0], "__START__", 2)
 	serviceStatus := strings.TrimSpace(startParts[0])
@@ -561,11 +566,13 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 		serviceStart = parseServiceStart(strings.TrimSpace(startParts[1]))
 	}
 
-	// Tail payload after __STATUS__: status.json [__ALERT__ alert.json] [__WS_RESET__ count] [__HISTORY__ equity.jsonl]
+	// Tail payload after __STATUS__:
+	//   status.json [__ALERT__ alert.json] [__WS_RESET__ count] [__KILL_SWITCH__ 0|1] [__HISTORY__ equity.jsonl]
 	tail := strings.TrimSpace(parts[1])
 	payload := tail
 	alertPayload := ""
 	wsResetPayload := ""
+	killSwitchPayload := ""
 	historyPayload := ""
 
 	if idx := strings.Index(tail, "__ALERT__"); idx >= 0 {
@@ -579,20 +586,32 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 		alertPayload = strings.TrimSpace(tail)
 		tail = ""
 	}
-	if idx := strings.Index(tail, "__HISTORY__"); idx >= 0 {
+	if idx := strings.Index(tail, "__KILL_SWITCH__"); idx >= 0 {
 		wsResetPayload = strings.TrimSpace(tail[:idx])
+		tail = tail[idx+len("__KILL_SWITCH__"):]
+	}
+	if idx := strings.Index(tail, "__HISTORY__"); idx >= 0 {
+		if killSwitchPayload == "" && wsResetPayload == "" {
+			// Back-compat: server without __KILL_SWITCH__ marker; tail between
+			// __WS_RESET__ and __HISTORY__ is still ws-reset count only.
+			wsResetPayload = strings.TrimSpace(tail[:idx])
+		} else {
+			killSwitchPayload = strings.TrimSpace(tail[:idx])
+		}
 		tail = tail[idx+len("__HISTORY__"):]
 		historyPayload = strings.TrimSpace(tail)
-	} else {
+	} else if killSwitchPayload == "" && wsResetPayload == "" {
 		wsResetPayload = strings.TrimSpace(tail)
+	} else {
+		killSwitchPayload = strings.TrimSpace(tail)
 	}
 
 	if payload == "" {
-		return serviceStatus, serviceStart, nil, nil, errors.New("status.json is empty")
+		return serviceStatus, serviceStart, nil, nil, nil, errors.New("status.json is empty")
 	}
 	var status StatusData
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
-		return serviceStatus, serviceStart, nil, nil, err
+		return serviceStatus, serviceStart, nil, nil, nil, err
 	}
 	if alertPayload != "" {
 		var alert map[string]interface{}
@@ -621,7 +640,21 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 			break
 		}
 	}
-	return serviceStatus, serviceStart, &status, wsReset, nil
+
+	var killSwitch *bool
+	if killSwitchPayload != "" {
+		lines := strings.Split(killSwitchPayload, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			active := line == "1"
+			killSwitch = &active
+			break
+		}
+	}
+	return serviceStatus, serviceStart, &status, wsReset, killSwitch, nil
 }
 
 func historyCutoff(rangeParam string) (bool, int64) {

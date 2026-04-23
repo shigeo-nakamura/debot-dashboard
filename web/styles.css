@@ -218,6 +218,14 @@ body::after {
   background: rgba(185, 28, 28, 0.14);
 }
 
+.status-pill.kill-switch {
+  color: #ffffff;
+  background: #b91c1c;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .status-pill[hidden] {
   display: none;
 }

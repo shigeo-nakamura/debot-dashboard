@@ -110,10 +110,12 @@ const createCard = (key) => {
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
+        <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>AWS Region</span><strong data-field="region"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
+      <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <div class="kv">
@@ -231,6 +233,23 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
   }
 
+  // KILL_SWITCH pill: true when /opt/debot/KILL_SWITCH exists on the target
+  // instance. Sourced via SSM, independent of bot-side code. See
+  // bot-strategy#185. Only visible while the flag is active so the UI stays
+  // quiet during normal operation.
+  const killSwitchEl = card.querySelector('[data-field="kill-switch"]');
+  if (killSwitchEl) {
+    if (target.kill_switch_active === true) {
+      killSwitchEl.textContent = "KILL SWITCH";
+      killSwitchEl.title = "/opt/debot/KILL_SWITCH is present — new entries blocked. Remove with `sudo rm /opt/debot/KILL_SWITCH`.";
+      killSwitchEl.hidden = false;
+    } else {
+      killSwitchEl.hidden = true;
+      killSwitchEl.textContent = "";
+      killSwitchEl.removeAttribute("title");
+    }
+  }
+
   // Graceful-shutdown ETA row: shows the earliest force_close ETA and
   // the grace deadline while the bot is winding down. See pairtrade#6.
   const shutdownRowEl = card.querySelector('[data-field="shutdown-row"]');
@@ -258,6 +277,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   instanceEl.textContent = target.instance_id || "-";
   regionEl.textContent = target.region || "-";
   serviceEl.textContent = target.service || "-";
+  const startedEl = card.querySelector('[data-field="started"]');
+  if (startedEl) {
+    startedEl.textContent = formatStarted(target.service_started_at);
+  }
   ageEl.textContent = ageText;
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
@@ -579,6 +602,18 @@ const applySignedClass = (el, value) => {
   } else if (value < 0) {
     el.classList.add("negative");
   }
+};
+
+const formatStarted = (iso) => {
+  if (!iso) {
+    return "-";
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  const ageMs = Date.now() - date.getTime();
+  return ageMs >= 0 ? `${formatAge(ageMs)} ago` : "-";
 };
 
 const formatAge = (ms) => {
