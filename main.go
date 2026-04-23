@@ -102,14 +102,78 @@ type StatusData struct {
 }
 
 type ErrorSummary struct {
-	ErrorCount5m      uint64  `json:"error_count_5m"`
-	WarnCount5m       uint64  `json:"warn_count_5m"`
-	ErrorCountTotal   uint64  `json:"error_count_total"`
-	WarnCountTotal    uint64  `json:"warn_count_total"`
-	LastErrorTs       *int64  `json:"last_error_ts,omitempty"`
-	LastErrorMessage  *string `json:"last_error_message,omitempty"`
-	LastWarnTs        *int64  `json:"last_warn_ts,omitempty"`
-	LastWarnMessage   *string `json:"last_warn_message,omitempty"`
+	// Window count. Populated from `error_count_30m` (new) and
+	// `error_count_5m` (old) — see UnmarshalJSON. bot-strategy#168 widened
+	// the window from 5m to 30m; consumers that are still on a bot emitting
+	// the old name fall back transparently.
+	ErrorCountWindow uint64  `json:"-"`
+	WarnCountWindow  uint64  `json:"-"`
+	ErrorCountTotal  uint64  `json:"error_count_total"`
+	WarnCountTotal   uint64  `json:"warn_count_total"`
+	LastErrorTs      *int64  `json:"last_error_ts,omitempty"`
+	LastErrorMessage *string `json:"last_error_message,omitempty"`
+	LastWarnTs       *int64  `json:"last_warn_ts,omitempty"`
+	LastWarnMessage  *string `json:"last_warn_message,omitempty"`
+}
+
+func (e *ErrorSummary) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		ErrorCount30m    *uint64 `json:"error_count_30m,omitempty"`
+		WarnCount30m     *uint64 `json:"warn_count_30m,omitempty"`
+		ErrorCount5m     *uint64 `json:"error_count_5m,omitempty"`
+		WarnCount5m      *uint64 `json:"warn_count_5m,omitempty"`
+		ErrorCountTotal  uint64  `json:"error_count_total"`
+		WarnCountTotal   uint64  `json:"warn_count_total"`
+		LastErrorTs      *int64  `json:"last_error_ts,omitempty"`
+		LastErrorMessage *string `json:"last_error_message,omitempty"`
+		LastWarnTs       *int64  `json:"last_warn_ts,omitempty"`
+		LastWarnMessage  *string `json:"last_warn_message,omitempty"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	switch {
+	case r.ErrorCount30m != nil:
+		e.ErrorCountWindow = *r.ErrorCount30m
+	case r.ErrorCount5m != nil:
+		e.ErrorCountWindow = *r.ErrorCount5m
+	}
+	switch {
+	case r.WarnCount30m != nil:
+		e.WarnCountWindow = *r.WarnCount30m
+	case r.WarnCount5m != nil:
+		e.WarnCountWindow = *r.WarnCount5m
+	}
+	e.ErrorCountTotal = r.ErrorCountTotal
+	e.WarnCountTotal = r.WarnCountTotal
+	e.LastErrorTs = r.LastErrorTs
+	e.LastErrorMessage = r.LastErrorMessage
+	e.LastWarnTs = r.LastWarnTs
+	e.LastWarnMessage = r.LastWarnMessage
+	return nil
+}
+
+func (e ErrorSummary) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ErrorCount30m    uint64  `json:"error_count_30m"`
+		WarnCount30m     uint64  `json:"warn_count_30m"`
+		ErrorCountTotal  uint64  `json:"error_count_total"`
+		WarnCountTotal   uint64  `json:"warn_count_total"`
+		LastErrorTs      *int64  `json:"last_error_ts,omitempty"`
+		LastErrorMessage *string `json:"last_error_message,omitempty"`
+		LastWarnTs       *int64  `json:"last_warn_ts,omitempty"`
+		LastWarnMessage  *string `json:"last_warn_message,omitempty"`
+	}{
+		ErrorCount30m:    e.ErrorCountWindow,
+		WarnCount30m:     e.WarnCountWindow,
+		ErrorCountTotal:  e.ErrorCountTotal,
+		WarnCountTotal:   e.WarnCountTotal,
+		LastErrorTs:      e.LastErrorTs,
+		LastErrorMessage: e.LastErrorMessage,
+		LastWarnTs:       e.LastWarnTs,
+		LastWarnMessage:  e.LastWarnMessage,
+	})
 }
 
 type EquityPoint struct {

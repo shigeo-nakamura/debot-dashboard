@@ -190,11 +190,14 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (errorsEl) {
     const es = data.error_summary;
     if (es) {
-      const e5 = es.error_count_5m || 0;
-      const w5 = es.warn_count_5m || 0;
-      errorsEl.textContent = `5m: ${e5}E/${w5}W`;
-      errorsEl.classList.toggle("has-error", e5 > 0);
-      errorsEl.classList.toggle("has-warn", e5 === 0 && w5 > 0);
+      // Prefer the 30m window (bot-strategy#168); fall back to the legacy
+      // 5m field for bots that haven't been restarted onto the new code.
+      const eWin = es.error_count_30m ?? es.error_count_5m ?? 0;
+      const wWin = es.warn_count_30m ?? es.warn_count_5m ?? 0;
+      const windowLabel = es.error_count_30m != null || es.warn_count_30m != null ? "30m" : "5m";
+      errorsEl.textContent = `${windowLabel}: ${eWin}E/${wWin}W`;
+      errorsEl.classList.toggle("has-error", eWin > 0);
+      errorsEl.classList.toggle("has-warn", eWin === 0 && wWin > 0);
       errorsEl.title = es.last_error_message
         ? `last error: ${es.last_error_message}\n\ntotals since start: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W`
         : `totals since start: ${es.error_count_total || 0}E / ${es.warn_count_total || 0}W`;
