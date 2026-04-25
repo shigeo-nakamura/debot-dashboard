@@ -111,6 +111,8 @@ const createCard = (key) => {
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
+        <span class="status-pill dry-run" data-field="dry-run" hidden></span>
+        <span class="status-pill backtest-mode" data-field="backtest-mode" hidden></span>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>AWS Region</span><strong data-field="region"></strong></div>
@@ -247,6 +249,35 @@ const updateCard = (card, target, pollSecs, index, key) => {
       killSwitchEl.hidden = true;
       killSwitchEl.textContent = "";
       killSwitchEl.removeAttribute("title");
+    }
+  }
+
+  // DRY_RUN / BACKTEST mode pills: surface non-live execution modes so an
+  // operator glancing at the dashboard cannot mistake a paper-trading or
+  // replay bot for a live one. See bot-strategy#215.
+  const dryRunEl = card.querySelector('[data-field="dry-run"]');
+  if (dryRunEl) {
+    if (data.dry_run === true) {
+      dryRunEl.textContent = "DRY RUN";
+      dryRunEl.title = "Bot is running with DRY_RUN=1 — no real orders are submitted.";
+      dryRunEl.hidden = false;
+    } else {
+      dryRunEl.hidden = true;
+      dryRunEl.textContent = "";
+      dryRunEl.removeAttribute("title");
+    }
+  }
+
+  const backtestModeEl = card.querySelector('[data-field="backtest-mode"]');
+  if (backtestModeEl) {
+    if (data.backtest_mode === true) {
+      backtestModeEl.textContent = "BACKTEST";
+      backtestModeEl.title = "Bot is running in backtest/replay mode — not connected to live markets.";
+      backtestModeEl.hidden = false;
+    } else {
+      backtestModeEl.hidden = true;
+      backtestModeEl.textContent = "";
+      backtestModeEl.removeAttribute("title");
     }
   }
 

@@ -226,6 +226,22 @@ body::after {
   letter-spacing: 0.04em;
 }
 
+.status-pill.dry-run {
+  color: #ffffff;
+  background: #d97706;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.status-pill.backtest-mode {
+  color: #ffffff;
+  background: #7c3aed;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .status-pill[hidden] {
   display: none;
 }
