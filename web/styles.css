@@ -111,8 +111,96 @@ body::after {
   grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 40px) / 3)), 1fr));
 }
 
-.grid.live .card {
+.regions.live .card {
   animation: none;
+}
+
+/* Region grouping (bot-strategy#231 redesign Phase A2). Each region
+   gets its own labeled section so a 7-bot fleet doesn't read as a
+   flat 7-card grid. The grid inside still uses the 3-column rule so
+   a single region's A/B/C cards lay out exactly as before. */
+.regions {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.region-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.region-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.region-name {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 20px;
+  margin: 0;
+  color: var(--ink);
+}
+
+.region-code {
+  font-size: 13px;
+  color: var(--muted);
+  font-family: "Space Grotesk", monospace;
+}
+
+.region-count {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Fleet summary row (Phase A1). Shows fleet-wide aggregates above
+   any region group. severity stats turn alert-red when their count is
+   non-zero so the operator's eye lands there first. */
+.fleet-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.fleet-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fleet-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.fleet-stat-value {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.fleet-stat.severity .fleet-stat-value {
+  color: var(--muted);
+}
+
+.fleet-stat.severity.alert .fleet-stat-value {
+  color: var(--danger);
 }
 
 .card {

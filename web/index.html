@@ -23,7 +23,33 @@
           <div class="range-toggle" id="range-toggle" role="group" aria-label="Equity range"></div>
         </div>
       </header>
-      <section class="grid" id="cards"></section>
+      <section class="fleet-summary" id="fleet-summary" hidden>
+        <div class="fleet-stat">
+          <span class="fleet-stat-label">Targets</span>
+          <span class="fleet-stat-value" data-field="fleet-total">0</span>
+        </div>
+        <div class="fleet-stat">
+          <span class="fleet-stat-label">PnL today</span>
+          <span class="fleet-stat-value" data-field="fleet-pnl-today">-</span>
+        </div>
+        <div class="fleet-stat">
+          <span class="fleet-stat-label">Equity total</span>
+          <span class="fleet-stat-value" data-field="fleet-equity-total">-</span>
+        </div>
+        <div class="fleet-stat severity">
+          <span class="fleet-stat-label">Halts active</span>
+          <span class="fleet-stat-value" data-field="fleet-halts">0</span>
+        </div>
+        <div class="fleet-stat severity">
+          <span class="fleet-stat-label">Kill switches</span>
+          <span class="fleet-stat-value" data-field="fleet-kill-switches">0</span>
+        </div>
+        <div class="fleet-stat severity">
+          <span class="fleet-stat-label">Services down</span>
+          <span class="fleet-stat-value" data-field="fleet-services-down">0</span>
+        </div>
+      </section>
+      <section class="regions" id="cards"></section>
     </div>
     <script src="app.js"></script>
   </body>

@@ -1,4 +1,5 @@
 const cardsEl = document.getElementById("cards");
+const fleetSummaryEl = document.getElementById("fleet-summary");
 const lastUpdatedEl = document.getElementById("last-updated");
 const pollIntervalEl = document.getElementById("poll-interval");
 const rangeToggleEl = document.getElementById("range-toggle");
@@ -6,7 +7,22 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
+const regionMap = new Map(); // region key (AWS code) -> { container, grid }
 let hasRendered = false;
+
+// AWS region → human-readable label for the region group header. Falls
+// back to the raw region string when a code isn't in the map.
+const REGION_LABELS = {
+  "eu-central-1": "Frankfurt",
+  "ap-northeast-1": "Tokyo",
+  "us-east-1": "N. Virginia",
+  "us-west-2": "Oregon",
+};
+
+// Stable display order so Frankfurt always appears above Tokyo
+// regardless of config.yaml ordering. Unknown regions sort to the
+// bottom alphabetically.
+const REGION_ORDER = ["eu-central-1", "ap-northeast-1", "us-east-1", "us-west-2"];
 
 const RANGE_OPTIONS = [
   { id: "1d", label: "1D", ms: 24 * 60 * 60 * 1000 },
@@ -44,22 +60,50 @@ const render = (data) => {
     pollIntervalEl.textContent = `Poll ${pollSecs}s`;
   }
 
+  // Group targets by AWS region. Each region gets its own .region-group
+  // container with a header + grid; cards are routed into the right
+  // grid by `target.region`. Targets with no region fall under
+  // "unknown". (bot-strategy#231 redesign Phase A2)
   const seenKeys = new Set();
-  const orderedCards = [];
+  const seenRegions = new Set();
+  const cardsByRegion = new Map();
 
   data.targets.forEach((target, index) => {
-    const key = keyForTarget(target, index);
-    let card = cardMap.get(key);
-    if (!card) {
-      card = createCard(key);
-      cardMap.set(key, card);
-      cardsEl.appendChild(card);
-    }
-    updateCard(card, target, pollSecs, index, key);
-    seenKeys.add(key);
-    orderedCards.push(card);
+    const region = target.region || "unknown";
+    seenRegions.add(region);
+    if (!cardsByRegion.has(region)) cardsByRegion.set(region, []);
+    cardsByRegion.get(region).push({ target, index });
   });
 
+  // Render each region's cards into its grid; create the group on
+  // first sight, reuse on subsequent ticks.
+  for (const region of cardsByRegion.keys()) {
+    const group = getOrCreateRegionGroup(region);
+    const orderedCards = [];
+    const items = cardsByRegion.get(region);
+    items.forEach(({ target, index }) => {
+      const key = keyForTarget(target, index);
+      let card = cardMap.get(key);
+      if (!card) {
+        card = createCard(key);
+        cardMap.set(key, card);
+        group.grid.appendChild(card);
+      } else if (card.parentElement !== group.grid) {
+        // Region change for this target — move the card.
+        group.grid.appendChild(card);
+      }
+      updateCard(card, target, pollSecs, index, key);
+      seenKeys.add(key);
+      orderedCards.push(card);
+    });
+    reconcileOrderInGrid(group.grid, orderedCards);
+    const countEl = group.container.querySelector('[data-field="region-count"]');
+    if (countEl) {
+      countEl.textContent = `${items.length} ${items.length === 1 ? "target" : "targets"}`;
+    }
+  }
+
+  // Drop cards whose target disappeared between ticks.
   for (const [key, card] of cardMap.entries()) {
     if (!seenKeys.has(key)) {
       card.remove();
@@ -67,11 +111,109 @@ const render = (data) => {
     }
   }
 
-  reconcileOrder(orderedCards);
+  // Drop region groups that no longer have any targets, then reorder
+  // the remaining groups according to REGION_ORDER.
+  for (const [region, group] of regionMap.entries()) {
+    if (!seenRegions.has(region)) {
+      group.container.remove();
+      regionMap.delete(region);
+    }
+  }
+  reconcileRegionOrder();
+
+  // Fleet summary: aggregates over all targets, regardless of region.
+  // (bot-strategy#231 redesign Phase A1)
+  updateFleetSummary(data.targets);
 
   if (!hasRendered) {
     hasRendered = true;
     cardsEl.classList.add("live");
+  }
+};
+
+const getOrCreateRegionGroup = (region) => {
+  if (regionMap.has(region)) return regionMap.get(region);
+  const container = document.createElement("section");
+  container.className = "region-group";
+  container.dataset.region = region;
+  const label = REGION_LABELS[region] || region;
+  container.innerHTML = `
+    <header class="region-header">
+      <h2 class="region-name">${escapeHtml(label)}</h2>
+      <span class="region-code">${escapeHtml(region)}</span>
+      <span class="region-count" data-field="region-count">0 targets</span>
+    </header>
+    <div class="grid region-grid"></div>
+  `;
+  cardsEl.appendChild(container);
+  const group = {
+    container,
+    grid: container.querySelector(".grid"),
+    region,
+  };
+  regionMap.set(region, group);
+  return group;
+};
+
+const reconcileRegionOrder = () => {
+  const sortedRegions = Array.from(regionMap.keys()).sort((a, b) => {
+    const ai = REGION_ORDER.indexOf(a);
+    const bi = REGION_ORDER.indexOf(b);
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+  let node = cardsEl.firstElementChild;
+  sortedRegions.forEach((region) => {
+    const group = regionMap.get(region);
+    if (group.container !== node) {
+      cardsEl.insertBefore(group.container, node);
+    } else {
+      node = node.nextElementSibling;
+    }
+  });
+};
+
+const updateFleetSummary = (targets) => {
+  if (!fleetSummaryEl) return;
+  if (!targets || targets.length === 0) {
+    fleetSummaryEl.hidden = true;
+    return;
+  }
+  let pnlToday = 0;
+  let equityTotal = 0;
+  let halts = 0;
+  let killSwitches = 0;
+  let servicesDown = 0;
+  for (const target of targets) {
+    const data = target.status;
+    if (data) {
+      if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
+      if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
+      if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
+      if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
+      if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
+    }
+    if (target.kill_switch_active === true) killSwitches += 1;
+    if (target.service_status && target.service_status !== "active") servicesDown += 1;
+  }
+  setField("fleet-total", `${targets.length}`);
+  setField("fleet-pnl-today", formatPnl(pnlToday));
+  setField("fleet-equity-total", formatUsdc(equityTotal));
+  setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
+  setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
+  setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
+  fleetSummaryEl.hidden = false;
+};
+
+const setField = (field, text, severity) => {
+  const el = fleetSummaryEl.querySelector(`[data-field="${field}"]`);
+  if (!el) return;
+  el.textContent = text;
+  const stat = el.closest(".fleet-stat");
+  if (stat) {
+    stat.classList.toggle("alert", severity === "alert");
   }
 };
 
@@ -640,11 +782,14 @@ const renderEquityChart = (chartEl, emptyEl, history) => {
   chartEl.innerHTML = `<polyline points="${points}"></polyline>`;
 };
 
-const reconcileOrder = (orderedCards) => {
-  let node = cardsEl.firstElementChild;
+// Reorder cards within a single region's grid to match `orderedCards`.
+// (Replaces the pre-#231 reconcileOrder which assumed cards lived
+// directly under #cards.)
+const reconcileOrderInGrid = (gridEl, orderedCards) => {
+  let node = gridEl.firstElementChild;
   orderedCards.forEach((card) => {
     if (card !== node) {
-      cardsEl.insertBefore(card, node);
+      gridEl.insertBefore(card, node);
     } else {
       node = node.nextElementSibling;
     }
