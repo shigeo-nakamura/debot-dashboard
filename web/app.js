@@ -111,6 +111,9 @@ const createCard = (key) => {
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
+        <span class="status-pill session-dd-halt" data-field="session-dd-halt" hidden></span>
+        <span class="status-pill daily-dd-halt" data-field="daily-dd-halt" hidden></span>
+        <span class="status-pill circuit-breaker" data-field="circuit-breaker" hidden></span>
         <span class="status-pill dry-run" data-field="dry-run" hidden></span>
         <span class="status-pill backtest-mode" data-field="backtest-mode" hidden></span>
       </div>
@@ -249,6 +252,64 @@ const updateCard = (card, target, pollSecs, index, key) => {
       killSwitchEl.hidden = true;
       killSwitchEl.textContent = "";
       killSwitchEl.removeAttribute("title");
+    }
+  }
+
+  // Risk gate pills (bot-strategy#185 + #231 dashboard redesign):
+  // surface daily DD, session DD, and circuit-breaker state in the
+  // header so the operator sees halt conditions at a glance, mirroring
+  // the KILL_SWITCH pill pattern. Each pill is hidden in steady state.
+  // session-dd-halt is the most severe (sticky, requires manual ack) so
+  // it goes first in the markup; daily-dd-halt is auto-clearing at UTC
+  // midnight; circuit-breaker auto-clears on cooldown.
+  const sessionDdEl = card.querySelector('[data-field="session-dd-halt"]');
+  if (sessionDdEl) {
+    const sr = data.session_risk;
+    if (sr && sr.session_halted === true) {
+      sessionDdEl.textContent = "SESSION DD";
+      const reason = sr.halt_reason ? ` (${sr.halt_reason})` : "";
+      sessionDdEl.title =
+        `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
+        `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
+      sessionDdEl.hidden = false;
+    } else {
+      sessionDdEl.hidden = true;
+      sessionDdEl.textContent = "";
+      sessionDdEl.removeAttribute("title");
+    }
+  }
+
+  const dailyDdEl = card.querySelector('[data-field="daily-dd-halt"]');
+  if (dailyDdEl) {
+    const dr = data.daily_risk;
+    if (dr && dr.risk_halted === true) {
+      dailyDdEl.textContent = "DAILY DD";
+      dailyDdEl.title =
+        `Daily DD halt active: realized loss ${(-dr.daily_pnl).toFixed(2)} (${(-dr.daily_pnl_bps).toFixed(0)} bps) ≥ effective threshold ${dr.effective_max_daily_loss_bps.toFixed(0)} bps. ` +
+        `Auto-clears at next UTC midnight; existing positions exit normally.`;
+      dailyDdEl.hidden = false;
+    } else {
+      dailyDdEl.hidden = true;
+      dailyDdEl.textContent = "";
+      dailyDdEl.removeAttribute("title");
+    }
+  }
+
+  const circuitBreakerEl = card.querySelector('[data-field="circuit-breaker"]');
+  if (circuitBreakerEl) {
+    const cb = data.circuit_breaker;
+    if (cb && cb.active === true && cb.cooldown_remaining_secs) {
+      const remaining = formatAge(cb.cooldown_remaining_secs * 1000);
+      circuitBreakerEl.textContent = `CIRCUIT (${remaining})`;
+      circuitBreakerEl.title =
+        `Circuit breaker active after ${cb.consecutive_losses} consecutive losses ` +
+        `(tier1=${cb.tier1_threshold} / tier2=${cb.tier2_threshold}). ` +
+        `Auto-clears in ${remaining}; a winning trade also resets, but new entries are blocked while active.`;
+      circuitBreakerEl.hidden = false;
+    } else {
+      circuitBreakerEl.hidden = true;
+      circuitBreakerEl.textContent = "";
+      circuitBreakerEl.removeAttribute("title");
     }
   }
 

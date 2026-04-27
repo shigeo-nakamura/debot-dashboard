@@ -99,6 +99,57 @@ type StatusData struct {
 	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
 	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
 	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
+	// Risk gates emitted by pairtrade since bot-strategy#185.
+	// All three may be nil when the threshold is disabled (the bot
+	// skips emission to keep status.json compact). The dashboard
+	// renders a halt pill / progress panel only when the field is
+	// present.
+	DailyRisk      *DailyRiskSnapshot      `json:"daily_risk,omitempty"`
+	SessionRisk    *SessionRiskSnapshot    `json:"session_risk,omitempty"`
+	CircuitBreaker *CircuitBreakerSnapshot `json:"circuit_breaker,omitempty"`
+}
+
+// DailyRiskSnapshot mirrors pairtrade's DailyRiskSnapshot
+// (bot-strategy#185 Phase 2-4 + leverage-neutralization amendment).
+// EffectiveMaxDailyLossBps is the leverage-scaled threshold the bot
+// actually compares DailyPnlBps against; the dashboard should use the
+// effective value when colouring a "X% of threshold" progress bar.
+type DailyRiskSnapshot struct {
+	DailyPnl                 float64 `json:"daily_pnl"`
+	DailyPnlBps              float64 `json:"daily_pnl_bps"`
+	SessionStartEquity       float64 `json:"session_start_equity"`
+	SessionStartTS           int64   `json:"session_start_ts"`
+	MaxDailyLossBps          uint32  `json:"max_daily_loss_bps"`
+	EffectiveMaxDailyLossBps float64 `json:"effective_max_daily_loss_bps"`
+	RiskHalted               bool    `json:"risk_halted"`
+}
+
+// SessionRiskSnapshot mirrors pairtrade's SessionRiskSnapshot
+// (bot-strategy#185 Phase 3-1 + leverage-neutralization amendment).
+// HaltReason / HaltTS are populated only when SessionHalted is true.
+type SessionRiskSnapshot struct {
+	CurrentEquity              float64 `json:"current_equity"`
+	PeakEquity                 float64 `json:"peak_equity"`
+	DDBps                      float64 `json:"dd_bps"`
+	MaxSessionLossBps          uint32  `json:"max_session_loss_bps"`
+	EffectiveMaxSessionLossBps float64 `json:"effective_max_session_loss_bps"`
+	LookbackSecs               uint64  `json:"lookback_secs"`
+	SampleCount                int     `json:"sample_count"`
+	SessionHalted              bool    `json:"session_halted"`
+	HaltReason                 *string `json:"halt_reason,omitempty"`
+	HaltTS                     *int64  `json:"halt_ts,omitempty"`
+}
+
+// CircuitBreakerSnapshot mirrors pairtrade's CircuitBreakerSnapshot
+// (emitted from pairtrade@212cc6f). Always present once the engine has
+// run a tick; Active is false in steady state.
+type CircuitBreakerSnapshot struct {
+	ConsecutiveLosses     uint32 `json:"consecutive_losses"`
+	Active                bool   `json:"active"`
+	UntilTS               *int64 `json:"until_ts,omitempty"`
+	CooldownRemainingSecs *int64 `json:"cooldown_remaining_secs,omitempty"`
+	Tier1Threshold        uint32 `json:"tier1_threshold"`
+	Tier2Threshold        uint32 `json:"tier2_threshold"`
 }
 
 type ErrorSummary struct {

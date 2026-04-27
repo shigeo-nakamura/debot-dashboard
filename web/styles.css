@@ -226,6 +226,35 @@ body::after {
   letter-spacing: 0.04em;
 }
 
+/* Risk gate pills (bot-strategy#185 / #231). Severity-coloured so a
+   crowded card header is still readable: session-dd red (sticky,
+   manual ack), daily-dd amber (auto-clears at UTC midnight),
+   circuit-breaker orange (auto-clears on cooldown). KILL_SWITCH stays
+   the most prominent; the others read as decreasing urgency. */
+.status-pill.session-dd-halt {
+  color: #ffffff;
+  background: #991b1b;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.status-pill.daily-dd-halt {
+  color: #ffffff;
+  background: #b45309;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.status-pill.circuit-breaker {
+  color: #ffffff;
+  background: #c2410c;
+  cursor: help;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .status-pill.dry-run {
   color: #ffffff;
   background: #d97706;
