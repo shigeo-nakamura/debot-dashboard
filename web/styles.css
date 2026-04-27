@@ -203,6 +203,105 @@ body::after {
   color: var(--danger);
 }
 
+/* Card collapse (#231 Phase A3). The body is hidden in collapsed
+   state so the card shows only its header (name + status pills),
+   reducing visual weight when an operator wants to focus on a
+   different bot. The toggle button rotates the chevron for an
+   affordance cue. updateCard auto-removes .collapsed when a halt
+   activates so a bot in trouble always shows its full state. */
+.card.collapsed .card-body {
+  display: none;
+}
+
+.card-collapse-toggle {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 6px;
+  margin-right: 4px;
+  line-height: 1;
+  transition: transform 0.18s ease;
+}
+
+.card.collapsed .card-collapse-toggle {
+  transform: rotate(-90deg);
+}
+
+.card-collapse-toggle:hover {
+  color: var(--ink);
+}
+
+/* Risk progress panel (#231 Phase A5). One bar per active gate.
+   Severity classes drive colour so a glance ranks distance to halt:
+   ok → accent green, warn → warning amber, danger → danger red. The
+   panel sits at the top of the card body (right after the header) so
+   it's the first thing the eye lands on after the pills. */
+.risk-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  background: rgba(28, 26, 23, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.risk-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.risk-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.risk-bar-name {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.risk-bar-value {
+  font-family: "Space Grotesk", monospace;
+  color: var(--ink);
+}
+
+.risk-bar-track {
+  position: relative;
+  height: 6px;
+  background: rgba(28, 26, 23, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.risk-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  transition: width 0.3s ease, background-color 0.2s ease;
+}
+
+.risk-bar-fill.severity-ok {
+  background: var(--success);
+}
+
+.risk-bar-fill.severity-warn {
+  background: var(--warning);
+}
+
+.risk-bar-fill.severity-danger {
+  background: var(--danger);
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);

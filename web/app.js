@@ -246,7 +246,8 @@ const createCard = (key) => {
   card.className = "card";
   card.dataset.key = key;
   card.innerHTML = `
-      <div class="card-header">
+      <div class="card-header" data-field="header">
+        <button class="card-collapse-toggle" type="button" data-field="collapse-toggle" aria-label="Toggle details" title="Click to collapse / expand">▾</button>
         <h2 class="card-title" data-field="name"></h2>
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
@@ -258,6 +259,36 @@ const createCard = (key) => {
         <span class="status-pill circuit-breaker" data-field="circuit-breaker" hidden></span>
         <span class="status-pill dry-run" data-field="dry-run" hidden></span>
         <span class="status-pill backtest-mode" data-field="backtest-mode" hidden></span>
+      </div>
+      <div class="card-body" data-field="body">
+      <div class="risk-panel" data-field="risk-panel" hidden>
+        <div class="risk-bar" data-field="daily-dd-bar" hidden>
+          <div class="risk-bar-label">
+            <span class="risk-bar-name">Daily DD</span>
+            <span class="risk-bar-value" data-field="daily-dd-text"></span>
+          </div>
+          <div class="risk-bar-track">
+            <div class="risk-bar-fill" data-field="daily-dd-fill"></div>
+          </div>
+        </div>
+        <div class="risk-bar" data-field="session-dd-bar" hidden>
+          <div class="risk-bar-label">
+            <span class="risk-bar-name">Session DD</span>
+            <span class="risk-bar-value" data-field="session-dd-text"></span>
+          </div>
+          <div class="risk-bar-track">
+            <div class="risk-bar-fill" data-field="session-dd-fill"></div>
+          </div>
+        </div>
+        <div class="risk-bar" data-field="circuit-bar" hidden>
+          <div class="risk-bar-label">
+            <span class="risk-bar-name">Consecutive losses</span>
+            <span class="risk-bar-value" data-field="circuit-text"></span>
+          </div>
+          <div class="risk-bar-track">
+            <div class="risk-bar-fill" data-field="circuit-fill"></div>
+          </div>
+        </div>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>AWS Region</span><strong data-field="region"></strong></div>
@@ -283,7 +314,19 @@ const createCard = (key) => {
       <div class="backtest-alert" data-field="backtest-alert" hidden></div>
       <div class="positions" data-field="positions-list"></div>
       <div class="error" data-field="error" hidden></div>
+      </div>
     `;
+  // Collapse-toggle wiring (#231 Phase A3). Click anywhere on the
+  // header (or the explicit ▾ button) to flip the .collapsed class.
+  // updateCard auto-expands cards in halt state on every tick so a
+  // newly-tripping bot pops open without the operator clicking.
+  const toggle = card.querySelector('[data-field="collapse-toggle"]');
+  if (toggle) {
+    toggle.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      card.classList.toggle("collapsed");
+    });
+  }
   return card;
 };
 
@@ -453,6 +496,28 @@ const updateCard = (card, target, pollSecs, index, key) => {
       circuitBreakerEl.textContent = "";
       circuitBreakerEl.removeAttribute("title");
     }
+  }
+
+  // Risk progress panel (#231 Phase A5). One bar per active risk gate
+  // showing observed bps vs effective threshold (or losses vs tier
+  // threshold for circuit breaker). Bars colour-grade by % of
+  // threshold so a glance at the panel ranks the bot's distance to
+  // halt without the operator doing arithmetic. Hidden when all three
+  // gates are disabled or unset.
+  renderRiskPanel(card, data);
+
+  // Auto-expand on halt (#231 Phase A3). A card with any active halt
+  // ignores the operator's previous collapse choice and opens — the
+  // operator should always see the halt context. Steady-state cards
+  // honour the click-collapse toggle; we don't auto-collapse, only
+  // auto-expand-on-trouble.
+  const inTrouble =
+    target.kill_switch_active === true ||
+    (data.session_risk && data.session_risk.session_halted === true) ||
+    (data.daily_risk && data.daily_risk.risk_halted === true) ||
+    (data.circuit_breaker && data.circuit_breaker.active === true);
+  if (inTrouble) {
+    card.classList.remove("collapsed");
   }
 
   // DRY_RUN / BACKTEST mode pills: surface non-live execution modes so an
@@ -780,6 +845,95 @@ const renderEquityChart = (chartEl, emptyEl, history) => {
     .join(" ");
   chartEl.setAttribute("viewBox", `0 0 ${width} ${height}`);
   chartEl.innerHTML = `<polyline points="${points}"></polyline>`;
+};
+
+// Risk progress bars (#231 Phase A5). Renders up to 3 bars per card
+// covering the daily DD / session DD / circuit-breaker gates. Each
+// bar shows a percentage fill driven by observed-vs-threshold and a
+// severity class (`ok` < 50%, `warn` 50–80%, `danger` ≥ 80%) for
+// colour. Bars are hidden when the underlying gate is disabled
+// (effective threshold ≤ 0) so a clean steady-state has no bars at
+// all. The whole panel collapses to hidden when no bar is visible —
+// keeps disabled-everywhere cards looking the same as before.
+const renderRiskPanel = (card, data) => {
+  const panel = card.querySelector('[data-field="risk-panel"]');
+  if (!panel) return;
+  let anyVisible = false;
+
+  // Daily DD bar.
+  const dailyBar = card.querySelector('[data-field="daily-dd-bar"]');
+  if (dailyBar) {
+    const dr = data.daily_risk;
+    const eff = dr ? dr.effective_max_daily_loss_bps : 0;
+    if (dr && eff > 0) {
+      const lossBps = dr.daily_pnl_bps < 0 ? -dr.daily_pnl_bps : 0;
+      const pct = clampPct((lossBps / eff) * 100);
+      setRiskBar(card, "daily-dd", `${lossBps.toFixed(0)} / ${eff.toFixed(0)} bps (${pct.toFixed(0)}%)`, pct);
+      dailyBar.hidden = false;
+      anyVisible = true;
+    } else {
+      dailyBar.hidden = true;
+    }
+  }
+
+  // Session DD bar.
+  const sessionBar = card.querySelector('[data-field="session-dd-bar"]');
+  if (sessionBar) {
+    const sr = data.session_risk;
+    const eff = sr ? sr.effective_max_session_loss_bps : 0;
+    if (sr && eff > 0) {
+      const dd = sr.dd_bps;
+      const pct = clampPct((dd / eff) * 100);
+      setRiskBar(card, "session-dd", `${dd.toFixed(0)} / ${eff.toFixed(0)} bps (${pct.toFixed(0)}%)`, pct);
+      sessionBar.hidden = false;
+      anyVisible = true;
+    } else {
+      sessionBar.hidden = true;
+    }
+  }
+
+  // Circuit-breaker bar (uses tier1 as the "warn" denominator since
+  // tier2 is a higher escalation; the fill represents progress toward
+  // the next threshold).
+  const circuitBar = card.querySelector('[data-field="circuit-bar"]');
+  if (circuitBar) {
+    const cb = data.circuit_breaker;
+    if (cb && cb.tier1_threshold > 0) {
+      const denom = cb.tier2_threshold > 0 ? cb.tier2_threshold : cb.tier1_threshold;
+      const pct = clampPct((cb.consecutive_losses / denom) * 100);
+      let label = `${cb.consecutive_losses} losses (tier1 ${cb.tier1_threshold} / tier2 ${cb.tier2_threshold})`;
+      if (cb.active && cb.cooldown_remaining_secs) {
+        label += ` · cooldown ${formatAge(cb.cooldown_remaining_secs * 1000)}`;
+      }
+      setRiskBar(card, "circuit", label, pct);
+      circuitBar.hidden = false;
+      anyVisible = true;
+    } else {
+      circuitBar.hidden = true;
+    }
+  }
+
+  panel.hidden = !anyVisible;
+};
+
+const setRiskBar = (card, prefix, text, pct) => {
+  const textEl = card.querySelector(`[data-field="${prefix}-text"]`);
+  const fillEl = card.querySelector(`[data-field="${prefix}-fill"]`);
+  if (textEl) textEl.textContent = text;
+  if (fillEl) {
+    fillEl.style.width = `${pct}%`;
+    fillEl.classList.remove("severity-ok", "severity-warn", "severity-danger");
+    let severity = "severity-ok";
+    if (pct >= 80) severity = "severity-danger";
+    else if (pct >= 50) severity = "severity-warn";
+    fillEl.classList.add(severity);
+  }
+};
+
+const clampPct = (pct) => {
+  if (!Number.isFinite(pct) || pct < 0) return 0;
+  if (pct > 100) return 100;
+  return pct;
 };
 
 // Reorder cards within a single region's grid to match `orderedCards`.
