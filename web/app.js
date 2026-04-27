@@ -186,6 +186,8 @@ const updateFleetSummary = (targets) => {
   let halts = 0;
   let killSwitches = 0;
   let servicesDown = 0;
+  let halts24h = 0;
+  const cutoff24hSec = Math.floor(Date.now() / 1000) - 86400;
   for (const target of targets) {
     const data = target.status;
     if (data) {
@@ -194,6 +196,13 @@ const updateFleetSummary = (targets) => {
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
+      if (Array.isArray(data.risk_history)) {
+        for (const ev of data.risk_history) {
+          if (ev.event_type === "activated" && ev.ts >= cutoff24hSec) {
+            halts24h += 1;
+          }
+        }
+      }
     }
     if (target.kill_switch_active === true) killSwitches += 1;
     if (target.service_status && target.service_status !== "active") servicesDown += 1;
@@ -204,6 +213,7 @@ const updateFleetSummary = (targets) => {
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
+  setField("fleet-halts-24h", `${halts24h}`, halts24h > 0 ? "alert" : null);
   fleetSummaryEl.hidden = false;
 };
 
@@ -288,6 +298,13 @@ const createCard = (key) => {
           <div class="risk-bar-track">
             <div class="risk-bar-fill" data-field="circuit-fill"></div>
           </div>
+        </div>
+        <div class="risk-history" data-field="risk-history" hidden>
+          <div class="risk-history-label">
+            <span class="risk-history-name">Halt history</span>
+            <span class="risk-history-axis">30 d ← now</span>
+          </div>
+          <div class="risk-history-strip" data-field="risk-history-strip"></div>
         </div>
       </div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
@@ -913,7 +930,61 @@ const renderRiskPanel = (card, data) => {
     }
   }
 
+  // Halt history strip (#231 Phase B). Renders a 30-d horizontal
+  // axis with one colored dot per past halt event from
+  // data.risk_history. Empty for old bots that haven't picked up the
+  // pairtrade@9755490 binary yet — gracefully hidden in that case.
+  renderRiskHistory(card, data.risk_history);
+  if (data.risk_history && data.risk_history.length > 0) {
+    anyVisible = true;
+  }
+
   panel.hidden = !anyVisible;
+};
+
+const RISK_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+const renderRiskHistory = (card, events) => {
+  const container = card.querySelector('[data-field="risk-history"]');
+  const strip = card.querySelector('[data-field="risk-history-strip"]');
+  if (!container || !strip) return;
+  if (!events || events.length === 0) {
+    container.hidden = true;
+    strip.innerHTML = "";
+    return;
+  }
+  const nowMs = Date.now();
+  const cutoffMs = nowMs - RISK_HISTORY_WINDOW_MS;
+  const dots = events
+    .filter((ev) => ev.ts * 1000 >= cutoffMs)
+    .map((ev) => {
+      const tsMs = ev.ts * 1000;
+      const ageFrac = (nowMs - tsMs) / RISK_HISTORY_WINDOW_MS; // 0 = now, 1 = 30d ago
+      const leftPct = (1 - ageFrac) * 100;
+      const kindClass = `kind-${ev.kind.replace(/_/g, "-")}`;
+      const eventClass = `event-${ev.event_type}`;
+      const tooltipParts = [
+        new Date(tsMs).toLocaleString(),
+        `${ev.kind} ${ev.event_type}`,
+      ];
+      if (ev.reason) tooltipParts.push(`reason: ${ev.reason}`);
+      if (ev.detail) {
+        const detailEntries = Object.entries(ev.detail)
+          .map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(2) : v}`)
+          .join(", ");
+        if (detailEntries) tooltipParts.push(detailEntries);
+      }
+      const tooltip = tooltipParts.join("\n");
+      return `<span class="risk-history-dot ${kindClass} ${eventClass}" style="left:${leftPct.toFixed(2)}%" title="${escapeHtml(tooltip)}"></span>`;
+    })
+    .join("");
+  if (!dots) {
+    container.hidden = true;
+    strip.innerHTML = "";
+    return;
+  }
+  strip.innerHTML = dots;
+  container.hidden = false;
 };
 
 const setRiskBar = (card, prefix, text, pct) => {

@@ -302,6 +302,98 @@ body::after {
   background: var(--danger);
 }
 
+/* Halt history strip (#231 Phase B). 30-d horizontal axis below the
+   risk panel; each event is a colored dot positioned by its
+   timestamp (right = now, left = 30 d ago). Dot color encodes the
+   gate kind so a glance at the strip groups events by category;
+   "ack" events (manual session-DD recovery) get a hollow ring to
+   distinguish them from "activated" / "cleared". */
+.risk-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.risk-history-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.risk-history-name {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.risk-history-axis {
+  font-family: "Space Grotesk", monospace;
+  font-size: 10px;
+}
+
+.risk-history-strip {
+  position: relative;
+  height: 14px;
+  background: rgba(28, 26, 23, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.risk-history-dot {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  cursor: help;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.risk-history-dot.kind-kill-switch {
+  background: #7f1d1d;
+}
+
+.risk-history-dot.kind-session-dd {
+  background: #991b1b;
+}
+
+.risk-history-dot.kind-daily-dd {
+  background: #b45309;
+}
+
+.risk-history-dot.kind-circuit-breaker {
+  background: #c2410c;
+}
+
+/* "ack" / "cleared" events are presented as hollow rings so
+   activations vs recoveries are scannable without hover. */
+.risk-history-dot.event-cleared,
+.risk-history-dot.event-ack {
+  background: transparent;
+  border-width: 2px;
+}
+
+.risk-history-dot.event-cleared.kind-kill-switch {
+  border-color: #7f1d1d;
+}
+
+.risk-history-dot.event-cleared.kind-session-dd,
+.risk-history-dot.event-ack.kind-session-dd {
+  border-color: #991b1b;
+}
+
+.risk-history-dot.event-cleared.kind-daily-dd {
+  border-color: #b45309;
+}
+
+.risk-history-dot.event-cleared.kind-circuit-breaker {
+  border-color: #c2410c;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
