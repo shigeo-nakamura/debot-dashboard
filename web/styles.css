@@ -203,6 +203,14 @@ body::after {
   color: var(--danger);
 }
 
+.fleet-stat-value.positive {
+  color: var(--success);
+}
+
+.fleet-stat-value.negative {
+  color: var(--danger);
+}
+
 /* Card collapse (#231 Phase A3). The body is hidden in collapsed
    state so the card shows only its header (name + status pills),
    reducing visual weight when an operator wants to focus on a

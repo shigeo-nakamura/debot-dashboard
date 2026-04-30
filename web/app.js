@@ -209,6 +209,10 @@ const updateFleetSummary = (targets) => {
   }
   setField("fleet-total", `${targets.length}`);
   setField("fleet-pnl-today", formatPnl(pnlToday));
+  applySignedClass(
+    fleetSummaryEl.querySelector('[data-field="fleet-pnl-today"]'),
+    pnlToday,
+  );
   setField("fleet-equity-total", formatUsdc(equityTotal));
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
