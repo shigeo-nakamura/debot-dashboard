@@ -657,8 +657,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
           (pos) => `
           <div class="position">
             <span class="position-tag">${escapeHtml(pos.symbol || "?")}</span>
-            <span>${escapeHtml(pos.side || "")}</span>
-            <span>${escapeHtml(pos.size || "")}</span>
+            <span class="position-side">${escapeHtml(pos.side || "")}</span>
+            <span class="position-size">${escapeHtml(formatPositionSize(pos.size))}</span>
           </div>
         `
         )
@@ -1102,6 +1102,13 @@ const isStale = (updatedAt, pollSecs) => {
   }
   const diffSecs = (Date.now() - updatedAt.getTime()) / 1000;
   return diffSecs > pollSecs * 3;
+};
+
+const formatPositionSize = (value) => {
+  if (value === null || value === undefined || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return num.toFixed(4);
 };
 
 const escapeHtml = (value) => {

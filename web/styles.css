@@ -678,14 +678,25 @@ body::after {
 }
 
 .position {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr 56px 1fr;
+  align-items: center;
   gap: 8px;
 }
 
 .position-tag {
   font-weight: 600;
   color: var(--ink);
+}
+
+.position-side {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.position-size {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .error {
