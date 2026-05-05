@@ -338,12 +338,14 @@ func main() {
 
 	cache := &StatusCache{}
 	pool := &ClientPool{clients: map[string]*ssm.Client{}}
+	mc := newMetricsCollector()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollLoop(ctx, cfg, pool, cache)
+	go pollLoop(ctx, cfg, pool, cache, mc)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", mc.Handler())
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		rangeParam := strings.TrimSpace(r.URL.Query().Get("range"))
 		includeHistory, cutoffMs := historyCutoff(rangeParam)
@@ -471,11 +473,14 @@ func matchBasicAuth(user, pass string, auth BasicAuth) bool {
 	return userMatch && passMatch
 }
 
-func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCache) {
+func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCache, mc *metricsCollector) {
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
 	fetch := func() {
 		snapshot := fetchAll(ctx, cfg, pool, false, 0)
 		cache.Set(snapshot)
+		if mc != nil {
+			mc.Update(snapshot)
+		}
 	}
 	fetch()
 	ticker := time.NewTicker(pollInterval)
