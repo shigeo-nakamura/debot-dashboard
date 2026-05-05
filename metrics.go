@@ -48,6 +48,28 @@ type metricsCollector struct {
 	shutdownPending      *prometheus.GaugeVec
 	riskEventsTotal      *prometheus.CounterVec
 
+	// Group 6 — system health.
+	serviceActive       *prometheus.GaugeVec
+	serviceStartedTS    *prometheus.GaugeVec
+	processUptimeSec    *prometheus.GaugeVec
+	wsReset24h          *prometheus.GaugeVec
+	errorCount30m       *prometheus.GaugeVec
+	warnCount30m        *prometheus.GaugeVec
+	errorCountTotal     *prometheus.GaugeVec
+	warnCountTotal      *prometheus.GaugeVec
+	lastErrorTS         *prometheus.GaugeVec
+	lastWarnTS          *prometheus.GaugeVec
+
+	// Group 7 — config visibility.
+	dryRun       *prometheus.GaugeVec
+	backtestMode *prometheus.GaugeVec
+
+	// Phase 2 derived "when X happened" timestamps (answers the
+	// user's "when did the DD start / when did we last trade"
+	// question without needing pairtrade-side instrumentation).
+	lastTradeTS               *prometheus.GaugeVec
+	peakEquityLastChangedTS   *prometheus.GaugeVec
+
 	// Dashboard self-metrics.
 	pollErrorsTotal *prometheus.CounterVec
 	targetsTotal    prometheus.Gauge
@@ -58,6 +80,8 @@ type metricsCollector struct {
 	lastTradeCount  map[string]int64
 	tradeChangedAt  map[string]time.Time
 	lastRiskEventTS map[string]int64
+	lastPeakEquity  map[string]float64
+	peakChangedAt   map[string]time.Time
 	// startedAt is used as the floor for time_since_last_trade when we
 	// have not yet observed any trade-count change.
 	startedAt time.Time
@@ -119,6 +143,23 @@ func newMetricsCollector() *metricsCollector {
 		shutdownPending:     gv("debot_shutdown_pending", "1 if graceful shutdown is in progress.", instanceLabels),
 		riskEventsTotal:     cv("debot_risk_events_total", "Risk-history events seen by the dashboard, by gate kind and transition type.", append(append([]string{}, instanceLabels...), "kind", "event_type")),
 
+		serviceActive:    gv("debot_service_active", "1 if systemctl reports the service as active.", []string{"target", "service", "instance_id"}),
+		serviceStartedTS: gv("debot_service_started_ts", "Unix ts (s) when the systemd service last entered the active state.", []string{"target", "service", "instance_id"}),
+		processUptimeSec: gv("debot_process_uptime_seconds", "Seconds since the systemd service entered the active state. Helps detect the running-binary-lags-source case.", []string{"target", "service", "instance_id"}),
+		wsReset24h:       gv("debot_ws_reset_24h", "WebSocket reset events observed in the service's journald log over the last 24 hours.", []string{"target", "service", "instance_id"}),
+		errorCount30m:    gv("debot_error_count_30m", "ERROR-level log events in the bot's last 30 minutes (or 5m for older bots).", instanceLabels),
+		warnCount30m:     gv("debot_warn_count_30m", "WARN-level log events in the bot's last 30 minutes (or 5m for older bots).", instanceLabels),
+		errorCountTotal:  gv("debot_error_count_total_snapshot", "Cumulative ERROR-level log events since the bot started. Snapshot-on-poll: resets when the bot restarts.", instanceLabels),
+		warnCountTotal:   gv("debot_warn_count_total_snapshot", "Cumulative WARN-level log events since the bot started.", instanceLabels),
+		lastErrorTS:      gv("debot_last_error_ts", "Unix ts (s) of the most recent ERROR-level log event (0 if never).", instanceLabels),
+		lastWarnTS:       gv("debot_last_warn_ts", "Unix ts (s) of the most recent WARN-level log event (0 if never).", instanceLabels),
+
+		dryRun:       gv("debot_dry_run", "1 if the bot is running in dry-run mode (no real orders sent).", instanceLabels),
+		backtestMode: gv("debot_backtest_mode", "1 if the bot is running in backtest mode.", instanceLabels),
+
+		lastTradeTS:             gv("debot_last_trade_ts", "Unix ts (s) when trade_stats.trades last incremented (dashboard-derived; 0 until first observed change).", instanceLabels),
+		peakEquityLastChangedTS: gv("debot_peak_equity_last_changed_ts", "Unix ts (s) when session_risk.peak_equity last increased. While dd_bps > 0 this is effectively 'when the current drawdown began'.", instanceLabels),
+
 		pollErrorsTotal: cv("debot_dashboard_poll_errors_total", "SSM poll failures observed by the dashboard.", []string{"target", "service"}),
 		targetsTotal:    g("debot_dashboard_targets_total", "Number of bot targets the dashboard is polling."),
 		lastPollTS:      g("debot_dashboard_last_poll_ts", "Unix ts (s) of the most recent successful dashboard poll cycle."),
@@ -126,6 +167,8 @@ func newMetricsCollector() *metricsCollector {
 		lastTradeCount:  map[string]int64{},
 		tradeChangedAt:  map[string]time.Time{},
 		lastRiskEventTS: map[string]int64{},
+		lastPeakEquity:  map[string]float64{},
+		peakChangedAt:   map[string]time.Time{},
 		startedAt:       time.Now(),
 	}
 	return mc
@@ -147,6 +190,25 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 		if t.Error != "" {
 			mc.pollErrorsTotal.WithLabelValues(t.Name, t.Service).Inc()
 		}
+
+		// Service-level metrics live independently of status.json
+		// validity — they're sourced from systemctl, so they're
+		// useful even when status.json is absent / empty.
+		svcLabels := prometheus.Labels{
+			"target":      t.Name,
+			"service":     t.Service,
+			"instance_id": t.InstanceID,
+		}
+		mc.serviceActive.With(svcLabels).Set(boolToFloat(t.ServiceStatus == "active"))
+		if t.ServiceStartedAt != nil {
+			startedTS := t.ServiceStartedAt.Unix()
+			mc.serviceStartedTS.With(svcLabels).Set(float64(startedTS))
+			mc.processUptimeSec.With(svcLabels).Set(float64(time.Now().Unix() - startedTS))
+		}
+		if t.WsReset24h != nil {
+			mc.wsReset24h.With(svcLabels).Set(float64(*t.WsReset24h))
+		}
+
 		if t.Status == nil {
 			continue
 		}
@@ -177,10 +239,13 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 		mc.hasPosition.With(labels).Set(boolToFloat(s.HasPosition))
 
 		// Time since last trade — derived from trade-count delta.
+		// `lastTradeTS` only emits a non-zero value once we've observed
+		// an actual change (otherwise the dashboard's startup time
+		// would masquerade as a trade timestamp on Grafana panels).
 		now := time.Now()
 		if prev, ok := mc.lastTradeCount[t.Name]; !ok {
-			// First sighting: anchor at dashboard start so the gauge
-			// is monotonic from process boot rather than 0.
+			// First sighting: anchor at dashboard start so the
+			// "time since" gauge is monotonic from process boot.
 			mc.lastTradeCount[t.Name] = trades
 			mc.tradeChangedAt[t.Name] = mc.startedAt
 		} else if trades != prev {
@@ -188,6 +253,14 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			mc.tradeChangedAt[t.Name] = now
 		}
 		mc.timeSinceLastTradeSec.With(labels).Set(now.Sub(mc.tradeChangedAt[t.Name]).Seconds())
+		// Only emit a real timestamp once we've seen the count actually
+		// change at least once — before that, tradeChangedAt is the
+		// dashboard start time, not a trade event.
+		if mc.tradeChangedAt[t.Name].After(mc.startedAt) {
+			mc.lastTradeTS.With(labels).Set(float64(mc.tradeChangedAt[t.Name].Unix()))
+		} else {
+			mc.lastTradeTS.With(labels).Set(0)
+		}
 
 		// status.ts is unix seconds.
 		if s.TS > 0 {
@@ -215,6 +288,21 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 				haltTS = *r.HaltTS
 			}
 			mc.sessionHaltTS.With(labels).Set(float64(haltTS))
+
+			// Track when peak_equity last increased — this is
+			// effectively "when did the current drawdown begin"
+			// while dd_bps > 0. First sighting anchors at the
+			// poll moment (we have no earlier signal); subsequent
+			// peak increases update the timestamp.
+			prevPeak, seen := mc.lastPeakEquity[t.Name]
+			if !seen {
+				mc.lastPeakEquity[t.Name] = r.PeakEquity
+				mc.peakChangedAt[t.Name] = now
+			} else if r.PeakEquity > prevPeak {
+				mc.lastPeakEquity[t.Name] = r.PeakEquity
+				mc.peakChangedAt[t.Name] = now
+			}
+			mc.peakEquityLastChangedTS.With(labels).Set(float64(mc.peakChangedAt[t.Name].Unix()))
 		}
 
 		// Group 3 — risk halt state.
@@ -244,6 +332,30 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			shutdownPending = s.Shutdown.Pending
 		}
 		mc.shutdownPending.With(labels).Set(boolToFloat(shutdownPending))
+
+		// Group 6 — error/warn log counters & timestamps from the
+		// bot's ErrorSummary block (issue #168).
+		if s.ErrorSummary != nil {
+			es := s.ErrorSummary
+			mc.errorCount30m.With(labels).Set(float64(es.ErrorCountWindow))
+			mc.warnCount30m.With(labels).Set(float64(es.WarnCountWindow))
+			mc.errorCountTotal.With(labels).Set(float64(es.ErrorCountTotal))
+			mc.warnCountTotal.With(labels).Set(float64(es.WarnCountTotal))
+			lastErr := int64(0)
+			if es.LastErrorTs != nil {
+				lastErr = *es.LastErrorTs
+			}
+			mc.lastErrorTS.With(labels).Set(float64(lastErr))
+			lastWarn := int64(0)
+			if es.LastWarnTs != nil {
+				lastWarn = *es.LastWarnTs
+			}
+			mc.lastWarnTS.With(labels).Set(float64(lastWarn))
+		}
+
+		// Group 7 — config visibility flags.
+		mc.dryRun.With(labels).Set(boolToFloat(s.DryRun))
+		mc.backtestMode.With(labels).Set(boolToFloat(s.BacktestMode))
 
 		// Risk events counter — increment for every event in the
 		// ring buffer that's strictly newer than the last seen TS.
