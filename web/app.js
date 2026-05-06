@@ -211,6 +211,7 @@ const updateFleetSummary = (targets) => {
   let pnlToday = 0;
   let pnlMonth = 0;
   let pnlMonthAvail = false;
+  let monthStartEquityTotal = 0;
   let equityTotal = 0;
   let halts = 0;
   let killSwitches = 0;
@@ -229,6 +230,7 @@ const updateFleetSummary = (targets) => {
         const baseline = baselineEquityAt(history, monthStartMs);
         if (baseline !== null) {
           pnlMonth += data.pnl_total - baseline;
+          monthStartEquityTotal += baseline;
           pnlMonthAvail = true;
         }
       }
@@ -264,6 +266,32 @@ const updateFleetSummary = (targets) => {
       fleetSummaryEl.querySelector('[data-field="fleet-pnl-month"]'),
       null,
     );
+  }
+
+  // CAGR (month): annualized return implied by month-to-date PnL on the
+  // aggregated baseline equity. Gated at >= 1 day past the UTC month
+  // rollover because (1+r)^(365/days) explodes for sub-day windows.
+  // 1+monthlyReturn must be > 0 for Math.pow to be defined; severe
+  // drawdowns where total equity dropped to zero or below render as "-".
+  const daysSinceMonthStart = (Date.now() - monthStartMs) / 86400000;
+  const cagrMonthEl = fleetSummaryEl.querySelector('[data-field="fleet-cagr-month"]');
+  if (
+    pnlMonthAvail &&
+    monthStartEquityTotal > 0 &&
+    daysSinceMonthStart >= 1
+  ) {
+    const monthlyReturn = pnlMonth / monthStartEquityTotal;
+    if (1 + monthlyReturn > 0) {
+      const cagr = (Math.pow(1 + monthlyReturn, 365 / daysSinceMonthStart) - 1) * 100;
+      setField("fleet-cagr-month", `${cagr > 0 ? "+" : ""}${cagr.toFixed(0)}%`);
+      applySignedClass(cagrMonthEl, cagr);
+    } else {
+      setField("fleet-cagr-month", "-");
+      applySignedClass(cagrMonthEl, null);
+    }
+  } else {
+    setField("fleet-cagr-month", "-");
+    applySignedClass(cagrMonthEl, null);
   }
   setField("fleet-equity-total", formatUsdc(equityTotal));
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
