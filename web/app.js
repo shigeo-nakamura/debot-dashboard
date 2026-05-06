@@ -180,6 +180,28 @@ const reconcileRegionOrder = () => {
   });
 };
 
+// Equity at-or-just-before the given timestamp from a sorted history.
+// Returns the latest point with ts < anchorMs (preferred baseline), or
+// the earliest point in the array when the bot's history starts after
+// the anchor (e.g. bot was provisioned mid-month). Returns null when
+// the cache is empty.
+const baselineEquityAt = (history, anchorMs) => {
+  if (!history || history.length === 0) return null;
+  let i = 0;
+  while (i < history.length && history[i].ts < anchorMs) i++;
+  if (i === 0) {
+    return history[0].equity;
+  }
+  return history[i - 1].equity;
+};
+
+// First millisecond of the current UTC month. Matches `pnl_today`'s
+// UTC day rollover semantics (see status.rs `update_equity`).
+const currentUtcMonthStartMs = () => {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
 const updateFleetSummary = (targets) => {
   if (!fleetSummaryEl) return;
   if (!targets || targets.length === 0) {
@@ -187,17 +209,29 @@ const updateFleetSummary = (targets) => {
     return;
   }
   let pnlToday = 0;
+  let pnlMonth = 0;
+  let pnlMonthAvail = false;
   let equityTotal = 0;
   let halts = 0;
   let killSwitches = 0;
   let servicesDown = 0;
   let halts24h = 0;
   const cutoff24hSec = Math.floor(Date.now() / 1000) - 86400;
-  for (const target of targets) {
+  const monthStartMs = currentUtcMonthStartMs();
+  targets.forEach((target, index) => {
     const data = target.status;
     if (data) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
       if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
+      if (typeof data.pnl_total === "number") {
+        const key = keyForTarget(target, index);
+        const history = historyByKey.get(key);
+        const baseline = baselineEquityAt(history, monthStartMs);
+        if (baseline !== null) {
+          pnlMonth += data.pnl_total - baseline;
+          pnlMonthAvail = true;
+        }
+      }
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
@@ -211,13 +245,26 @@ const updateFleetSummary = (targets) => {
     }
     if (target.kill_switch_active === true) killSwitches += 1;
     if (target.service_status && target.service_status !== "active") servicesDown += 1;
-  }
+  });
   setField("fleet-total", `${targets.length}`);
   setField("fleet-pnl-today", formatPnl(pnlToday));
   applySignedClass(
     fleetSummaryEl.querySelector('[data-field="fleet-pnl-today"]'),
     pnlToday,
   );
+  if (pnlMonthAvail) {
+    setField("fleet-pnl-month", formatPnl(pnlMonth));
+    applySignedClass(
+      fleetSummaryEl.querySelector('[data-field="fleet-pnl-month"]'),
+      pnlMonth,
+    );
+  } else {
+    setField("fleet-pnl-month", "-");
+    applySignedClass(
+      fleetSummaryEl.querySelector('[data-field="fleet-pnl-month"]'),
+      null,
+    );
+  }
   setField("fleet-equity-total", formatUsdc(equityTotal));
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
