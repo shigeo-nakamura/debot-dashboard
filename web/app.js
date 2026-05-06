@@ -34,7 +34,12 @@ let currentRange = "1d";
 
 const loadStatus = async (includeHistory = false) => {
   try {
-    const url = includeHistory ? `/api/status?range=${currentRange}` : "/api/status";
+    // History is always fetched for the maximum range available; the
+    // range toggle (1D/1W/1M/ALL) only narrows what the chart renders,
+    // not what the cache stores. This keeps `computeStats` (CAGR in
+    // particular) able to see ≥ MIN_CAGR_DAYS of history regardless of
+    // which range button is active. bot-strategy#333.
+    const url = includeHistory ? "/api/status?range=all" : "/api/status";
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -321,6 +326,7 @@ const createCard = (key) => {
         <div>PnL today <span data-field="pnl-today"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
+      <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
       <div class="kv kv-stats">
         <div>Max DD <span data-field="max-dd"></span></div>
         <div>Win Rate <span data-field="win-rate"></span></div>
@@ -608,7 +614,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
   applySignedClass(pnlTotalEl, pnlTotalValue);
 
   const history = updateHistoryCache(key, data);
-  renderEquityChart(chartEl, chartEmptyEl, history);
+  // Chart honours the range toggle; stats (CAGR / fallback Win Rate
+  // etc.) intentionally use the full history so they don't disappear
+  // when the user is viewing 1D. bot-strategy#333.
+  const chartHistory = filterHistoryByRange(history);
+  renderEquityChart(chartEl, chartEmptyEl, chartHistory);
 
   // Stats: prefer BOT-reported trade_stats, fallback to equity-derived
   const maxDdEl = card.querySelector('[data-field="max-dd"]');
@@ -710,17 +720,25 @@ const setupRangeToggle = () => {
         return;
       }
       currentRange = option.id;
-      historyByKey.clear();
+      // Cache is range-independent now (full history is always stored,
+      // only the chart filter changes), so we don't clear historyByKey
+      // and we don't re-fetch with includeHistory=true. A snapshot
+      // refresh is enough to trigger a re-render with the new chart
+      // window. bot-strategy#333.
       [...rangeToggleEl.querySelectorAll(".range-btn")].forEach((el) =>
         el.classList.toggle("active", el === button)
       );
-      loadStatus(true);
+      loadStatus(false);
     });
     rangeToggleEl.appendChild(button);
   });
 };
 
 const updateHistoryCache = (key, data) => {
+  // Cache stores the full unfiltered history; range narrowing happens
+  // only at chart-render time. This is what allows CAGR (which needs
+  // ≥ MIN_CAGR_DAYS of history) to be computed even when the user
+  // is viewing the 1D chart. bot-strategy#333.
   let history = historyByKey.get(key) || [];
   if (Array.isArray(data.equity_history)) {
     history = data.equity_history
@@ -729,14 +747,12 @@ const updateHistoryCache = (key, data) => {
         equity: Number(point.equity),
       }))
       .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
-    history = filterHistoryByRange(history);
     historyByKey.set(key, history);
     return history;
   }
   const point = snapshotToPoint(data);
   if (point) {
     history = appendHistoryPoint(history, point);
-    history = filterHistoryByRange(history);
     historyByKey.set(key, history);
   }
   return history;
