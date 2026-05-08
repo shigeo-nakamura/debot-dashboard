@@ -18,15 +18,22 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"gopkg.in/yaml.v3"
+	"io"
 )
 
 const (
 	defaultPollIntervalSecs = 20
 	commandTimeout          = 15 * time.Second
 	commandPollInterval     = 500 * time.Millisecond
+	// Status objects older than this are reported as "stale" — replaces
+	// the SSM `systemctl is-active` probe when the target source is
+	// "s3" (#343). Bot status writers emit at 60s cadence, so 180s gives
+	// 3× headroom before the dashboard flips a target to stale.
+	s3StatusStaleSecs = 180
 )
 
 type Config struct {
@@ -47,6 +54,16 @@ type TargetConfig struct {
 	Service    string `yaml:"service"`
 	StatusPath string `yaml:"status_path"`
 	Region     string `yaml:"region"`
+	// Source selects how the dashboard reads this target's status.json.
+	//   "" or "ssm" → original SSM SendCommand probe (back-compat).
+	//   "s3"        → read from S3 (#343); bot mirrors via STATUS_S3_*.
+	// Per-target so cutover happens one bot at a time.
+	Source string `yaml:"source"`
+	// S3-source-only: bucket name and full key for the bot's
+	// `<id>.json` object. Sibling files (equity_history.jsonl,
+	// backtest_alert.json) are derived by suffix-replacing the key.
+	S3Bucket string `yaml:"s3_bucket"`
+	S3Key    string `yaml:"s3_key"`
 }
 
 type StatusPosition struct {
@@ -80,6 +97,18 @@ type ShutdownStatus struct {
 type StatusData struct {
 	TS             int64            `json:"ts"`
 	UpdatedAt      string           `json:"updated_at"`
+	// ProcessStartedAt is the bot process boot time (epoch s),
+	// emitted by both pairtrade and xvenue-arb since #343 phase 1.
+	// Replaces the SSM `systemctl ActiveEnterTimestamp` probe when
+	// the target's source is "s3". Optional (zero in pre-#343 bots).
+	ProcessStartedAt int64 `json:"process_started_at,omitempty"`
+	// WsReset24hCount mirrors the dashboard's old journalctl
+	// `Connection reset...` probe via #343. Bot self-reports the
+	// 24h count.
+	WsReset24hCount  uint64 `json:"ws_reset_24h_count,omitempty"`
+	// KillSwitchActive mirrors the SSM `cat /opt/debot/KILL_SWITCH`
+	// probe via #343.
+	KillSwitchActive bool   `json:"kill_switch_active,omitempty"`
 	ID             *string          `json:"id"`
 	Agent          *string          `json:"agent"`
 	Dex            string           `json:"dex"`
@@ -317,6 +346,30 @@ func (p *ClientPool) Client(ctx context.Context, region string) (*ssm.Client, er
 	return client, nil
 }
 
+// S3ClientPool serves the same role for the `source: s3` path
+// (bot-strategy#343). Region is the bucket's region — pairtrade /
+// xvenue-arb both write to `debot-dashboard` in eu-central-1, so all
+// targets typically share one entry.
+type S3ClientPool struct {
+	mu      sync.Mutex
+	clients map[string]*s3.Client
+}
+
+func (p *S3ClientPool) Client(ctx context.Context, region string) (*s3.Client, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if client, ok := p.clients[region]; ok {
+		return client, nil
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, err
+	}
+	client := s3.NewFromConfig(cfg)
+	p.clients[region] = client
+	return client, nil
+}
+
 func main() {
 	var cfgPath string
 	var listen string
@@ -338,11 +391,12 @@ func main() {
 
 	cache := &StatusCache{}
 	pool := &ClientPool{clients: map[string]*ssm.Client{}}
+	s3pool := &S3ClientPool{clients: map[string]*s3.Client{}}
 	mc := newMetricsCollector()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollLoop(ctx, cfg, pool, cache, mc)
+	go pollLoop(ctx, cfg, pool, s3pool, cache, mc)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", mc.Handler())
@@ -350,7 +404,7 @@ func main() {
 		rangeParam := strings.TrimSpace(r.URL.Query().Get("range"))
 		includeHistory, cutoffMs := historyCutoff(rangeParam)
 		if includeHistory {
-			snapshot := fetchAll(ctx, cfg, pool, true, cutoffMs)
+			snapshot := fetchAll(ctx, cfg, pool, s3pool, true, cutoffMs)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(snapshot)
 			return
@@ -404,17 +458,30 @@ func normalizeConfig(cfg *Config) error {
 		if target.Name == "" {
 			target.Name = target.Service
 		}
-		if target.InstanceID == "" {
-			return fmt.Errorf("targets[%d] missing instance_id", i)
-		}
-		if target.StatusPath == "" {
-			return fmt.Errorf("targets[%d] missing status_path", i)
-		}
 		if target.Region == "" {
 			target.Region = cfg.Region
 		}
 		if target.Region == "" {
 			return fmt.Errorf("targets[%d] missing region", i)
+		}
+		// S3-source targets need bucket+key; SSM-source targets need
+		// instance_id+status_path. instance_id and status_path are
+		// kept on S3 targets for FE rendering / labeling but are no
+		// longer required to reach the bot.
+		if strings.EqualFold(target.Source, "s3") {
+			if target.S3Bucket == "" {
+				return fmt.Errorf("targets[%d] (source=s3) missing s3_bucket", i)
+			}
+			if target.S3Key == "" {
+				return fmt.Errorf("targets[%d] (source=s3) missing s3_key", i)
+			}
+		} else {
+			if target.InstanceID == "" {
+				return fmt.Errorf("targets[%d] missing instance_id", i)
+			}
+			if target.StatusPath == "" {
+				return fmt.Errorf("targets[%d] missing status_path", i)
+			}
 		}
 	}
 	return nil
@@ -473,10 +540,10 @@ func matchBasicAuth(user, pass string, auth BasicAuth) bool {
 	return userMatch && passMatch
 }
 
-func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCache, mc *metricsCollector) {
+func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3ClientPool, cache *StatusCache, mc *metricsCollector) {
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
 	fetch := func() {
-		snapshot := fetchAll(ctx, cfg, pool, false, 0)
+		snapshot := fetchAll(ctx, cfg, pool, s3pool, false, 0)
 		cache.Set(snapshot)
 		if mc != nil {
 			mc.Update(snapshot)
@@ -495,7 +562,7 @@ func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, cache *StatusCa
 	}
 }
 
-func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, includeHistory bool, cutoffMs int64) DashboardSnapshot {
+func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) DashboardSnapshot {
 	results := make([]TargetStatus, len(cfg.Targets))
 	var wg sync.WaitGroup
 	for i, target := range cfg.Targets {
@@ -504,7 +571,11 @@ func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, includeHistory 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = fetchTarget(ctx, target, pool, includeHistory, cutoffMs)
+			if strings.EqualFold(target.Source, "s3") {
+				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
+			} else {
+				results[i] = fetchTarget(ctx, target, pool, includeHistory, cutoffMs)
+			}
 		}()
 	}
 	wg.Wait()
@@ -557,6 +628,110 @@ func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, inc
 	if strings.TrimSpace(stderr) != "" && result.Error == "" {
 		result.Error = fmt.Sprintf("stderr: %s", strings.TrimSpace(stderr))
 	}
+	return result
+}
+
+// fetchTargetS3 reads `<bucket>/<key>` (= status.json mirrored by the
+// bot-side `STATUS_S3_*` path, bot-strategy#343 phase 1) plus, when
+// `includeHistory` is set, the sibling `*.equity_history.jsonl`.
+//
+// Service liveness moves from `systemctl is-active` to "object age <
+// s3StatusStaleSecs". This is strictly more accurate than the SSM
+// probe — the latter says "active" even when the bot is hung and
+// not making progress, while object staleness catches both crashes
+// and stalls.
+//
+// `KillSwitchActive` and `WsReset24h` come straight from the JSON
+// payload now (#343 phase 2 fields), no separate probes needed.
+func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) TargetStatus {
+	result := TargetStatus{
+		Name:       target.Name,
+		InstanceID: target.InstanceID,
+		Service:    target.Service,
+		StatusPath: target.StatusPath,
+		Region:     target.Region,
+		CheckedAt:  time.Now(),
+	}
+	if target.S3Bucket == "" || target.S3Key == "" {
+		result.Error = "s3 source target missing s3_bucket / s3_key"
+		return result
+	}
+	client, err := s3pool.Client(ctx, target.Region)
+	if err != nil {
+		result.Error = fmt.Sprintf("s3 client error: %v", err)
+		return result
+	}
+
+	getCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	obj, err := client.GetObject(getCtx, &s3.GetObjectInput{
+		Bucket: aws.String(target.S3Bucket),
+		Key:    aws.String(target.S3Key),
+	})
+	if err != nil {
+		result.Error = fmt.Sprintf("s3 get error: %v", err)
+		return result
+	}
+	body, err := io.ReadAll(obj.Body)
+	_ = obj.Body.Close()
+	if err != nil {
+		result.Error = fmt.Sprintf("s3 read error: %v", err)
+		return result
+	}
+	if len(body) == 0 {
+		result.Error = "s3 status object is empty"
+		return result
+	}
+
+	var status StatusData
+	if err := json.Unmarshal(body, &status); err != nil {
+		result.Error = fmt.Sprintf("s3 parse error: %v", err)
+		return result
+	}
+
+	// Derive service_status from object freshness — there is no
+	// systemctl probe in this code path.
+	now := time.Now().Unix()
+	age := now - status.TS
+	if status.TS == 0 {
+		result.ServiceStatus = "unknown"
+	} else if age > s3StatusStaleSecs {
+		result.ServiceStatus = "stale"
+	} else {
+		result.ServiceStatus = "active"
+	}
+	if status.ProcessStartedAt != 0 {
+		started := time.Unix(status.ProcessStartedAt, 0).UTC()
+		result.ServiceStartedAt = &started
+	}
+	if status.WsReset24hCount != 0 || status.TS != 0 {
+		// Always surface zero when the bot is alive — distinguishes
+		// "0 resets in 24h" from "no data" (nil).
+		ws := int(status.WsReset24hCount)
+		result.WsReset24h = &ws
+	}
+	ks := status.KillSwitchActive
+	result.KillSwitchActive = &ks
+
+	if includeHistory {
+		historyKey := strings.TrimSuffix(target.S3Key, ".json") + ".equity_history.jsonl"
+		histCtx, histCancel := context.WithTimeout(ctx, commandTimeout)
+		defer histCancel()
+		hist, err := client.GetObject(histCtx, &s3.GetObjectInput{
+			Bucket: aws.String(target.S3Bucket),
+			Key:    aws.String(historyKey),
+		})
+		if err == nil {
+			payload, readErr := io.ReadAll(hist.Body)
+			_ = hist.Body.Close()
+			if readErr == nil {
+				status.EquityHistory = parseEquityHistory(string(payload), cutoffMs)
+			}
+		}
+		// Missing history is not an error — the bot may not have
+		// written one yet.
+	}
+	result.Status = &status
 	return result
 }
 
