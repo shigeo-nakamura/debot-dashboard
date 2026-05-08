@@ -64,6 +64,13 @@ type TargetConfig struct {
 	// backtest_alert.json) are derived by suffix-replacing the key.
 	S3Bucket string `yaml:"s3_bucket"`
 	S3Key    string `yaml:"s3_key"`
+	// S3-source-only: AWS region of the bucket. Optional; falls back
+	// to `region` when empty for back-compat. Split out so that
+	// `region` can keep its display meaning ("where the bot runs")
+	// even when the bucket lives elsewhere — otherwise a Tokyo bot
+	// writing to a Frankfurt bucket would have to advertise itself
+	// as Frankfurt and end up under the wrong region group on the FE.
+	S3Region string `yaml:"s3_region"`
 }
 
 type StatusPosition struct {
@@ -656,7 +663,11 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 		result.Error = "s3 source target missing s3_bucket / s3_key"
 		return result
 	}
-	client, err := s3pool.Client(ctx, target.Region)
+	bucketRegion := target.S3Region
+	if bucketRegion == "" {
+		bucketRegion = target.Region
+	}
+	client, err := s3pool.Client(ctx, bucketRegion)
 	if err != nil {
 		result.Error = fmt.Sprintf("s3 client error: %v", err)
 		return result

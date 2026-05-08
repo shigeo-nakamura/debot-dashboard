@@ -38,17 +38,20 @@ targets:
 # Per-target `source: s3` (bot-strategy#343) reads status.json directly
 # from S3 instead of via SSM SendCommand. The bot must have its
 # STATUS_S3_BUCKET / STATUS_S3_KEY_PREFIX env vars set so it mirrors
-# status.json to the same key. Region is the bucket's region (always
-# eu-central-1 for the shared `debot-dashboard` bucket today). Service
-# liveness is derived from object freshness — a status object older
-# than ~3 min flips the target to "stale" without an SSM probe.
+# status.json to the same key. `region` keeps its usual meaning
+# ("where the bot runs", used for FE region grouping); `s3_region`
+# selects the bucket's region (always eu-central-1 for the shared
+# `debot-dashboard` bucket today). Service liveness is derived from
+# object freshness — a status object older than ~3 min flips the
+# target to "stale" without an SSM probe.
 #
 #   - name: debot-pair-btceth-tokyo-a
 #     instance_id: i-015f7f9388cac0a1b
 #     service: debot-pair-btceth
-#     region: eu-central-1
+#     region: ap-northeast-1
 #     source: s3
 #     s3_bucket: debot-dashboard
+#     s3_region: eu-central-1
 #     s3_key: debot/status/tokyo/debot-pair-btceth-a.json
 # auth:
 #   username: admin
