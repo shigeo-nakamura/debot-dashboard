@@ -715,7 +715,19 @@ const updateCard = (card, target, pollSecs, index, key) => {
       numTradesEl.textContent = botStats.trades;
     }
     if (cagrEl) {
-      const cagr = equityStats.cagr;
+      // Align CAGR with the bot-reported lifetime window. trade_stats
+      // (max_dd / win_rate / trades) reset to 0 on bot restart, but the
+      // dashboard's equity history cache survives, so a full-history
+      // CAGR keeps reflecting pre-restart performance and reads as
+      // "Trades 0 / CAGR +53%". Filter to points after service start so
+      // all four stats reset together. bot-strategy#351.
+      const sessionStartMs = target.service_started_at
+        ? Date.parse(target.service_started_at)
+        : NaN;
+      const sessionHistory = Number.isFinite(sessionStartMs)
+        ? history.filter((p) => p.ts >= sessionStartMs)
+        : history;
+      const cagr = computeStats(sessionHistory).cagr;
       cagrEl.textContent = cagr !== null ? `${cagr > 0 ? "+" : ""}${cagr.toFixed(0)}%` : "-";
       applySignedClass(cagrEl, cagr);
     }
