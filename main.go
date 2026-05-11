@@ -297,14 +297,16 @@ type TargetStatus struct {
 	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
 	Status           *StatusData `json:"status,omitempty"`
 	// WsReset24h is the count of `Connection reset without closing handshake`
-	// WebSocket events observed in the service's journald log over the last
-	// 24 hours. Sourced via SSM (journalctl) rather than the bot, so it works
-	// without any bot-side changes. Threshold for alerting is 10/day per
-	// bot-strategy#47.
+	// WebSocket events over the last 24 hours. For source=s3 targets the bot
+	// self-reports via `WsReset24hCount` in status.json (#343); for source=ssm
+	// targets the dashboard derives it via journalctl. Threshold for alerting
+	// is 10/day per bot-strategy#47.
 	WsReset24h       *int      `json:"ws_reset_24h,omitempty"`
 	// KillSwitchActive reports whether /opt/debot/KILL_SWITCH exists on the
-	// target instance. Sourced via SSM, independent of any bot-side code.
-	// True → operator-triggered halt file is present; see bot-strategy#185.
+	// target instance. For source=s3 targets the bot self-reports the field
+	// in status.json (#343); for source=ssm targets the dashboard stats the
+	// file directly. True → operator-triggered halt file is present; see
+	// bot-strategy#185.
 	KillSwitchActive *bool     `json:"kill_switch_active,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	CheckedAt        time.Time `json:"checked_at"`

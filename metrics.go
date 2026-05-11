@@ -160,7 +160,7 @@ func newMetricsCollector() *metricsCollector {
 		lastTradeTS:             gv("debot_last_trade_ts", "Unix ts (s) when trade_stats.trades last incremented (dashboard-derived; 0 until first observed change).", instanceLabels),
 		peakEquityLastChangedTS: gv("debot_peak_equity_last_changed_ts", "Unix ts (s) when session_risk.peak_equity last increased. While dd_bps > 0 this is effectively 'when the current drawdown began'.", instanceLabels),
 
-		pollErrorsTotal: cv("debot_dashboard_poll_errors_total", "SSM poll failures observed by the dashboard.", []string{"target", "service"}),
+		pollErrorsTotal: cv("debot_dashboard_poll_errors_total", "Poll failures observed by the dashboard (per-target source: SSM SendCommand or S3 GetObject).", []string{"target", "service"}),
 		targetsTotal:    g("debot_dashboard_targets_total", "Number of bot targets the dashboard is polling."),
 		lastPollTS:      g("debot_dashboard_last_poll_ts", "Unix ts (s) of the most recent successful dashboard poll cycle."),
 
