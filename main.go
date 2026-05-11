@@ -60,8 +60,8 @@ type TargetConfig struct {
 	// Per-target so cutover happens one bot at a time.
 	Source string `yaml:"source"`
 	// S3-source-only: bucket name and full key for the bot's
-	// `<id>.json` object. Sibling files (equity_history.jsonl,
-	// backtest_alert.json) are derived by suffix-replacing the key.
+	// `<id>.json` object. Sibling files (equity_history.jsonl) are
+	// derived by suffix-replacing the key.
 	S3Bucket string `yaml:"s3_bucket"`
 	S3Key    string `yaml:"s3_key"`
 	// S3-source-only: AWS region of the bucket. Optional; falls back
@@ -134,7 +134,6 @@ type StatusData struct {
 	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
 	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
 	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
-	BacktestAlert  map[string]interface{} `json:"backtest_alert,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -796,18 +795,15 @@ func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig, in
 func buildCommand(target TargetConfig, includeHistory bool) string {
 	service := shellEscape(target.Service)
 	path := shellEscape(target.StatusPath)
-	alertPath := shellEscape(backtestAlertPath(target.StatusPath))
 	// awk is used (instead of `grep -c ... || echo 0`) so the count prints
 	// exactly once even when there are zero matches — `grep -c` on empty
 	// input exits 1, which would otherwise double-print via the `||` fallback.
 	cmd := fmt.Sprintf(
-		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__ALERT__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'; echo \"__KILL_SWITCH__\"; if [ -f /opt/debot/KILL_SWITCH ]; then echo 1; else echo 0; fi",
+		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'; echo \"__KILL_SWITCH__\"; if [ -f /opt/debot/KILL_SWITCH ]; then echo 1; else echo 0; fi",
 		service,
 		service,
 		path,
 		path,
-		alertPath,
-		alertPath,
 		service,
 	)
 	if includeHistory {
@@ -830,24 +826,16 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 	}
 
 	// Tail payload after __STATUS__:
-	//   status.json [__ALERT__ alert.json] [__WS_RESET__ count] [__KILL_SWITCH__ 0|1] [__HISTORY__ equity.jsonl]
+	//   status.json __WS_RESET__ count [__KILL_SWITCH__ 0|1] [__HISTORY__ equity.jsonl]
 	tail := strings.TrimSpace(parts[1])
 	payload := tail
-	alertPayload := ""
 	wsResetPayload := ""
 	killSwitchPayload := ""
 	historyPayload := ""
 
-	if idx := strings.Index(tail, "__ALERT__"); idx >= 0 {
-		payload = strings.TrimSpace(tail[:idx])
-		tail = tail[idx+len("__ALERT__"):]
-	}
 	if idx := strings.Index(tail, "__WS_RESET__"); idx >= 0 {
-		alertPayload = strings.TrimSpace(tail[:idx])
+		payload = strings.TrimSpace(tail[:idx])
 		tail = tail[idx+len("__WS_RESET__"):]
-	} else if !strings.HasPrefix(strings.TrimSpace(tail), "__HISTORY__") {
-		alertPayload = strings.TrimSpace(tail)
-		tail = ""
 	}
 	if idx := strings.Index(tail, "__KILL_SWITCH__"); idx >= 0 {
 		wsResetPayload = strings.TrimSpace(tail[:idx])
@@ -875,12 +863,6 @@ func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *t
 	var status StatusData
 	if err := json.Unmarshal([]byte(payload), &status); err != nil {
 		return serviceStatus, serviceStart, nil, nil, nil, err
-	}
-	if alertPayload != "" {
-		var alert map[string]interface{}
-		if err := json.Unmarshal([]byte(alertPayload), &alert); err == nil {
-			status.BacktestAlert = alert
-		}
 	}
 	if includeHistory {
 		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
@@ -946,11 +928,6 @@ func equityHistoryPath(statusPath string) string {
 		base = statusPath
 	}
 	return base + ".equity_history.jsonl"
-}
-
-func backtestAlertPath(statusPath string) string {
-	dir := filepath.Dir(statusPath)
-	return filepath.Join(dir, "backtest_alert.json")
 }
 
 func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {
