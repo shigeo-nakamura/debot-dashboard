@@ -129,6 +129,13 @@ type StatusData struct {
 	PnlTotal       float64          `json:"pnl_total"`
 	PnlToday       float64          `json:"pnl_today"`
 	PnlSource      string           `json:"pnl_source"`
+	// Sum of `funding_carry_usd` across cycles closed during the
+	// current UTC session (bot-strategy#371). Pointer so a pre-#371
+	// binary's missing field deserialises to nil and the dashboard
+	// renders "-" instead of a misleading "$0.00". Post-#371
+	// binaries always emit the field (zero is a meaningful "no
+	// closed cycles today" measurement).
+	FundingCarryToday *float64 `json:"funding_carry_today,omitempty"`
 	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
 	Maintenance    *string                `json:"maintenance,omitempty"`
 	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`

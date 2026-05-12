@@ -213,6 +213,13 @@ const updateFleetSummary = (targets) => {
   let pnlMonthAvail = false;
   let monthStartEquityTotal = 0;
   let equityTotal = 0;
+  // Funding today is aggregated only when at least one target's status
+  // payload carries the field; targets on pre-#371 binaries leave it
+  // undefined and the fleet summary falls back to "-" rather than
+  // claiming a partial fleet-wide sum that double-omits the pre-upgrade
+  // bots. See bot-strategy#371.
+  let fundingToday = 0;
+  let fundingTodayAvail = false;
   let halts = 0;
   let killSwitches = 0;
   let servicesDown = 0;
@@ -224,6 +231,10 @@ const updateFleetSummary = (targets) => {
     if (data) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
       if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
+      if (typeof data.funding_carry_today === "number") {
+        fundingToday += data.funding_carry_today;
+        fundingTodayAvail = true;
+      }
       if (typeof data.pnl_total === "number") {
         const key = keyForTarget(target, index);
         const history = historyByKey.get(key);
@@ -254,6 +265,19 @@ const updateFleetSummary = (targets) => {
     fleetSummaryEl.querySelector('[data-field="fleet-pnl-today"]'),
     pnlToday,
   );
+  if (fundingTodayAvail) {
+    setField("fleet-funding-today", formatPnl(fundingToday));
+    applySignedClass(
+      fleetSummaryEl.querySelector('[data-field="fleet-funding-today"]'),
+      fundingToday,
+    );
+  } else {
+    setField("fleet-funding-today", "-");
+    applySignedClass(
+      fleetSummaryEl.querySelector('[data-field="fleet-funding-today"]'),
+      null,
+    );
+  }
   if (pnlMonthAvail) {
     setField("fleet-pnl-month", formatPnl(pnlMonth));
     applySignedClass(
@@ -399,6 +423,7 @@ const createCard = (key) => {
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <div class="kv">
         <div>PnL today <span data-field="pnl-today"></span></div>
+        <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
         <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
       <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
@@ -441,6 +466,12 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const pnlTotalValue = parseNumber(data.pnl_total);
   const pnlToday = formatPnl(pnlTodayValue);
   const pnlTotal = formatUsdc(pnlTotalValue);
+  // funding_carry_today is omitted by pre-#371 binaries — distinguish
+  // "field missing" (parseNumber returns null → render "-") from "real
+  // zero today" (parseNumber returns 0 → render "$0.00") so the card
+  // doesn't claim a measurement that hasn't been deployed yet.
+  const fundingTodayValue = parseNumber(data.funding_carry_today);
+  const fundingToday = fundingTodayValue === null ? "-" : formatPnl(fundingTodayValue);
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
 
@@ -455,6 +486,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const ageEl = card.querySelector('[data-field="age"]');
   const pnlTodayEl = card.querySelector('[data-field="pnl-today"]');
   const pnlTotalEl = card.querySelector('[data-field="pnl-total"]');
+  const fundingTodayEl = card.querySelector('[data-field="funding-today"]');
   const positionsListEl = card.querySelector('[data-field="positions-list"]');
   const errorEl = card.querySelector('[data-field="error"]');
   const chartEl = card.querySelector('[data-field="equity-chart"]');
@@ -686,6 +718,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   pnlTotalEl.textContent = pnlTotal;
   applySignedClass(pnlTodayEl, pnlTodayValue);
   applySignedClass(pnlTotalEl, pnlTotalValue);
+  if (fundingTodayEl) {
+    fundingTodayEl.textContent = fundingToday;
+    applySignedClass(fundingTodayEl, fundingTodayValue);
+  }
 
   const history = updateHistoryCache(key, data);
   // Chart honours the range toggle; stats (CAGR / fallback Win Rate
