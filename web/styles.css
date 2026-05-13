@@ -104,13 +104,16 @@ body::after {
   display: grid;
   gap: 20px;
   /* Frankfurt now runs A/B/C + canary (bot-strategy#376), so the cap is
-     4 columns. On narrow screens the max() falls back to 260px so cards
-     stay readable; on wide screens each card takes exactly 1/4 of the
-     grid and extra bots wrap onto a new row. auto-fit collapses empty
-     tracks for regions with fewer bots (e.g. Tokyo Lighter A/B/C, Tokyo
-     Extended single card), so 3-bot and 1-bot regions render the same
-     content density as the pre-#376 layout. */
-  grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 40px) / 4)), 1fr));
+     4 columns. The 60px in the calc accounts for the 3 inter-card gaps
+     (3 × 20px) in a 4-column row — using the pre-#376 40px would over-
+     state the min track and force auto-fit back to 3 columns at typical
+     widescreen widths. On narrow screens the max() falls back to 260px
+     so cards stay readable; on wide screens each card takes exactly
+     1/4 of the grid and extra bots wrap onto a new row. auto-fit
+     collapses empty tracks for regions with fewer bots (Tokyo Lighter
+     A/B/C, Tokyo Extended single card), so 3-bot and 1-bot regions
+     render the same content density as the pre-#376 layout. */
+  grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 60px) / 4)), 1fr));
 }
 
 .regions.live .card {
