@@ -434,8 +434,16 @@ body::after {
 
 .card-header {
   display: flex;
+  /* Status pills must wrap to a new line when there is no horizontal
+     room (Frankfurt's 4-column layout, bot-strategy#376, makes each
+     card narrower than the 3-column layout it was originally designed
+     for). Without flex-wrap the pills overflow the card boundary and
+     get clipped by .card { overflow: hidden }, hiding DRY RUN /
+     SESSION-DD-HALT / KILL-SWITCH etc. behind the right edge. */
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
   margin-bottom: 12px;
 }
 
