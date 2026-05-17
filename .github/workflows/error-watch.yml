@@ -1,0 +1,425 @@
+name: Error Watch
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch dashboard status
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          DASHBOARD_USER: ${{ secrets.DASHBOARD_USER }}
+          DASHBOARD_PASS: ${{ secrets.DASHBOARD_PASS }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail --max-time 30 -u "$DASHBOARD_USER:$DASHBOARD_PASS" "$DASHBOARD_URL" -o status.json
+          echo "Fetched $(jq '.targets | length' status.json) targets"
+
+      - name: Create issues for targets with errors
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Route auto-created issues to the matching GitHub Projects v2 board.
+          # `xvenue-arb` / `tokyo-arb` labels go to project #4 (xvenue-arb);
+          # everything else (pair-*, canary-*, extended-*, mm-*) goes to
+          # project #3 (pairtrade). PROJECTS_TOKEN is a fine-grained PAT with
+          # user-account Projects RW; the default GITHUB_TOKEN cannot write
+          # user-scope projects.
+          add_to_project() {
+            local issue_url="$1" label="$2"
+            if [ -z "${PROJECTS_TOKEN:-}" ]; then
+              echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
+              return 0
+            fi
+            local project_num
+            case "$label" in
+              *xvenue-arb*|*tokyo-arb*) project_num=4 ;;
+              *)                        project_num=3 ;;
+            esac
+            GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
+              --owner shigeo-nakamura --url "$issue_url" \
+              || echo "::warning::Failed to add $issue_url to project #$project_num"
+          }
+
+          # Skip benign warn-only signals (designed behaviors, not bugs):
+          #   - CIRCUIT_BREAKER: pairtrade emits `[CIRCUIT_BREAKER] activated`
+          #     (info, once per state change) when consecutive losses cross a
+          #     tier threshold. Expected, not actionable.
+          #   - CircuitBreakerCooldown / DailyDdHalted / SessionDdHalted:
+          #     xvenue-arb emits `[XVENUE] risk gate <BlockReason> blocking
+          #     new entry` (warn) every eligible tick while a risk gate is
+          #     latched. Same designed-informational shape as pairtrade's CB,
+          #     but in CamelCase — the underscore CIRCUIT_BREAKER pattern
+          #     does not match. See bot-strategy#307.
+          #   - STD_COLLAPSE_BLOCK: std_collapse_guard (bot-strategy#62)
+          #     blocks entries during transient std collapse after a regime
+          #     shift / beta jump. Designed to fire as a warn each cycle until
+          #     the ratio recovers; not actionable. See bot-strategy#275.
+          #   - STD_COLLAPSE_OBSERVE: observe-only sibling of the above
+          #     (`std_collapse_observe_only=true`). Logs the same condition
+          #     but still allows the entry — strictly informational, even more
+          #     benign than BLOCK. Per-cycle emission across A/B/C trips the
+          #     12+ warn threshold during any std-ratio dip. See #284.
+          #   - status.maintenance != null: bot has detected an upcoming or
+          #     active exchange maintenance window (e.g. Lighter statuspage
+          #     RSS) and is already blocking new entries. WS reconnect bursts,
+          #     stale-price warns and 503/502 errors are expected fallout and
+          #     are not actionable. See bot-strategy#199.
+          #   - TICK_FILTER: pairtrade rejects orderbook frames with empty
+          #     bid/ask size, excessive spread, or price outside the recent
+          #     envelope. Deployed in bot-strategy#346 to prevent corrupted
+          #     Lighter ticks from feeding β estimation / sizing (root cause
+          #     of bot-b 2026-05-08 09:21 UTC -$8.96 incident). Spikes to
+          #     ~500 warns/5min around each Lighter hourly funding rollover —
+          #     designed informational, the bot is correctly *protecting*
+          #     against bad ticks. See bot-strategy#356, first observed in
+          #     bot-strategy#353.
+          #   - "[MAINTENANCE] refresh failed": dex-connector's Lighter
+          #     statuspage RSS refresher (lighter_connector/mod.rs) backs off
+          #     5min on transient connectivity failures to status.lighter.xyz
+          #     and keeps using the last successful schedule, so the bot's
+          #     trading decisions are unaffected by short outages. A 35-min
+          #     status-page outage on 2026-05-08 produced 6 warns in 30m and
+          #     auto-filed bot-strategy#350. Skipping is safe because longer
+          #     outages would also drive `status.maintenance` stale, which
+          #     deserves a separate dedicated alert (not this regex).
+          #   - "[Startup] get_positions failed": pairtrade
+          #     recovery::startup_force_close_existing_positions emits this
+          #     while waiting for the per-account WS feed to populate before
+          #     it can confirm position state. Both the attempt-N/3 WARN
+          #     and the "after 3 attempts" ERROR variant are boot-time only
+          #     (recovery.rs:168/210). Suppressing the WARN is global-safe
+          #     because the bot only retries at startup. The ERROR variant
+          #     is additionally suppressed for the canary path below
+          #     (canary auto-restarts on every CI deploy per #376, so this
+          #     ERROR recurs frequently and is benign — it cleared as
+          #     #378 transient noise). bot-strategy#412 / #378.
+          #   - "WebSocket data not available, falling back to REST API":
+          #     pairtrade's connector layer logs this once per leg at
+          #     startup until the WS warms up. Same boot-only shape as
+          #     the [Startup] pattern above. Suppressed globally as a
+          #     WARN; for canary it also covers the recurring auto-restart
+          #     case. bot-strategy#412.
+          # Window count: prefer the 30m field (bot-strategy#168); fall back
+          # to the legacy 5m field for bots not yet restarted onto the new
+          # code. Either name may be missing, so `// 0` after the fallback.
+          #
+          # Canary error-suppression carve-out (bot-strategy#412):
+          # `debot-pair-canary` is by design auto-restarted on every CI
+          # deploy (#376), so the boot-time `[Startup]` ERROR variant
+          # recurs ~daily. For *that service alone* the suppression regex
+          # additionally applies to errors. Main A/B/C keep the original
+          # "errors always fire" behavior since they manually-restart
+          # only and a startup ERROR on main is rare enough to be
+          # genuinely worth filing on. See also #378 (the auto-issue
+          # closed as transient noise that motivated this carve-out).
+          jq -r '.targets[]
+                 | select(.status.error_summary != null)
+                 | select((.status.maintenance // null) == null)
+                 | . as $t
+                 | ($t.status.error_summary.error_count_30m // $t.status.error_summary.error_count_5m // 0) as $errc
+                 | ($t.status.error_summary.warn_count_30m  // $t.status.error_summary.warn_count_5m  // 0) as $warnc
+                 | ((($t.status.error_summary.last_warn_message // "")
+                     + " "
+                     + ($t.status.error_summary.last_error_message // ""))
+                    | test("CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API")) as $suppressed
+                 | (($t.service // "") == "debot-pair-canary") as $is_canary
+                 | select(
+                     ($errc > 0 and ((($is_canary | not)) or ($suppressed | not)))
+                     or ($warnc > 0 and ($suppressed | not))
+                   )
+                 | [$t.name,
+                    ($t.service // ""),
+                    $errc,
+                    $warnc,
+                    ($t.status.error_summary.last_error_message // ""),
+                    ($t.status.error_summary.last_warn_message // "")]
+                 | @tsv' status.json > errors.tsv
+
+          if [ ! -s errors.tsv ]; then
+            echo "No targets with errors/warnings"
+            exit 0
+          fi
+
+          gh label create auto-error --repo "$REPO" --color d73a4a --description "Auto-created by error-watch workflow" 2>/dev/null || true
+
+          # Dedupe by (service, fp) across targets in the same run. A/B/C share
+          # a single systemd unit (debot-pair-btceth), so process-level warnings
+          # are reported identically against all three logical targets and
+          # previously produced 3 issues per cycle. See bot-strategy#164.
+          declare -A seen_sfp
+
+          while IFS=$'\t' read -r name service errors warns err_msg warn_msg; do
+            slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9]|-|g; s|--*|-|g; s|^-||; s|-$||')
+            svc_label="svc-$slug"
+
+            gh label create "$svc_label" --repo "$REPO" --color ededed --description "Service: $name" 2>/dev/null || true
+
+            # Normalize variable tokens (durations, timestamps, PIDs, retry
+            # counts, balance amounts) before fingerprinting so that the same
+            # class of event produces a stable hash across occurrences. Without
+            # this, Pair-A/B/C cooldown warnings get a fresh fp every 5 min
+            # because `for Ns`, `unix=N`, and `pid=N` all drift. See #112.
+            normalize_msg() {
+              printf '%s' "$1" \
+                | sed -E 's/for [0-9]+s/for Ns/g' \
+                | sed -E 's/unix=[0-9]+/unix=N/g' \
+                | sed -E 's/pid=[0-9]+/pid=N/g' \
+                | sed -E 's/Attempt: [0-9]+/Attempt: N/g' \
+                | sed -E 's/(cached )?equity [0-9]+\.[0-9]+/\1equity N/g' \
+                | sed -E 's/(z|std|median|ratio|threshold)=-?[0-9]+\.[0-9]+/\1=N/g'
+            }
+            fp_err=$(normalize_msg "$err_msg")
+            fp_warn=$(normalize_msg "$warn_msg")
+            fp=$(printf '%s\n%s' "$fp_err" "$fp_warn" | sha256sum | cut -c1-16)
+
+            # The dashboard's last_error_message / last_warn_message are not
+            # bounded to the 30m count window — they carry the most recently
+            # observed message of that severity, which can be days old when
+            # the in-window count is 0. Render an explicit placeholder for
+            # those cases so the issue body cannot show a stale historical
+            # record next to a 0 count. See bot-strategy#338.
+            err_display="$err_msg"
+            warn_display="$warn_msg"
+            if [ "$errors" -eq 0 ]; then err_display="(none in window)"; fi
+            if [ "$warns" -eq 0 ]; then warn_display="(none in window)"; fi
+
+            # Skip if another target on the same systemd unit already produced
+            # this fingerprint in this run. Whatever the first sibling's
+            # outcome (skip/comment/create), subsequent siblings don't need
+            # their own issue. See bot-strategy#164.
+            if [ -n "$service" ]; then
+              sfp_key="$service:$fp"
+              if [ -n "${seen_sfp[$sfp_key]:-}" ]; then
+                echo "Skip $name: fp:$fp already handled this run for service $service"
+                continue
+              fi
+              seen_sfp[$sfp_key]=1
+            fi
+
+            # Dedupe against recently-closed issues with the same fingerprint so
+            # that routine triage-closing (e.g. dup of a known ongoing event)
+            # does not cause the same alert to re-fire on every 5-min cycle.
+            # See bot-strategy#108.
+            recently_closed=$(gh issue list --repo "$REPO" --state closed \
+              --label auto-error --label "$svc_label" \
+              --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+              --json number --jq '.[0].number // ""')
+            if [ -n "$recently_closed" ]; then
+              echo "Skip $name: fp:$fp already handled on closed #$recently_closed"
+              continue
+            fi
+
+            existing=$(gh issue list --repo "$REPO" --state open --label auto-error --label "$svc_label" --json number --jq '.[0].number // ""')
+
+            if [ -n "$existing" ]; then
+              seen=$(gh issue view "$existing" --repo "$REPO" --json body,comments \
+                --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+                | grep -c "fp:$fp" || true)
+              if [ "$seen" -gt 0 ]; then
+                echo "Skip $name: fingerprint $fp already recorded on #$existing"
+                continue
+              fi
+              {
+                echo "Recurrence detected (new message signature)."
+                echo
+                echo "- **error_count_window**: $errors"
+                echo "- **warn_count_window**: $warns"
+                echo "- **Last error message**: $err_display"
+                echo "- **Last warn message**: $warn_display"
+                echo
+                echo "Detected at: $(date -u +%FT%TZ)"
+                echo "<!-- fp:$fp -->"
+              } > comment.md
+              gh issue comment "$existing" --repo "$REPO" --body-file comment.md
+              echo "Commented on #$existing ($fp) for $name"
+              continue
+            fi
+
+            title="[$name] Errors detected ($errors error / $warns warn)"
+            {
+              echo "Auto-created by error-watch workflow."
+              echo
+              echo "- **Service**: $name"
+              echo "- **error_count_window**: $errors (30m window — see bot-strategy#168)"
+              echo "- **warn_count_window**: $warns (30m window — see bot-strategy#168)"
+              echo "- **Last error message**: $err_display"
+              echo "- **Last warn message**: $warn_display"
+              echo
+              echo "Detected at: $(date -u +%FT%TZ)"
+              echo "<!-- fp:$fp -->"
+            } > body.md
+
+            issue_url=$(gh issue create --repo "$REPO" --title "$title" --body-file body.md --label auto-error --label "$svc_label")
+            echo "Created $issue_url"
+            add_to_project "$issue_url" "$svc_label"
+          done < errors.tsv
+
+      - name: Create issues for targets exceeding WS reset threshold
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # See first step for routing rules.
+          add_to_project() {
+            local issue_url="$1" label="$2"
+            if [ -z "${PROJECTS_TOKEN:-}" ]; then
+              echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
+              return 0
+            fi
+            local project_num
+            case "$label" in
+              *xvenue-arb*|*tokyo-arb*) project_num=4 ;;
+              *)                        project_num=3 ;;
+            esac
+            GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
+              --owner shigeo-nakamura --url "$issue_url" \
+              || echo "::warning::Failed to add $issue_url to project #$project_num"
+          }
+
+          # Alert when `Connection reset without closing handshake` exceeds
+          # 10/day per service, per bot-strategy#47. Under the threshold the
+          # dashboard pill surfaces the count but no issue is created.
+          # Skip targets whose bot has flagged an ongoing maintenance window
+          # (see bot-strategy#199) — WS resets are the normal manifestation
+          # of a scheduled upstream outage.
+          jq -r '.targets[]
+                 | select((.status.maintenance // null) == null)
+                 | select((.ws_reset_24h // 0) > 10)
+                 | [.name, .service, (.ws_reset_24h // 0)]
+                 | @tsv' status.json > ws_resets.tsv
+
+          if [ ! -s ws_resets.tsv ]; then
+            echo "No targets exceeding WS reset threshold"
+            exit 0
+          fi
+
+          gh label create auto-ws-reset --repo "$REPO" --color fbca04 --description "WS connection resets >10/day" 2>/dev/null || true
+
+          # Dedupe by service (not name) because A/B/C share a single
+          # systemd unit and therefore a single journalctl count.
+          declare -A seen_svc
+          while IFS=$'\t' read -r name service count; do
+            if [ -n "${seen_svc[$service]:-}" ]; then continue; fi
+            seen_svc[$service]=1
+
+            svc_slug=$(echo "$service" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9]|-|g; s|--*|-|g; s|^-||; s|-$||')
+            svc_label="svc-$svc_slug"
+            gh label create "$svc_label" --repo "$REPO" --color ededed --description "Service: $service" 2>/dev/null || true
+
+            day=$(date -u +%F)
+            fp=$(printf '%s\n%s' "$service" "$day" | sha256sum | cut -c1-16)
+
+            # Dedupe against recently-closed issues (same fingerprint). See #108.
+            recently_closed=$(gh issue list --repo "$REPO" --state closed \
+              --label auto-ws-reset --label "$svc_label" \
+              --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+              --json number --jq '.[0].number // ""')
+            if [ -n "$recently_closed" ]; then
+              echo "Skip $service: fp:$fp already handled on closed #$recently_closed"
+              continue
+            fi
+
+            existing=$(gh issue list --repo "$REPO" --state open --label auto-ws-reset --label "$svc_label" --json number --jq '.[0].number // ""')
+
+            if [ -n "$existing" ]; then
+              seen=$(gh issue view "$existing" --repo "$REPO" --json body,comments \
+                --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+                | grep -c "fp:$fp" || true)
+              if [ "$seen" -gt 0 ]; then
+                echo "Skip $service: day $day already recorded on #$existing"
+                continue
+              fi
+              {
+                echo "WS reset threshold exceeded again on $day UTC."
+                echo
+                echo "- **Service**: $service"
+                echo "- **Connection resets (last 24h)**: $count"
+                echo "- **Threshold**: 10"
+                echo
+                echo "Detected at: $(date -u +%FT%TZ)"
+                echo "<!-- fp:$fp -->"
+              } > ws_comment.md
+              gh issue comment "$existing" --repo "$REPO" --body-file ws_comment.md
+              echo "Commented on #$existing for $service"
+              continue
+            fi
+
+            title="[$service] WS Connection reset >10/day ($count in last 24h)"
+            {
+              echo "Auto-created by error-watch workflow (bot-strategy#47 threshold monitor)."
+              echo
+              echo "- **Service**: $service"
+              echo "- **Connection resets (last 24h)**: $count"
+              echo "- **Threshold**: 10"
+              echo
+              echo "Source: \`journalctl -u $service --since '24 hours ago' | grep -c 'Connection reset without closing handshake'\`"
+              echo
+              echo "Detected at: $(date -u +%FT%TZ)"
+              echo "<!-- fp:$fp -->"
+            } > ws_body.md
+
+            issue_url=$(gh issue create --repo "$REPO" --title "$title" --body-file ws_body.md --label auto-ws-reset --label "$svc_label")
+            echo "Created $issue_url"
+            add_to_project "$issue_url" "$svc_label"
+          done < ws_resets.tsv
+
+      - name: Escalate stale open auto-error issues to stuck
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+        run: |
+          set -euo pipefail
+
+          # An open auto-error issue that has remained unresolved for >=
+          # STUCK_AGE_MIN minutes is treated as "stuck": a persistent silent
+          # condition (e.g. a stalled WS stream that does not recover), not
+          # a transient warn burst that operators triage and close quickly.
+          # Apply the `stuck` label + a single escalation comment exactly
+          # once per issue so the 5min cron does not spam.
+          # See bot-strategy#347 — distinguishing a 28h silent ETH-orderbook
+          # stall from a 5min WS reconnect cluster was the use case that
+          # motivated this. The 30m count threshold alone could not tell
+          # them apart.
+          STUCK_AGE_MIN=60
+
+          gh label create stuck --repo "$REPO" --color b60205 \
+            --description "Auto-escalated: open auto-error >= ${STUCK_AGE_MIN}min (bot-strategy#347)" 2>/dev/null || true
+
+          # `-label:stuck` filters out already-escalated issues at the
+          # GitHub search layer so we don't re-comment on each cron tick.
+          gh issue list --repo "$REPO" --state open --label auto-error \
+            --search "-label:stuck" \
+            --json number,createdAt --limit 50 \
+            --jq '.[] | "\(.number)\t\(.createdAt)"' \
+            | while IFS=$'\t' read -r num created; do
+              [ -z "$num" ] && continue
+              age_min=$(( ( $(date -u +%s) - $(date -u --date "$created" +%s) ) / 60 ))
+              if [ "$age_min" -ge "$STUCK_AGE_MIN" ]; then
+                echo "Escalating #$num to stuck (age=${age_min}min)"
+                gh issue edit "$num" --repo "$REPO" --add-label stuck
+                {
+                  echo "[STUCK] auto-escalated: this auto-error issue has been open for ${age_min} minutes."
+                  echo
+                  echo "An auto-error issue that remains unresolved past ${STUCK_AGE_MIN} minutes likely reflects a persistent silent condition (e.g. a stalled WS stream that does not recover, a stuck process) rather than a transient warn burst. See bot-strategy#347 for the originating case (28h silent ETH-orderbook stall on Tokyo Extended)."
+                  echo
+                  echo "Detected at: $(date -u +%FT%TZ)"
+                } > stuck.md
+                gh issue comment "$num" --repo "$REPO" --body-file stuck.md
+              fi
+            done

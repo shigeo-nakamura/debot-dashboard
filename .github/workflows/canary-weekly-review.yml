@@ -1,0 +1,60 @@
+name: Canary weekly review
+
+# bot-strategy#376 Phase 5 stage A (skeleton): workflow_dispatch only.
+# Stage C (~2026-05-28) flips on the weekly cron schedule once
+# baseline divergence data exists. Until then, run on demand to
+# validate the script end-to-end and start populating bot-strategy#404.
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 8 * * 1'   # every Monday 08:00 UTC — enable in stage C
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  AWS_REGION: eu-central-1
+  TRACKING_ISSUE: "404"     # bot-strategy#404 "Canary weekly review log"
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    environment: disk-watch
+    steps:
+      - name: Checkout pairtrade
+        uses: actions/checkout@v5
+        with:
+          repository: shigeo-nakamura/pairtrade
+          path: pairtrade
+          token: ${{ secrets.PAIRTRADE_READ_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install boto3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run canary_diff_report.py
+        id: report
+        run: |
+          python3 pairtrade/scripts/canary_diff_report.py --days 7 > /tmp/report.md
+          cat /tmp/report.md
+
+      - name: Post report to tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          gh issue comment "${TRACKING_ISSUE}" \
+            --repo shigeo-nakamura/bot-strategy \
+            --body-file /tmp/report.md

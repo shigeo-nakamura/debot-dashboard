@@ -1,0 +1,251 @@
+name: Disk Watch
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_page_pct:
+        description: 'Temporary page threshold override (1-99) — for smoke-testing the issue-creation path'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  issues: write
+  contents: read
+
+env:
+  WARN_PCT: '70'
+  PAGE_PCT: '85'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: disk-watch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: frankfurt
+            region: eu-central-1
+          - name: tokyo
+            region: ap-northeast-1
+          - name: tokyo-arb
+            region: ap-northeast-1
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Resolve instance ID
+        id: target
+        env:
+          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+          TOKYO_INSTANCE_ID: ${{ secrets.TOKYO_INSTANCE_ID }}
+          TOKYO_ARB_INSTANCE_ID: ${{ secrets.TOKYO_ARB_INSTANCE_ID }}
+        run: |
+          case "${{ matrix.name }}" in
+            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            tokyo)     echo "id=$TOKYO_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            tokyo-arb) echo "id=$TOKYO_ARB_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Run disk check via SSM
+        id: ssm
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.id }}
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/script.sh <<'BASH'
+          set -e
+          df -P /
+          echo "----JOURNAL----"
+          journalctl --disk-usage 2>&1 | head -1
+          echo "----TOPDIRS----"
+          # Skip the SSM agent's orchestration tree — it can hold 10s of K of
+          # subdirs (#342) which makes du -d 1 /var take minutes. The size is
+          # already known/expected and visible via df totals.
+          du -h -d 1 \
+            --exclude='*/amazon/ssm/*' \
+            /var /usr /home /opt 2>/dev/null | sort -rh | head -5
+          BASH
+
+          jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "disk-watch poll (bot-strategy#342)" \
+            --parameters file:///tmp/params.json \
+            --query "Command.CommandId" \
+            --output text)
+          echo "Command ID: $CMD_ID"
+
+          deadline=$(( $(date +%s) + 180 ))
+          while :; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "Status" --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Success) break ;;
+              Cancelled|TimedOut|Failed)
+                echo "::error::SSM command $CMD_ID failed with status $STATUS"
+                aws ssm get-command-invocation \
+                  --command-id "$CMD_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --output text || true
+                exit 1
+                ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::SSM command $CMD_ID stuck in $STATUS after 180s"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          OUT=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" --output text)
+
+          printf '%s\n' "$OUT" > out.txt
+          cat out.txt
+
+          # Parse the row whose mount point is "/", strip trailing %
+          PCT=$(awk '$NF=="/" {gsub("%","",$5); print $5; exit}' out.txt)
+          if [ -z "$PCT" ]; then
+            echo "::error::Could not parse df output"
+            exit 1
+          fi
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+
+          {
+            echo 'output<<DISKWATCH_EOF'
+            cat out.txt
+            echo 'DISKWATCH_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate threshold and report
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+          NAME: ${{ matrix.name }}
+          PCT: ${{ steps.ssm.outputs.pct }}
+          OUTPUT: ${{ steps.ssm.outputs.output }}
+          PAGE_PCT_OVERRIDE: ${{ inputs.force_page_pct }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Route auto-created issues to the matching GitHub Projects v2 board.
+          # `tokyo-arb` host goes to project #4 (xvenue-arb); other hosts
+          # (frankfurt, tokyo) go to project #3 (pairtrade). PROJECTS_TOKEN is
+          # a fine-grained PAT with user-account Projects RW; the default
+          # GITHUB_TOKEN cannot write user-scope projects.
+          add_to_project() {
+            local issue_url="$1" label="$2"
+            if [ -z "${PROJECTS_TOKEN:-}" ]; then
+              echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
+              return 0
+            fi
+            local project_num
+            case "$label" in
+              *tokyo-arb*) project_num=4 ;;
+              *)           project_num=3 ;;
+            esac
+            GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
+              --owner shigeo-nakamura --url "$issue_url" \
+              || echo "::warning::Failed to add $issue_url to project #$project_num"
+          }
+
+          # Allow a workflow_dispatch input to lower the page threshold so the
+          # issue-creation path can be smoke-tested without waiting for a real
+          # incident. Falls back to the workflow-level PAGE_PCT.
+          effective_page="${PAGE_PCT_OVERRIDE:-$PAGE_PCT}"
+
+          if [ "$PCT" -ge "$effective_page" ]; then
+            tier=page
+          elif [ "$PCT" -ge "$WARN_PCT" ]; then
+            tier=warn
+          else
+            tier=ok
+          fi
+
+          {
+            echo "## $NAME — ${PCT}% (tier=$tier)"
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$tier" != "page" ]; then
+            echo "Below page threshold (${effective_page}%) — no issue filed"
+            exit 0
+          fi
+
+          gh label create disk-watch --repo "$REPO" --color b60205 \
+            --description "Auto-created by disk-watch workflow" 2>/dev/null || true
+          host_label="host-$NAME"
+          gh label create "$host_label" --repo "$REPO" --color ededed \
+            --description "Host: $NAME" 2>/dev/null || true
+
+          # One fingerprint per host per day. Subsequent triggers comment on
+          # the open issue rather than spawn duplicates.
+          fp=$(printf '%s\n%s' "$NAME" "$(date -u +%F)" | sha256sum | cut -c1-16)
+
+          # Skip if a closed issue with the same fp was triaged in the last day
+          # (mirrors the dedupe pattern in error-watch.yml; see #108).
+          recently_closed=$(gh issue list --repo "$REPO" --state closed \
+            --label disk-watch --label "$host_label" \
+            --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$recently_closed" ]; then
+            echo "Skip: fp:$fp already handled on closed #$recently_closed"
+            exit 0
+          fi
+
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --label disk-watch --label "$host_label" \
+            --json number --jq '.[0].number // ""')
+
+          body_file=$(mktemp)
+          {
+            echo "Auto-created by disk-watch workflow (bot-strategy#342)."
+            echo
+            echo "- **Host**: \`$NAME\`"
+            echo "- **Used**: ${PCT}% (page threshold: ${effective_page}%)"
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+            echo
+            echo "Detected at: $(date -u +%FT%TZ)"
+            echo "<!-- fp:$fp -->"
+          } > "$body_file"
+
+          if [ -n "$existing" ]; then
+            seen=$(gh issue view "$existing" --repo "$REPO" --json body,comments \
+              --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+              | grep -c "fp:$fp" || true)
+            if [ "$seen" -gt 0 ]; then
+              echo "Skip: fp:$fp already on open #$existing"
+              exit 0
+            fi
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
+            echo "Commented on #$existing"
+          else
+            issue_url=$(gh issue create --repo "$REPO" \
+              --title "[$NAME] Disk usage at ${PCT}% (page threshold)" \
+              --body-file "$body_file" \
+              --label disk-watch --label "$host_label")
+            echo "Created $issue_url"
+            add_to_project "$issue_url" "$host_label"
+          fi

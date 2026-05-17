@@ -1,0 +1,241 @@
+name: Disk Cleanup
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report would-be deletions without actually deleting'
+        type: boolean
+        default: true
+      host:
+        description: 'Limit to one host (frankfurt | tokyo | tokyo-arb); empty = all'
+        type: string
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  WARN_PCT: '70'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    environment: disk-watch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: frankfurt
+            region: eu-central-1
+          - name: tokyo
+            region: ap-northeast-1
+          - name: tokyo-arb
+            region: ap-northeast-1
+    steps:
+      - name: Resolve target / host filter
+        id: target
+        env:
+          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+          TOKYO_INSTANCE_ID: ${{ secrets.TOKYO_INSTANCE_ID }}
+          TOKYO_ARB_INSTANCE_ID: ${{ secrets.TOKYO_ARB_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.host }}" ] && [ "${{ inputs.host }}" != "${{ matrix.name }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Host filter '${{ inputs.host }}' set; skipping ${{ matrix.name }}."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          case "${{ matrix.name }}" in
+            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            tokyo)     echo "id=$TOKYO_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            tokyo-arb) echo "id=$TOKYO_ARB_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Configure AWS credentials
+        if: steps.target.outputs.skip != 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Run cleanup via SSM
+        if: steps.target.outputs.skip != 'true'
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.id }}
+          DRY_RUN: ${{ inputs.dry_run == false && 'false' || 'true' }}
+          NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+
+          # The cleanup script — runs on the target host as root via SSM.
+          # Uniform across hosts: each find no-ops on hosts where the path or
+          # files don't exist (e.g. tokyo-arb has no /opt/debot-extended and
+          # no market_data dumps).
+          cat > /tmp/cleanup.sh <<'BASH'
+          set -e
+          DRY_RUN="${DRY_RUN:-true}"
+          WARN_PCT="${WARN_PCT:-70}"
+
+          echo "==== DISK CLEANUP (dry_run=$DRY_RUN) ===="
+          echo "host: $(hostname), date: $(date -u +%FT%TZ)"
+          echo
+          echo "---- pre ----"
+          df -P /
+          journalctl --disk-usage 2>&1 | head -1
+          echo
+
+          # --- always-on: journal vacuum to 7d
+          echo "[always-on] journalctl --vacuum-time=7d"
+          if [ "$DRY_RUN" = "false" ]; then
+            journalctl --vacuum-time=7d 2>&1 | tail -5 || true
+          else
+            echo "  (dry-run: would vacuum)"
+          fi
+          echo
+
+          # --- always-on: SSM orchestration insurance (-mtime +7)
+          # Defends against the OrchestrationDirectoryCleanup config bug
+          # documented in bot-strategy#342 / feedback_ssm_orchestration_trap.md.
+          # Iterate over ALL */document/orchestration paths, not just the
+          # current instance's: AMI-cloned hosts can carry an orphaned tree
+          # under the source instance's id (e.g. tokyo-arb cloned from tokyo
+          # carries i-015f7f9388cac0a1b/.../orchestration on disk forever
+          # because the live ssm-agent only writes to its own i-029.../).
+          echo "[always-on] SSM orchestration -mtime +7"
+          found_any=0
+          for ssm_dir in /var/lib/amazon/ssm/*/document/orchestration; do
+            [ -d "$ssm_dir" ] || continue
+            found_any=1
+            cnt=$(find "$ssm_dir" -mindepth 1 -maxdepth 1 -type d -mtime +7 2>/dev/null | wc -l)
+            echo "  $ssm_dir: $cnt candidate dirs"
+            if [ "$DRY_RUN" = "false" ] && [ "$cnt" -gt 0 ]; then
+              # nice/ionice — Tokyo had ~34K dirs at +1d (#342); +7d is smaller
+              # but still slow on a hot disk.
+              timeout 600 nice -n 19 ionice -c 3 \
+                find "$ssm_dir" -mindepth 1 -maxdepth 1 -type d -mtime +7 \
+                  -exec rm -rf {} + 2>&1 | tail -3 || true
+              echo "  done"
+            fi
+          done
+          if [ "$found_any" = "0" ]; then
+            echo "  (no orchestration dir found)"
+          fi
+          echo
+
+          # --- threshold check (warn tier = 70%)
+          disk_pct=$(df -P / | awk 'NR==2 {gsub("%",""); print $5}')
+          echo "==== threshold: current=${disk_pct}%, warn=${WARN_PCT}% ===="
+          if [ "$disk_pct" -lt "$WARN_PCT" ]; then
+            echo "  below threshold — skipping threshold-only cleanup"
+            echo
+            echo "---- post ----"
+            df -P /
+            journalctl --disk-usage 2>&1 | head -1
+            exit 0
+          fi
+
+          # --- threshold-only: Lighter dumps (7d retention)
+          # Glob explicitly excludes the in-progress current-day file
+          # market_data_btceth.jsonl (no date) and the never-delete state
+          # files (different names entirely).
+          for d in /opt/debot; do
+            if [ -d "$d" ]; then
+              cnt=$(find "$d" -maxdepth 1 -name 'market_data_btceth_[0-9]*.jsonl' -mtime +7 2>/dev/null | wc -l)
+              bytes=$(find "$d" -maxdepth 1 -name 'market_data_btceth_[0-9]*.jsonl' -mtime +7 -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+              echo "[threshold] $d Lighter dumps >7d: $cnt files, ${bytes} bytes"
+              if [ "$DRY_RUN" = "false" ] && [ "$cnt" -gt 0 ]; then
+                find "$d" -maxdepth 1 -name 'market_data_btceth_[0-9]*.jsonl' -mtime +7 -delete
+                echo "  deleted"
+              fi
+            fi
+          done
+
+          # --- threshold-only: Extended dumps (14d retention)
+          # Carve-out per bot-strategy#345: post-#134 dumps are the only
+          # reliable BT input for Extended and there's no S3 mirror yet.
+          for d in /opt/debot-extended; do
+            if [ -d "$d" ]; then
+              cnt=$(find "$d" -maxdepth 1 -name 'market_data_btceth_extended_[0-9]*.jsonl' -mtime +14 2>/dev/null | wc -l)
+              bytes=$(find "$d" -maxdepth 1 -name 'market_data_btceth_extended_[0-9]*.jsonl' -mtime +14 -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+              echo "[threshold] $d Extended dumps >14d: $cnt files, ${bytes} bytes"
+              if [ "$DRY_RUN" = "false" ] && [ "$cnt" -gt 0 ]; then
+                find "$d" -maxdepth 1 -name 'market_data_btceth_extended_[0-9]*.jsonl' -mtime +14 -delete
+                echo "  deleted"
+              fi
+            fi
+          done
+
+          echo
+          echo "---- post ----"
+          df -P /
+          journalctl --disk-usage 2>&1 | head -1
+          BASH
+
+          # Ship the script to the host as base64 to avoid heredoc-quoting
+          # gymnastics inside the JSON parameters payload.
+          B64=$(base64 -w0 /tmp/cleanup.sh)
+
+          jq -n \
+            --arg b64 "$B64" \
+            --arg dry "$DRY_RUN" \
+            --arg warn "$WARN_PCT" \
+            '{commands: [
+               ("echo " + $b64 + " | base64 -d > /tmp/cleanup.sh"),
+               ("DRY_RUN=" + $dry + " WARN_PCT=" + $warn + " bash /tmp/cleanup.sh")
+             ]}' > /tmp/params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "disk-cleanup ${NAME} (dry_run=${DRY_RUN}, bot-strategy#345)" \
+            --parameters file:///tmp/params.json \
+            --query "Command.CommandId" \
+            --output text)
+          echo "Command ID: $CMD_ID"
+
+          # Cleanup may take a while (SSM orchestration rm-rf, find-mtime
+          # scans). 12 min upper bound matches the in-script `timeout 600`
+          # plus headroom for journal vacuum + finds.
+          deadline=$(( $(date +%s) + 720 ))
+          while :; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "Status" --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Success) break ;;
+              Cancelled|TimedOut|Failed)
+                echo "::error::SSM command $CMD_ID failed: $STATUS"
+                aws ssm get-command-invocation \
+                  --command-id "$CMD_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --output text || true
+                exit 1
+                ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::SSM command $CMD_ID stuck in $STATUS after 720s"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          OUT=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" --output text)
+
+          {
+            echo "## $NAME — dry_run=$DRY_RUN"
+            echo
+            echo '```'
+            printf '%s\n' "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          printf '%s\n' "$OUT"
