@@ -17,24 +17,11 @@ targets:
     service: debot-pair-btceth-extended
     region: ap-northeast-1
     status_path: /home/ec2-user/debot_status/debot-pair-btceth-ext/status.json
-  # Tokyo pairtrade on Lighter (bot-strategy#218). One target per A/B/C
-  # variant; service name matches Frankfurt's debot-pair-btceth so the
-  # consolidated single-process unit is reused unchanged.
-  - name: debot-pair-btceth-tokyo-a
-    instance_id: i-015f7f9388cac0a1b
-    service: debot-pair-btceth
-    region: ap-northeast-1
-    status_path: /home/ec2-user/debot_status/debot-pair-btceth-a/status.json
-  - name: debot-pair-btceth-tokyo-b
-    instance_id: i-015f7f9388cac0a1b
-    service: debot-pair-btceth
-    region: ap-northeast-1
-    status_path: /home/ec2-user/debot_status/debot-pair-btceth-b/status.json
-  - name: debot-pair-btceth-tokyo-c
-    instance_id: i-015f7f9388cac0a1b
-    service: debot-pair-btceth
-    region: ap-northeast-1
-    status_path: /home/ec2-user/debot_status/debot-pair-btceth-c/status.json
+  # Tokyo pairtrade on Lighter (bot-strategy#218) — RETIRED 2026-05-18 (#433).
+  # The Tokyo Lighter A/B/C bots stayed in DRY_RUN throughout their life and
+  # are being decommissioned alongside the debot-tokyo instance teardown.
+  # Frankfurt Lighter (debot-pair-btceth A/B/C on i-0c08fba996bc21879) is the
+  # only live Lighter pairtrade fleet now.
 # Per-target `source: s3` (bot-strategy#343) reads status.json directly
 # from S3 instead of via SSM SendCommand. The bot must have its
 # STATUS_S3_BUCKET / STATUS_S3_KEY_PREFIX env vars set so it mirrors
