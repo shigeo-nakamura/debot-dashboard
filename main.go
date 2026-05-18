@@ -7,11 +7,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,20 +18,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"gopkg.in/yaml.v3"
-	"io"
 )
 
 const (
 	defaultPollIntervalSecs = 20
 	commandTimeout          = 15 * time.Second
-	commandPollInterval     = 500 * time.Millisecond
-	// Status objects older than this are reported as "stale" — replaces
-	// the SSM `systemctl is-active` probe when the target source is
-	// "s3" (#343). Bot status writers emit at 60s cadence, so 180s gives
-	// 3× headroom before the dashboard flips a target to stale.
+	// Status objects older than this are reported as "stale". Bot
+	// status writers emit at 60s cadence, so 180s gives 3× headroom
+	// before the dashboard flips a target to stale (bot-strategy#343).
 	s3StatusStaleSecs = 180
 )
 
@@ -52,24 +46,19 @@ type TargetConfig struct {
 	Name       string `yaml:"name"`
 	InstanceID string `yaml:"instance_id"`
 	Service    string `yaml:"service"`
-	StatusPath string `yaml:"status_path"`
 	Region     string `yaml:"region"`
-	// Source selects how the dashboard reads this target's status.json.
-	//   "" or "ssm" → original SSM SendCommand probe (back-compat).
-	//   "s3"        → read from S3 (#343); bot mirrors via STATUS_S3_*.
-	// Per-target so cutover happens one bot at a time.
-	Source string `yaml:"source"`
-	// S3-source-only: bucket name and full key for the bot's
-	// `<id>.json` object. Sibling files (equity_history.jsonl) are
-	// derived by suffix-replacing the key.
+	// Bucket name and full key for the bot's `<id>.json` object.
+	// Sibling files (equity_history.jsonl) are derived by suffix-
+	// replacing the key. The bot mirrors `status.json` to this key
+	// via its `STATUS_S3_BUCKET` / `STATUS_S3_KEY_PREFIX` env vars.
 	S3Bucket string `yaml:"s3_bucket"`
 	S3Key    string `yaml:"s3_key"`
-	// S3-source-only: AWS region of the bucket. Optional; falls back
-	// to `region` when empty for back-compat. Split out so that
-	// `region` can keep its display meaning ("where the bot runs")
-	// even when the bucket lives elsewhere — otherwise a Tokyo bot
-	// writing to a Frankfurt bucket would have to advertise itself
-	// as Frankfurt and end up under the wrong region group on the FE.
+	// AWS region of the bucket. Optional; falls back to `region` when
+	// empty for back-compat. Split out so `region` can keep its display
+	// meaning ("where the bot runs") even when the bucket lives
+	// elsewhere — otherwise a Tokyo bot writing to a Frankfurt bucket
+	// would have to advertise itself as Frankfurt and end up under the
+	// wrong region group on the FE.
 	S3Region string `yaml:"s3_region"`
 }
 
@@ -105,16 +94,15 @@ type StatusData struct {
 	TS             int64            `json:"ts"`
 	UpdatedAt      string           `json:"updated_at"`
 	// ProcessStartedAt is the bot process boot time (epoch s),
-	// emitted by both pairtrade and xvenue-arb since #343 phase 1.
-	// Replaces the SSM `systemctl ActiveEnterTimestamp` probe when
-	// the target's source is "s3". Optional (zero in pre-#343 bots).
+	// self-reported by both pairtrade and xvenue-arb since
+	// bot-strategy#343.
 	ProcessStartedAt int64 `json:"process_started_at,omitempty"`
-	// WsReset24hCount mirrors the dashboard's old journalctl
-	// `Connection reset...` probe via #343. Bot self-reports the
-	// 24h count.
+	// WsReset24hCount is the count of `Connection reset without
+	// closing handshake` events over the last 24h, self-reported by
+	// the bot via bot-strategy#343.
 	WsReset24hCount  uint64 `json:"ws_reset_24h_count,omitempty"`
-	// KillSwitchActive mirrors the SSM `cat /opt/debot/KILL_SWITCH`
-	// probe via #343.
+	// KillSwitchActive reports whether `/opt/debot/KILL_SWITCH`
+	// exists on the bot host, self-reported via bot-strategy#343.
 	KillSwitchActive bool   `json:"kill_switch_active,omitempty"`
 	ID             *string          `json:"id"`
 	Agent          *string          `json:"agent"`
@@ -297,22 +285,19 @@ type TargetStatus struct {
 	Name             string      `json:"name"`
 	InstanceID       string      `json:"instance_id"`
 	Service          string      `json:"service"`
-	StatusPath       string      `json:"status_path"`
 	Region           string      `json:"region"`
 	ServiceStatus    string      `json:"service_status"`
 	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
 	Status           *StatusData `json:"status,omitempty"`
 	// WsReset24h is the count of `Connection reset without closing handshake`
-	// WebSocket events over the last 24 hours. For source=s3 targets the bot
-	// self-reports via `WsReset24hCount` in status.json (#343); for source=ssm
-	// targets the dashboard derives it via journalctl. Threshold for alerting
-	// is 10/day per bot-strategy#47.
+	// WebSocket events over the last 24 hours, self-reported by the bot
+	// via `WsReset24hCount` in status.json (bot-strategy#343). Alerting
+	// threshold is 10/day per bot-strategy#47.
 	WsReset24h       *int      `json:"ws_reset_24h,omitempty"`
-	// KillSwitchActive reports whether /opt/debot/KILL_SWITCH exists on the
-	// target instance. For source=s3 targets the bot self-reports the field
-	// in status.json (#343); for source=ssm targets the dashboard stats the
-	// file directly. True → operator-triggered halt file is present; see
-	// bot-strategy#185.
+	// KillSwitchActive reports whether `/opt/debot/KILL_SWITCH` exists
+	// on the target instance, self-reported by the bot via status.json
+	// (bot-strategy#343). True → operator-triggered halt file is
+	// present; see bot-strategy#185.
 	KillSwitchActive *bool     `json:"kill_switch_active,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	CheckedAt        time.Time `json:"checked_at"`
@@ -341,30 +326,9 @@ func (c *StatusCache) Get() DashboardSnapshot {
 	return c.snapshot
 }
 
-type ClientPool struct {
-	mu      sync.Mutex
-	clients map[string]*ssm.Client
-}
-
-func (p *ClientPool) Client(ctx context.Context, region string) (*ssm.Client, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if client, ok := p.clients[region]; ok {
-		return client, nil
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, err
-	}
-	client := ssm.NewFromConfig(cfg)
-	p.clients[region] = client
-	return client, nil
-}
-
-// S3ClientPool serves the same role for the `source: s3` path
-// (bot-strategy#343). Region is the bucket's region — pairtrade /
-// xvenue-arb both write to `debot-dashboard` in eu-central-1, so all
-// targets typically share one entry.
+// S3ClientPool is keyed on the bucket's region. pairtrade / xvenue-arb
+// both write to `debot-dashboard` in eu-central-1 today, so all targets
+// typically share one entry. bot-strategy#343.
 type S3ClientPool struct {
 	mu      sync.Mutex
 	clients map[string]*s3.Client
@@ -405,13 +369,12 @@ func main() {
 	}
 
 	cache := &StatusCache{}
-	pool := &ClientPool{clients: map[string]*ssm.Client{}}
 	s3pool := &S3ClientPool{clients: map[string]*s3.Client{}}
 	mc := newMetricsCollector()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollLoop(ctx, cfg, pool, s3pool, cache, mc)
+	go pollLoop(ctx, cfg, s3pool, cache, mc)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", mc.Handler())
@@ -419,7 +382,7 @@ func main() {
 		rangeParam := strings.TrimSpace(r.URL.Query().Get("range"))
 		includeHistory, cutoffMs := historyCutoff(rangeParam)
 		if includeHistory {
-			snapshot := fetchAll(ctx, cfg, pool, s3pool, true, cutoffMs)
+			snapshot := fetchAll(ctx, cfg, s3pool, true, cutoffMs)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(snapshot)
 			return
@@ -479,24 +442,14 @@ func normalizeConfig(cfg *Config) error {
 		if target.Region == "" {
 			return fmt.Errorf("targets[%d] missing region", i)
 		}
-		// S3-source targets need bucket+key; SSM-source targets need
-		// instance_id+status_path. instance_id and status_path are
-		// kept on S3 targets for FE rendering / labeling but are no
-		// longer required to reach the bot.
-		if strings.EqualFold(target.Source, "s3") {
-			if target.S3Bucket == "" {
-				return fmt.Errorf("targets[%d] (source=s3) missing s3_bucket", i)
-			}
-			if target.S3Key == "" {
-				return fmt.Errorf("targets[%d] (source=s3) missing s3_key", i)
-			}
-		} else {
-			if target.InstanceID == "" {
-				return fmt.Errorf("targets[%d] missing instance_id", i)
-			}
-			if target.StatusPath == "" {
-				return fmt.Errorf("targets[%d] missing status_path", i)
-			}
+		// Bucket + key are required; the dashboard always reads from
+		// S3. instance_id is kept for FE labeling and disk-watch
+		// disambiguation but is no longer required to reach the bot.
+		if target.S3Bucket == "" {
+			return fmt.Errorf("targets[%d] missing s3_bucket", i)
+		}
+		if target.S3Key == "" {
+			return fmt.Errorf("targets[%d] missing s3_key", i)
 		}
 	}
 	return nil
@@ -555,10 +508,10 @@ func matchBasicAuth(user, pass string, auth BasicAuth) bool {
 	return userMatch && passMatch
 }
 
-func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3ClientPool, cache *StatusCache, mc *metricsCollector) {
+func pollLoop(ctx context.Context, cfg Config, s3pool *S3ClientPool, cache *StatusCache, mc *metricsCollector) {
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
 	fetch := func() {
-		snapshot := fetchAll(ctx, cfg, pool, s3pool, false, 0)
+		snapshot := fetchAll(ctx, cfg, s3pool, false, 0)
 		cache.Set(snapshot)
 		if mc != nil {
 			mc.Update(snapshot)
@@ -577,7 +530,7 @@ func pollLoop(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3Clien
 	}
 }
 
-func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) DashboardSnapshot {
+func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) DashboardSnapshot {
 	results := make([]TargetStatus, len(cfg.Targets))
 	var wg sync.WaitGroup
 	for i, target := range cfg.Targets {
@@ -586,11 +539,7 @@ func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3Clien
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if strings.EqualFold(target.Source, "s3") {
-				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
-			} else {
-				results[i] = fetchTarget(ctx, target, pool, includeHistory, cutoffMs)
-			}
+			results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 		}()
 	}
 	wg.Wait()
@@ -601,74 +550,28 @@ func fetchAll(ctx context.Context, cfg Config, pool *ClientPool, s3pool *S3Clien
 	}
 }
 
-func fetchTarget(ctx context.Context, target TargetConfig, pool *ClientPool, includeHistory bool, cutoffMs int64) TargetStatus {
-	result := TargetStatus{
-		Name:       target.Name,
-		InstanceID: target.InstanceID,
-		Service:    target.Service,
-		StatusPath: target.StatusPath,
-		Region:     target.Region,
-		CheckedAt:  time.Now(),
-	}
-	client, err := pool.Client(ctx, target.Region)
-	if err != nil {
-		result.Error = fmt.Sprintf("ssm client error: %v", err)
-		return result
-	}
-
-	cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-
-	stdout, stderr, err := runCommand(cmdCtx, client, target, includeHistory)
-	if err != nil {
-		result.Error = fmt.Sprintf("ssm command error: %v", err)
-		if strings.TrimSpace(stderr) != "" {
-			result.Error = fmt.Sprintf("%s (stderr: %s)", result.Error, strings.TrimSpace(stderr))
-		}
-		return result
-	}
-
-	serviceStatus, serviceStart, status, wsReset, killSwitch, parseErr := parseOutput(stdout, includeHistory, cutoffMs)
-	result.ServiceStatus = serviceStatus
-	if serviceStart != nil {
-		utc := serviceStart.UTC()
-		result.ServiceStartedAt = &utc
-	}
-	result.Status = status
-	result.WsReset24h = wsReset
-	result.KillSwitchActive = killSwitch
-	if parseErr != nil {
-		result.Error = fmt.Sprintf("parse error: %v", parseErr)
-	}
-	if strings.TrimSpace(stderr) != "" && result.Error == "" {
-		result.Error = fmt.Sprintf("stderr: %s", strings.TrimSpace(stderr))
-	}
-	return result
-}
-
 // fetchTargetS3 reads `<bucket>/<key>` (= status.json mirrored by the
-// bot-side `STATUS_S3_*` path, bot-strategy#343 phase 1) plus, when
+// bot-side `STATUS_S3_*` path, bot-strategy#343) plus, when
 // `includeHistory` is set, the sibling `*.equity_history.jsonl`.
 //
-// Service liveness moves from `systemctl is-active` to "object age <
-// s3StatusStaleSecs". This is strictly more accurate than the SSM
-// probe — the latter says "active" even when the bot is hung and
-// not making progress, while object staleness catches both crashes
-// and stalls.
+// Service liveness is derived from object freshness: an object older
+// than `s3StatusStaleSecs` flips the target to "stale". This is
+// strictly more accurate than the legacy `systemctl is-active` probe —
+// the latter said "active" even when the bot was hung and not making
+// progress, while object staleness catches both crashes and stalls.
 //
 // `KillSwitchActive` and `WsReset24h` come straight from the JSON
-// payload now (#343 phase 2 fields), no separate probes needed.
+// payload (#343), no separate probes needed.
 func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) TargetStatus {
 	result := TargetStatus{
 		Name:       target.Name,
 		InstanceID: target.InstanceID,
 		Service:    target.Service,
-		StatusPath: target.StatusPath,
 		Region:     target.Region,
 		CheckedAt:  time.Now(),
 	}
 	if target.S3Bucket == "" || target.S3Key == "" {
-		result.Error = "s3 source target missing s3_bucket / s3_key"
+		result.Error = "target missing s3_bucket / s3_key"
 		return result
 	}
 	bucketRegion := target.S3Region
@@ -754,161 +657,6 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 	return result
 }
 
-func runCommand(ctx context.Context, client *ssm.Client, target TargetConfig, includeHistory bool) (string, string, error) {
-	cmd := buildCommand(target, includeHistory)
-	sendOut, err := client.SendCommand(ctx, &ssm.SendCommandInput{
-		DocumentName: aws.String("AWS-RunShellScript"),
-		InstanceIds:  []string{target.InstanceID},
-		Parameters: map[string][]string{
-			"commands": {cmd},
-		},
-	})
-	if err != nil {
-		return "", "", err
-	}
-	commandID := aws.ToString(sendOut.Command.CommandId)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", "", ctx.Err()
-		default:
-		}
-		out, err := client.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
-			CommandId:  aws.String(commandID),
-			InstanceId: aws.String(target.InstanceID),
-		})
-		if err != nil {
-			if strings.Contains(err.Error(), "InvocationDoesNotExist") {
-				time.Sleep(commandPollInterval)
-				continue
-			}
-			return "", "", err
-		}
-		switch out.Status {
-		case ssmtypes.CommandInvocationStatusSuccess:
-			return aws.ToString(out.StandardOutputContent), aws.ToString(out.StandardErrorContent), nil
-		case ssmtypes.CommandInvocationStatusCancelled,
-			ssmtypes.CommandInvocationStatusFailed,
-			ssmtypes.CommandInvocationStatusTimedOut:
-			return aws.ToString(out.StandardOutputContent), aws.ToString(out.StandardErrorContent),
-				fmt.Errorf("command status: %s", out.Status)
-		default:
-			time.Sleep(commandPollInterval)
-		}
-	}
-}
-
-func buildCommand(target TargetConfig, includeHistory bool) string {
-	service := shellEscape(target.Service)
-	path := shellEscape(target.StatusPath)
-	// awk is used (instead of `grep -c ... || echo 0`) so the count prints
-	// exactly once even when there are zero matches — `grep -c` on empty
-	// input exits 1, which would otherwise double-print via the `||` fallback.
-	cmd := fmt.Sprintf(
-		"systemctl is-active %s 2>/dev/null || true; echo \"__START__\"; systemctl show -p ActiveEnterTimestamp --value %s 2>/dev/null || true; echo \"__STATUS__\"; if [ -f %s ]; then cat %s; fi; echo \"__WS_RESET__\"; journalctl -u %s --since '24 hours ago' --no-pager 2>/dev/null | awk '/Connection reset without closing handshake/ {c++} END {print c+0}'; echo \"__KILL_SWITCH__\"; if [ -f /opt/debot/KILL_SWITCH ]; then echo 1; else echo 0; fi",
-		service,
-		service,
-		path,
-		path,
-		service,
-	)
-	if includeHistory {
-		historyPath := shellEscape(equityHistoryPath(target.StatusPath))
-		cmd = fmt.Sprintf("%s; echo \"__HISTORY__\"; if [ -f %s ]; then cat %s; fi", cmd, historyPath, historyPath)
-	}
-	return cmd
-}
-
-func parseOutput(output string, includeHistory bool, cutoffMs int64) (string, *time.Time, *StatusData, *int, *bool, error) {
-	parts := strings.SplitN(output, "__STATUS__", 2)
-	if len(parts) != 2 {
-		return strings.TrimSpace(output), nil, nil, nil, nil, errors.New("missing status marker")
-	}
-	startParts := strings.SplitN(parts[0], "__START__", 2)
-	serviceStatus := strings.TrimSpace(startParts[0])
-	var serviceStart *time.Time
-	if len(startParts) == 2 {
-		serviceStart = parseServiceStart(strings.TrimSpace(startParts[1]))
-	}
-
-	// Tail payload after __STATUS__:
-	//   status.json __WS_RESET__ count [__KILL_SWITCH__ 0|1] [__HISTORY__ equity.jsonl]
-	tail := strings.TrimSpace(parts[1])
-	payload := tail
-	wsResetPayload := ""
-	killSwitchPayload := ""
-	historyPayload := ""
-
-	if idx := strings.Index(tail, "__WS_RESET__"); idx >= 0 {
-		payload = strings.TrimSpace(tail[:idx])
-		tail = tail[idx+len("__WS_RESET__"):]
-	}
-	if idx := strings.Index(tail, "__KILL_SWITCH__"); idx >= 0 {
-		wsResetPayload = strings.TrimSpace(tail[:idx])
-		tail = tail[idx+len("__KILL_SWITCH__"):]
-	}
-	if idx := strings.Index(tail, "__HISTORY__"); idx >= 0 {
-		if killSwitchPayload == "" && wsResetPayload == "" {
-			// Back-compat: server without __KILL_SWITCH__ marker; tail between
-			// __WS_RESET__ and __HISTORY__ is still ws-reset count only.
-			wsResetPayload = strings.TrimSpace(tail[:idx])
-		} else {
-			killSwitchPayload = strings.TrimSpace(tail[:idx])
-		}
-		tail = tail[idx+len("__HISTORY__"):]
-		historyPayload = strings.TrimSpace(tail)
-	} else if killSwitchPayload == "" && wsResetPayload == "" {
-		wsResetPayload = strings.TrimSpace(tail)
-	} else {
-		killSwitchPayload = strings.TrimSpace(tail)
-	}
-
-	if payload == "" {
-		return serviceStatus, serviceStart, nil, nil, nil, errors.New("status.json is empty")
-	}
-	var status StatusData
-	if err := json.Unmarshal([]byte(payload), &status); err != nil {
-		return serviceStatus, serviceStart, nil, nil, nil, err
-	}
-	if includeHistory {
-		status.EquityHistory = parseEquityHistory(historyPayload, cutoffMs)
-	}
-
-	var wsReset *int
-	if wsResetPayload != "" {
-		// wsResetPayload may include additional shell chatter; scan the last
-		// non-empty line as the count (journalctl | grep -c prints a single
-		// integer).
-		lines := strings.Split(wsResetPayload, "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if line == "" {
-				continue
-			}
-			if n, err := strconv.Atoi(line); err == nil {
-				wsReset = &n
-			}
-			break
-		}
-	}
-
-	var killSwitch *bool
-	if killSwitchPayload != "" {
-		lines := strings.Split(killSwitchPayload, "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if line == "" {
-				continue
-			}
-			active := line == "1"
-			killSwitch = &active
-			break
-		}
-	}
-	return serviceStatus, serviceStart, &status, wsReset, killSwitch, nil
-}
-
 func historyCutoff(rangeParam string) (bool, int64) {
 	if rangeParam == "" {
 		return false, 0
@@ -926,15 +674,6 @@ func historyCutoff(rangeParam string) (bool, int64) {
 	default:
 		return true, now.Add(-24 * time.Hour).UnixMilli()
 	}
-}
-
-func equityHistoryPath(statusPath string) string {
-	ext := filepath.Ext(statusPath)
-	base := strings.TrimSuffix(statusPath, ext)
-	if base == "" {
-		base = statusPath
-	}
-	return base + ".equity_history.jsonl"
 }
 
 func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {
@@ -960,28 +699,3 @@ func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {
 	return points
 }
 
-func shellEscape(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func parseServiceStart(raw string) *time.Time {
-	text := strings.TrimSpace(raw)
-	if text == "" || strings.EqualFold(text, "n/a") {
-		return nil
-	}
-	layouts := []string{
-		"Mon 2006-01-02 15:04:05 MST",
-		time.RFC1123,
-		time.RFC1123Z,
-		time.RFC3339,
-	}
-	for _, layout := range layouts {
-		if parsed, err := time.Parse(layout, text); err == nil {
-			return &parsed
-		}
-	}
-	return nil
-}
