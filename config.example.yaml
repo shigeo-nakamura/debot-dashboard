@@ -1,45 +1,32 @@
 region: eu-central-1
 poll_interval_secs: 20
+# Each target reads status.json from S3. The bot must have its
+# STATUS_S3_BUCKET / STATUS_S3_KEY_PREFIX env vars set so it mirrors
+# `status.json` to the same key — see bot-strategy#343.
+#
+# `region` keeps its display meaning ("where the bot runs", used for
+# FE region grouping); `s3_region` selects the bucket's region — only
+# needed when it differs from `region`. The shared `debot-dashboard`
+# bucket lives in eu-central-1 today, so Tokyo targets typically set
+# `region: ap-northeast-1` + `s3_region: eu-central-1`.
+#
+# Service liveness is derived from object freshness — a status object
+# older than 180 s flips the target to "stale". No probe traffic
+# touches the bot host.
 targets:
-  - name: debot00
+  - name: Pair-A (Frankfurt)
     instance_id: i-0c08fba996bc21879
-    service: debot00
-    status_path: /home/ec2-user/debot_status/debot00/status.json
-  - name: debot01
-    instance_id: i-0c08fba996bc21879
-    service: debot01
-    status_path: /home/ec2-user/debot_status/debot01/status.json
-  # Tokyo pairtrade on Extended (bot-strategy#123). Per-target `region`
-  # overrides the top-level region so one dashboard monitors both Frankfurt
-  # and Tokyo via SSM.
-  - name: debot-pair-btceth-ext
+    service: debot-pair-btceth
+    s3_bucket: debot-dashboard
+    s3_region: eu-central-1
+    s3_key: debot/status/frankfurt/debot-pair-btceth-a.json
+  - name: Extended (Tokyo)
     instance_id: i-015f7f9388cac0a1b
     service: debot-pair-btceth-extended
     region: ap-northeast-1
-    status_path: /home/ec2-user/debot_status/debot-pair-btceth-ext/status.json
-  # Tokyo pairtrade on Lighter (bot-strategy#218) — RETIRED 2026-05-18 (#433).
-  # The Tokyo Lighter A/B/C bots stayed in DRY_RUN throughout their life and
-  # are being decommissioned alongside the debot-tokyo instance teardown.
-  # Frankfurt Lighter (debot-pair-btceth A/B/C on i-0c08fba996bc21879) is the
-  # only live Lighter pairtrade fleet now.
-# Per-target `source: s3` (bot-strategy#343) reads status.json directly
-# from S3 instead of via SSM SendCommand. The bot must have its
-# STATUS_S3_BUCKET / STATUS_S3_KEY_PREFIX env vars set so it mirrors
-# status.json to the same key. `region` keeps its usual meaning
-# ("where the bot runs", used for FE region grouping); `s3_region`
-# selects the bucket's region (always eu-central-1 for the shared
-# `debot-dashboard` bucket today). Service liveness is derived from
-# object freshness — a status object older than ~3 min flips the
-# target to "stale" without an SSM probe.
-#
-#   - name: debot-pair-btceth-tokyo-a
-#     instance_id: i-015f7f9388cac0a1b
-#     service: debot-pair-btceth
-#     region: ap-northeast-1
-#     source: s3
-#     s3_bucket: debot-dashboard
-#     s3_region: eu-central-1
-#     s3_key: debot/status/tokyo/debot-pair-btceth-a.json
+    s3_bucket: debot-dashboard
+    s3_region: eu-central-1
+    s3_key: debot-extended/status/tokyo/debot-pair-btceth-ext.json
 # auth:
 #   username: admin
 #   password: change-me
