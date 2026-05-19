@@ -1003,12 +1003,33 @@ const renderRiskPanel = (card, data) => {
   let anyVisible = false;
 
   // Daily DD bar.
+  //
+  // Display uses **equity-based** daily DD: `-pnl_today / session_start_equity * 10000`.
+  // This is the same accounting basis as the Session DD bar below (peak →
+  // current equity drop), so the two bars are directly comparable.
+  //
+  // The bot's halt logic (`risk_manager.block_reason` → `DailyDdHalted`)
+  // continues to use the gross `daily_risk.daily_pnl_bps` field, which is
+  // the sum of clean-cycle realised PnL (post-fees but excluding
+  // EmergencyFlattening recovery cost — those record_close with 0.0
+  // placeholder per xvenue-arb live.rs:677-693). That's intentional: the
+  // halt gate asks "is the trading strategy itself bleeding?", while the
+  // dashboard bar asks "what has happened to today's capital?". The two
+  // diverge most on xvenue-arb during high-EmergencyFlattening days
+  // (pairtrade stays close to equity-equal). Displaying the equity view
+  // matches the operator's intuition with `PnL today` shown elsewhere on
+  // the card. The halt indicator pill (`daily-dd-halt`, set above) still
+  // reflects the bot's halt state correctly.
   const dailyBar = card.querySelector('[data-field="daily-dd-bar"]');
   if (dailyBar) {
     const dr = data.daily_risk;
     const eff = dr ? dr.effective_max_daily_loss_bps : 0;
-    if (dr && eff > 0) {
-      const lossBps = dr.daily_pnl_bps < 0 ? -dr.daily_pnl_bps : 0;
+    const startEq = dr ? dr.session_start_equity : 0;
+    if (dr && eff > 0 && startEq > 0) {
+      const lossBps =
+        typeof data.pnl_today === "number" && data.pnl_today < 0
+          ? -(data.pnl_today / startEq) * 10000
+          : 0;
       const pct = clampPct((lossBps / eff) * 100);
       setRiskBar(card, "daily-dd", `${lossBps.toFixed(0)} / ${eff.toFixed(0)} bps (${pct.toFixed(0)}%)`, pct);
       dailyBar.hidden = false;
