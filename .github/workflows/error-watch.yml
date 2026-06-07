@@ -292,9 +292,12 @@ jobs:
               || echo "::warning::Failed to add $issue_url to project #$project_num"
           }
 
-          # Alert when `Connection reset without closing handshake` exceeds
-          # 10/day per service, per bot-strategy#47. Under the threshold the
-          # dashboard pill surfaces the count but no issue is created.
+          # Alert when WS reset events exceed 10/day per service, per
+          # bot-strategy#47. The count is self-reported by the bot
+          # (status.json `ws_reset_24h_count`); see
+          # `pairtrade/src/error_counter/classification.rs::is_ws_reset_event`
+          # for the matched phrases. Under the threshold the dashboard
+          # pill surfaces the count but no issue is created.
           # Skip targets whose bot has flagged an ongoing maintenance window
           # (see bot-strategy#199) — WS resets are the normal manifestation
           # of a scheduled upstream outage.
@@ -368,7 +371,7 @@ jobs:
               echo "- **Connection resets (last 24h)**: $count"
               echo "- **Threshold**: 10"
               echo
-              echo "Source: \`journalctl -u $service --since '24 hours ago' | grep -c 'Connection reset without closing handshake'\`"
+              echo "Source: self-reported \`ws_reset_24h_count\` field on status.json (see \`pairtrade/src/error_counter/classification.rs::is_ws_reset_event\` for the matched phrases — covers both Extended SDK \`Connection reset without closing handshake\` and Lighter / tungstenite \`WebSocket error: IO error: Connection reset\` primary lines)."
               echo
               echo "Detected at: $(date -u +%FT%TZ)"
               echo "<!-- fp:$fp -->"
