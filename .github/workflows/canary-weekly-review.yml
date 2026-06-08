@@ -1,14 +1,12 @@
 name: Canary weekly review
 
-# bot-strategy#376 Phase 5 stage A (skeleton): workflow_dispatch only.
-# Stage C (~2026-05-28) flips on the weekly cron schedule once
-# baseline divergence data exists. Until then, run on demand to
-# validate the script end-to-end and start populating bot-strategy#404.
+# bot-strategy#376 Phase 5: weekly report plus ALERT issue creation.
+# WATCH remains tracking-only; ALERT opens a deduplicated actionable issue.
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: '0 8 * * 1'   # every Monday 08:00 UTC — enable in stage C
+  schedule:
+    - cron: '0 8 * * 1'
 
 permissions:
   id-token: write
@@ -50,6 +48,9 @@ jobs:
         run: |
           python3 pairtrade/scripts/canary_diff_report.py --days 7 > /tmp/report.md
           cat /tmp/report.md
+          verdict=$(sed -nE 's/.*Verdict.*\*\*(PASS|WATCH|ALERT)\*\*.*/\1/p' /tmp/report.md | head -1)
+          test -n "$verdict"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
       - name: Post report to tracking issue
         env:
@@ -58,3 +59,28 @@ jobs:
           gh issue comment "${TRACKING_ISSUE}" \
             --repo shigeo-nakamura/bot-strategy \
             --body-file /tmp/report.md
+
+      - name: Open deduplicated issue on ALERT
+        if: steps.report.outputs.verdict == 'ALERT'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+        run: |
+          set -euo pipefail
+          title="[Canary (Frankfurt)] Weekly divergence ALERT"
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // ""')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file /tmp/report.md
+            url="https://github.com/$REPO/issues/$existing"
+          else
+            gh label create auto-error --repo "$REPO" --color d73a4a \
+              --description "Auto-created by error-watch workflow" 2>/dev/null || true
+            gh label create svc-canary-frankfurt --repo "$REPO" --color ededed \
+              --description "Service: Canary (Frankfurt)" 2>/dev/null || true
+            url=$(gh issue create --repo "$REPO" --title "$title" \
+              --label auto-error --label svc-canary-frankfurt \
+              --body-file /tmp/report.md)
+          fi
+          gh project item-add 3 --owner shigeo-nakamura --url "$url" || \
+            echo "::warning::failed to add $url to project 3; will retry on next ALERT"
