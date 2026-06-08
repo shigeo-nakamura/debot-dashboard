@@ -72,13 +72,15 @@ jobs:
             --search "\"$title\" in:title" --json number --jq '.[0].number // ""')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$REPO" --body-file /tmp/report.md
-            exit 0
+            url="https://github.com/$REPO/issues/$existing"
+          else
+            gh label create auto-error --repo "$REPO" --color d73a4a \
+              --description "Auto-created by error-watch workflow" 2>/dev/null || true
+            gh label create svc-canary-frankfurt --repo "$REPO" --color ededed \
+              --description "Service: Canary (Frankfurt)" 2>/dev/null || true
+            url=$(gh issue create --repo "$REPO" --title "$title" \
+              --label auto-error --label svc-canary-frankfurt \
+              --body-file /tmp/report.md)
           fi
-          gh label create auto-error --repo "$REPO" --color d73a4a \
-            --description "Auto-created by error-watch workflow" 2>/dev/null || true
-          gh label create svc-canary-frankfurt --repo "$REPO" --color ededed \
-            --description "Service: Canary (Frankfurt)" 2>/dev/null || true
-          url=$(gh issue create --repo "$REPO" --title "$title" \
-            --label auto-error --label svc-canary-frankfurt \
-            --body-file /tmp/report.md)
-          gh project item-add 3 --owner shigeo-nakamura --url "$url"
+          gh project item-add 3 --owner shigeo-nakamura --url "$url" || \
+            echo "::warning::failed to add $url to project 3; will retry on next ALERT"
