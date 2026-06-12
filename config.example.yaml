@@ -20,13 +20,6 @@ targets:
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
     s3_key: debot/status/frankfurt/debot-pair-btceth-a.json
-  - name: Extended (Tokyo)
-    instance_id: i-015f7f9388cac0a1b
-    service: debot-pair-btceth-extended
-    region: ap-northeast-1
-    s3_bucket: debot-dashboard
-    s3_region: eu-central-1
-    s3_key: debot-extended/status/tokyo/debot-pair-btceth-ext.json
 # auth:
 #   username: admin
 #   password: change-me
