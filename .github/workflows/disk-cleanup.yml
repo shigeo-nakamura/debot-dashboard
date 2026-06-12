@@ -31,8 +31,6 @@ jobs:
         include:
           - name: frankfurt
             region: eu-central-1
-          - name: tokyo
-            region: ap-northeast-1
           - name: tokyo-arb
             region: ap-northeast-1
     steps:
@@ -52,7 +50,6 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           case "${{ matrix.name }}" in
             frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
-            tokyo)     echo "id=$TOKYO_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
             tokyo-arb) echo "id=$TOKYO_ARB_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
           esac
 
