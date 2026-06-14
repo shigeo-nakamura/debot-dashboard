@@ -31,9 +31,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Route auto-created issues to the matching GitHub Projects v2 board.
-          # `xvenue-arb` / `tokyo-arb` labels go to project #4 (xvenue-arb);
-          # everything else (pair-*, canary-*, extended-*, mm-*) goes to
+          # Route auto-created issues to the GitHub Projects v2 board.
+          # All bot signals (pair-*, canary-*, extended-*, mm-*) go to
           # project #3 (pairtrade). PROJECTS_TOKEN is a fine-grained PAT with
           # user-account Projects RW; the default GITHUB_TOKEN cannot write
           # user-scope projects.
@@ -43,11 +42,7 @@ jobs:
               echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
               return 0
             fi
-            local project_num
-            case "$label" in
-              *xvenue-arb*|*tokyo-arb*) project_num=4 ;;
-              *)                        project_num=3 ;;
-            esac
+            local project_num=3
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \
               || echo "::warning::Failed to add $issue_url to project #$project_num"
@@ -282,11 +277,7 @@ jobs:
               echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
               return 0
             fi
-            local project_num
-            case "$label" in
-              *xvenue-arb*|*tokyo-arb*) project_num=4 ;;
-              *)                        project_num=3 ;;
-            esac
+            local project_num=3
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \
               || echo "::warning::Failed to add $issue_url to project #$project_num"

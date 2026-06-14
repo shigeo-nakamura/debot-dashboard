@@ -10,7 +10,7 @@ on:
         type: boolean
         default: true
       host:
-        description: 'Limit to one host (frankfurt | tokyo | tokyo-arb); empty = all'
+        description: 'Limit to one host (frankfurt); empty = all'
         type: string
         default: ''
 
@@ -31,15 +31,11 @@ jobs:
         include:
           - name: frankfurt
             region: eu-central-1
-          - name: tokyo-arb
-            region: ap-northeast-1
     steps:
       - name: Resolve target / host filter
         id: target
         env:
           FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
-          TOKYO_INSTANCE_ID: ${{ secrets.TOKYO_INSTANCE_ID }}
-          TOKYO_ARB_INSTANCE_ID: ${{ secrets.TOKYO_ARB_INSTANCE_ID }}
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.host }}" ] && [ "${{ inputs.host }}" != "${{ matrix.name }}" ]; then
@@ -50,7 +46,6 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           case "${{ matrix.name }}" in
             frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
-            tokyo-arb) echo "id=$TOKYO_ARB_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Configure AWS credentials
@@ -71,8 +66,8 @@ jobs:
 
           # The cleanup script — runs on the target host as root via SSM.
           # Uniform across hosts: each find no-ops on hosts where the path or
-          # files don't exist (e.g. tokyo-arb has no /opt/debot-extended and
-          # no market_data dumps).
+          # files don't exist (e.g. a host without /opt/debot-extended or
+          # market_data dumps).
           cat > /tmp/cleanup.sh <<'BASH'
           set -e
           DRY_RUN="${DRY_RUN:-true}"
@@ -100,9 +95,9 @@ jobs:
           # documented in bot-strategy#342 / feedback_ssm_orchestration_trap.md.
           # Iterate over ALL */document/orchestration paths, not just the
           # current instance's: AMI-cloned hosts can carry an orphaned tree
-          # under the source instance's id (e.g. tokyo-arb cloned from tokyo
-          # carries i-015f7f9388cac0a1b/.../orchestration on disk forever
-          # because the live ssm-agent only writes to its own i-029.../).
+          # under the source instance's id (a cloned host carries the source
+          # instance's .../orchestration on disk forever because the live
+          # ssm-agent only writes to its own instance-id path).
           echo "[always-on] SSM orchestration -mtime +7"
           found_any=0
           for ssm_dir in /var/lib/amazon/ssm/*/document/orchestration; do
