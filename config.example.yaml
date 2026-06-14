@@ -15,7 +15,7 @@ poll_interval_secs: 20
 # touches the bot host.
 targets:
   - name: Pair-A (Frankfurt)
-    instance_id: i-0c08fba996bc21879
+    instance_id: i-xxxxxxxxxxxxxxxxx
     service: debot-pair-btceth
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
