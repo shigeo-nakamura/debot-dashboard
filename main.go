@@ -292,7 +292,7 @@ type TargetStatus struct {
 	// WsReset24h is the count of `Connection reset without closing handshake`
 	// WebSocket events over the last 24 hours, self-reported by the bot
 	// via `WsReset24hCount` in status.json (bot-strategy#343). Alerting
-	// threshold is 10/day per bot-strategy#47.
+	// threshold is 25/day per bot-strategy#47 (raised from 10, see #547).
 	WsReset24h       *int      `json:"ws_reset_24h,omitempty"`
 	// KillSwitchActive reports whether `/opt/debot/KILL_SWITCH` exists
 	// on the target instance, self-reported by the bot via status.json

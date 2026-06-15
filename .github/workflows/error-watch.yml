@@ -283,18 +283,23 @@ jobs:
               || echo "::warning::Failed to add $issue_url to project #$project_num"
           }
 
-          # Alert when WS reset events exceed 10/day per service, per
+          # Alert when WS reset events exceed 25/day per service, per
           # bot-strategy#47. The count is self-reported by the bot
           # (status.json `ws_reset_24h_count`); see
           # `pairtrade/src/error_counter/classification.rs::is_ws_reset_event`
           # for the matched phrases. Under the threshold the dashboard
           # pill surfaces the count but no issue is created.
+          # Threshold raised 10 -> 25 per bot-strategy#547: a single benign
+          # overnight Lighter edge/LB-cycling cluster self-reports ~9-11
+          # resets/day (upstream-confirmed, no client fix, no trading impact
+          # — see #380). 25 absorbs even two overlapping benign clusters in a
+          # rolling 24h window while still paging if the rate climbs materially.
           # Skip targets whose bot has flagged an ongoing maintenance window
           # (see bot-strategy#199) — WS resets are the normal manifestation
           # of a scheduled upstream outage.
           jq -r '.targets[]
                  | select((.status.maintenance // null) == null)
-                 | select((.ws_reset_24h // 0) > 10)
+                 | select((.ws_reset_24h // 0) > 25)
                  | [.name, .service, (.ws_reset_24h // 0)]
                  | @tsv' status.json > ws_resets.tsv
 
@@ -303,7 +308,7 @@ jobs:
             exit 0
           fi
 
-          gh label create auto-ws-reset --repo "$REPO" --color fbca04 --description "WS connection resets >10/day" 2>/dev/null || true
+          gh label create auto-ws-reset --repo "$REPO" --color fbca04 --description "WS connection resets >25/day" 2>/dev/null || true
 
           # Dedupe by service (not name) because A/B/C share a single
           # systemd unit and therefore a single journalctl count.
@@ -344,7 +349,7 @@ jobs:
                 echo
                 echo "- **Service**: $service"
                 echo "- **Connection resets (last 24h)**: $count"
-                echo "- **Threshold**: 10"
+                echo "- **Threshold**: 25"
                 echo
                 echo "Detected at: $(date -u +%FT%TZ)"
                 echo "<!-- fp:$fp -->"
@@ -354,13 +359,13 @@ jobs:
               continue
             fi
 
-            title="[$service] WS Connection reset >10/day ($count in last 24h)"
+            title="[$service] WS Connection reset >25/day ($count in last 24h)"
             {
               echo "Auto-created by error-watch workflow (bot-strategy#47 threshold monitor)."
               echo
               echo "- **Service**: $service"
               echo "- **Connection resets (last 24h)**: $count"
-              echo "- **Threshold**: 10"
+              echo "- **Threshold**: 25"
               echo
               echo "Source: self-reported \`ws_reset_24h_count\` field on status.json (see \`pairtrade/src/error_counter/classification.rs::is_ws_reset_event\` for the matched phrases — covers both Extended SDK \`Connection reset without closing handshake\` and Lighter / tungstenite \`WebSocket error: IO error: Connection reset\` primary lines)."
               echo
