@@ -537,8 +537,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
 
   // WS reset pill: count of `Connection reset without closing handshake`
   // events in the service's journalctl log over the last 24h. Threshold
-  // 10/day per bot-strategy#47 — above that, the pill turns red and the
-  // error-watch workflow auto-creates an issue.
+  // 25/day per bot-strategy#47 (raised from 10, see #547) — above that,
+  // the pill turns red and the error-watch workflow auto-creates an issue.
   const wsResetEl = card.querySelector('[data-field="ws-reset"]');
   if (wsResetEl) {
     const count = target.ws_reset_24h;
