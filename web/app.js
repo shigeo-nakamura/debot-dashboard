@@ -544,9 +544,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     const count = target.ws_reset_24h;
     if (count !== undefined && count !== null) {
       wsResetEl.textContent = `WS: ${count}/24h`;
-      wsResetEl.classList.toggle("has-error", count > 10);
-      wsResetEl.classList.toggle("has-warn", count > 0 && count <= 10);
-      wsResetEl.title = `Connection reset events in last 24h (alert threshold: >10)`;
+      wsResetEl.classList.toggle("has-error", count > 25);
+      wsResetEl.classList.toggle("has-warn", count > 0 && count <= 25);
+      wsResetEl.title = `Connection reset events in last 24h (alert threshold: >25)`;
       wsResetEl.hidden = false;
     } else {
       wsResetEl.hidden = true;
