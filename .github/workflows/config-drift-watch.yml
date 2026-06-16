@@ -221,10 +221,15 @@ jobs:
           gh label create "$host_label" --repo "$REPO" --color ededed \
             --description "Host: $NAME" 2>/dev/null || true
 
-          # One fingerprint per host per day. Subsequent triggers comment on
-          # the open issue rather than spawn duplicates (mirrors disk-watch /
-          # error-watch; see #108).
-          fp=$(printf '%s\n%s' "$NAME" "$(date -u +%F)" | sha256sum | cut -c1-16)
+          # Fingerprint = host + UTC day + the drift output itself. Unlike
+          # disk-watch (a single scalar metric, host+day is enough), config
+          # drift is about *what* diverged, so the content must be in the key:
+          # the same drift state dedups to one issue/comment, but a *different*
+          # drift later the same day (e.g. deploy-not-restart in the morning,
+          # a different param drift in the afternoon) still lands as a fresh
+          # comment instead of being swallowed by a host+day-only key. The
+          # drift script's output is deterministic for a given state. (PR #10 review)
+          fp=$(printf '%s\n%s\n%s' "$NAME" "$(date -u +%F)" "$OUTPUT" | sha256sum | cut -c1-16)
 
           recently_closed=$(gh issue list --repo "$REPO" --state closed \
             --label config-drift --label "$host_label" \
@@ -253,6 +258,8 @@ jobs:
             echo "1. \`sudo systemctl restart $SERVICE\`"
             echo "2. Confirm the startup \`[CONFIG] variant=… fp=…\` line matches the intended round."
             echo "3. Re-run this workflow (or \`scripts/check_config_drift.sh --round-json\`) to confirm green."
+            echo
+            echo "> The check **fails closed**: if \`/metrics\` is missing the \`pairtrade_effective_*\` gauges this also trips as drift. That can mean an **old binary without the #580 gauges** (live binary lags source) rather than a real config mismatch — confirm the running binary exposes the gauges before assuming the YAML drifted."
             echo
             echo '```'
             printf '%s\n' "$OUTPUT"
