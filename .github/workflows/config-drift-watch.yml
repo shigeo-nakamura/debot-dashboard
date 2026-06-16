@@ -1,0 +1,282 @@
+name: Config Drift Watch
+
+# Periodic config-drift monitor for the live Frankfurt pairtrade A/B/C
+# (bot-strategy#580, acceptance item #2). pairtrade CI deploys configs but
+# never restarts the service (deploy != restart, bot-strategy#269), so a
+# config can be on disk yet never loaded by the running process. That gap
+# went undetected for ~8 days in #491 (Round 6 ran the wrong
+# force_close_time_secs). This workflow SSMs into the host and runs the
+# already-deployed scripts/check_config_drift.sh --round-json against the
+# RUNNING process (via the pairtrade_effective_* /metrics gauges + the
+# on-disk YAML mtime/sha), and files a bot-strategy issue when they diverge.
+#
+# It is read-only: it never restarts anything. Remediation (restart + verify
+# the [CONFIG] fingerprint) stays a manual operator step per #269.
+
+on:
+  schedule:
+    # Every 15 min — config only changes at a deploy, but a deploy-without-
+    # restart (mtime > process start) should surface within minutes, not at
+    # the next round readout.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      simulate_drift:
+        description: 'Force the drift branch (smoke-test the issue-creation path without a real drift)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  id-token: write
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Reuse the disk-watch environment: it already holds AWS_ROLE_ARN +
+    # FRANKFURT_INSTANCE_ID for SSM access to the same host.
+    environment: disk-watch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: frankfurt
+            region: eu-central-1
+            service: debot-pair-btceth
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Resolve instance ID
+        id: target
+        env:
+          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+        run: |
+          case "${{ matrix.name }}" in
+            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Run config-drift check via SSM
+        id: ssm
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.id }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+
+          # The drift script lives on the host (deployed alongside the config
+          # by deploy-configs). It queries the RUNNING process's effective
+          # config via 127.0.0.1:9464/metrics, the on-disk YAML mtime/sha, and
+          # the committed round.json — all host-local, so it must run on-host.
+          # SSM runs as root, which can read journald + the metrics endpoint.
+          # `set +e` so we can capture the script's exit code (0=no drift,
+          # 2=drift, 1=usage/runtime error) without SSM marking the command
+          # Failed; we surface it on the sentinel line CONFIG_DRIFT_RC=.
+          cat > /tmp/script.sh <<'BASH'
+          set +e
+          DRIFT_SCRIPT=/opt/debot/scripts/check_config_drift.sh
+          ROUND_JSON=/opt/debot/configs/pairtrade/round.json
+          if [ ! -x "$DRIFT_SCRIPT" ]; then
+            echo "drift script missing or not executable: $DRIFT_SCRIPT"
+            echo "CONFIG_DRIFT_RC=1"
+            exit 0
+          fi
+          OUT=$(bash "$DRIFT_SCRIPT" --round-json "$ROUND_JSON" --service "__SERVICE__" 2>&1)
+          RC=$?
+          printf '%s\n' "$OUT"
+          echo "CONFIG_DRIFT_RC=$RC"
+          exit 0
+          BASH
+          # Inject the service name (matrix value) into the on-host script.
+          sed -i "s/__SERVICE__/${SERVICE}/g" /tmp/script.sh
+
+          jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "config-drift-watch poll (bot-strategy#580)" \
+            --parameters file:///tmp/params.json \
+            --query "Command.CommandId" \
+            --output text)
+          echo "Command ID: $CMD_ID"
+
+          deadline=$(( $(date +%s) + 180 ))
+          while :; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "Status" --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Success) break ;;
+              Cancelled|TimedOut|Failed)
+                echo "::error::SSM command $CMD_ID failed with status $STATUS"
+                aws ssm get-command-invocation \
+                  --command-id "$CMD_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --output text || true
+                exit 1
+                ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::SSM command $CMD_ID stuck in $STATUS after 180s"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          OUT=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" --output text)
+
+          printf '%s\n' "$OUT" > out.txt
+          cat out.txt
+
+          RC=$(awk -F= '/^CONFIG_DRIFT_RC=/{print $2; exit}' out.txt)
+          if [ -z "$RC" ]; then
+            echo "::error::Could not parse CONFIG_DRIFT_RC from script output"
+            exit 1
+          fi
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+
+          {
+            echo 'output<<DRIFTWATCH_EOF'
+            # Drop the sentinel line from the human-facing copy
+            grep -v '^CONFIG_DRIFT_RC=' out.txt
+            echo 'DRIFTWATCH_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate and report
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+          NAME: ${{ matrix.name }}
+          SERVICE: ${{ matrix.service }}
+          RC: ${{ steps.ssm.outputs.rc }}
+          OUTPUT: ${{ steps.ssm.outputs.output }}
+          SIMULATE: ${{ inputs.simulate_drift }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Route auto-created issues to the GitHub Projects v2 board.
+          # The remaining host (frankfurt) goes to project #3 (pairtrade).
+          # PROJECTS_TOKEN is a fine-grained PAT with user-account Projects
+          # RW; the default GITHUB_TOKEN cannot write user-scope projects.
+          add_to_project() {
+            local issue_url="$1"
+            if [ -z "${PROJECTS_TOKEN:-}" ]; then
+              echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
+              return 0
+            fi
+            local project_num=3
+            GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
+              --owner shigeo-nakamura --url "$issue_url" \
+              || echo "::warning::Failed to add $issue_url to project #$project_num"
+          }
+
+          # rc: 0 = no drift, 2 = drift detected, 1 = usage/runtime error.
+          # A workflow_dispatch simulate_drift=true forces the drift branch so
+          # the issue path can be smoke-tested without a real incident.
+          if [ "${SIMULATE}" = "true" ]; then
+            RC=2
+            OUTPUT="(simulated drift — workflow_dispatch smoke test)"
+          fi
+
+          {
+            echo "## $NAME / $SERVICE — config-drift check (rc=$RC)"
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "$RC" in
+            0)
+              echo "No config drift — running process matches round.json. No issue filed."
+              exit 0
+              ;;
+            2)
+              echo "DRIFT detected (rc=2) — filing/commenting issue."
+              ;;
+            *)
+              # rc=1 (or unexpected): the check itself could not run
+              # (round.json missing, script absent, python3 missing). That is
+              # a workflow/deploy misconfiguration, not a bot drift — fail the
+              # job so it shows red, but do not file a bot-strategy issue.
+              echo "::error::config-drift check returned rc=$RC (usage/runtime error, not a verified drift) — investigate the workflow/host setup"
+              exit 1
+              ;;
+          esac
+
+          gh label create config-drift --repo "$REPO" --color b60205 \
+            --description "Auto-created by config-drift-watch workflow" 2>/dev/null || true
+          host_label="host-$NAME"
+          gh label create "$host_label" --repo "$REPO" --color ededed \
+            --description "Host: $NAME" 2>/dev/null || true
+
+          # One fingerprint per host per day. Subsequent triggers comment on
+          # the open issue rather than spawn duplicates (mirrors disk-watch /
+          # error-watch; see #108).
+          fp=$(printf '%s\n%s' "$NAME" "$(date -u +%F)" | sha256sum | cut -c1-16)
+
+          recently_closed=$(gh issue list --repo "$REPO" --state closed \
+            --label config-drift --label "$host_label" \
+            --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$recently_closed" ]; then
+            echo "Skip: fp:$fp already handled on closed #$recently_closed"
+            exit 0
+          fi
+
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --label config-drift --label "$host_label" \
+            --json number --jq '.[0].number // ""')
+
+          body_file=$(mktemp)
+          {
+            echo "Auto-created by config-drift-watch workflow (bot-strategy#580)."
+            echo
+            echo "The **running** \`$SERVICE\` process on \`$NAME\` no longer matches the"
+            echo "expected round config (\`configs/pairtrade/round.json\`). This usually means"
+            echo "a config was deployed but the service was never restarted to load it"
+            echo "(deploy != restart, bot-strategy#269) — the exact failure that wasted ~8"
+            echo "days in #491."
+            echo
+            echo "**Remediation** (operator, manual per #269 — Frankfurt needs explicit OK):"
+            echo "1. \`sudo systemctl restart $SERVICE\`"
+            echo "2. Confirm the startup \`[CONFIG] variant=… fp=…\` line matches the intended round."
+            echo "3. Re-run this workflow (or \`scripts/check_config_drift.sh --round-json\`) to confirm green."
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+            echo
+            echo "Detected at: $(date -u +%FT%TZ)"
+            echo "<!-- fp:$fp -->"
+          } > "$body_file"
+
+          if [ -n "$existing" ]; then
+            seen=$(gh issue view "$existing" --repo "$REPO" --json body,comments \
+              --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+              | grep -c "fp:$fp" || true)
+            if [ "$seen" -gt 0 ]; then
+              echo "Skip: fp:$fp already on open #$existing"
+              exit 0
+            fi
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
+            echo "Commented on #$existing"
+          else
+            issue_url=$(gh issue create --repo "$REPO" \
+              --title "[$NAME] pairtrade config drift detected (deploy != restart)" \
+              --body-file "$body_file" \
+              --label config-drift --label "$host_label")
+            echo "Created $issue_url"
+            add_to_project "$issue_url"
+          fi
