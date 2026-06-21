@@ -41,7 +41,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.CONFIG_DRIFT_AWS_REGION }}
+          aws-region: ${{ secrets.CONFIG_DRIFT_AWS_REGION }}
 
       - name: Run config-drift check via SSM
         id: ssm
@@ -154,7 +154,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           REPO: shigeo-nakamura/bot-strategy
-          NAME: ${{ vars.CONFIG_DRIFT_TARGET_NAME || 'configured-target' }}
+          NAME: ${{ secrets.CONFIG_DRIFT_TARGET_NAME || 'configured-target' }}
           SERVICE: ${{ secrets.CONFIG_DRIFT_SERVICE }}
           RC: ${{ steps.ssm.outputs.rc }}
           OUTPUT: ${{ steps.ssm.outputs.output }}
