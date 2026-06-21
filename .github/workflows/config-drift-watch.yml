@@ -1,17 +1,15 @@
 name: Config Drift Watch
 
-# Periodic config-drift monitor for the live Frankfurt pairtrade A/B/C
-# (bot-strategy#580, acceptance item #2). pairtrade CI deploys configs but
-# never restarts the service (deploy != restart, bot-strategy#269), so a
-# config can be on disk yet never loaded by the running process. That gap
-# went undetected for ~8 days in #491 (Round 6 ran the wrong
-# force_close_time_secs). This workflow SSMs into the host and runs the
-# already-deployed scripts/check_config_drift.sh --round-json against the
-# RUNNING process (via the pairtrade_effective_* /metrics gauges + the
-# on-disk YAML mtime/sha), and files a bot-strategy issue when they diverge.
+# Periodic config-drift monitor for bot-strategy#580 acceptance item #2.
+# It SSMs into the configured target and runs the already-deployed
+# drift-check script against the running process, then files a private
+# bot-strategy issue when the running config diverges from the expected
+# round config.
 #
-# It is read-only: it never restarts anything. Remediation (restart + verify
-# the [CONFIG] fingerprint) stays a manual operator step per #269.
+# The target-specific script path, expected-config path, service name, and
+# instance ID intentionally live in environment secrets, not in this public
+# repository. The workflow is read-only: remediation stays a manual operator
+# step in the private runbook.
 
 on:
   schedule:
@@ -35,65 +33,66 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Reuse the disk-watch environment: it already holds AWS_ROLE_ARN +
-    # FRANKFURT_INSTANCE_ID for SSM access to the same host.
+    # Reuse the disk-watch environment: it holds the AWS role plus the
+    # target-specific config-drift secrets.
     environment: disk-watch
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: frankfurt
-            region: eu-central-1
-            service: debot-pair-btceth
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ matrix.region }}
-
-      - name: Resolve instance ID
-        id: target
-        env:
-          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
-        run: |
-          case "${{ matrix.name }}" in
-            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
-          esac
+          aws-region: ${{ vars.CONFIG_DRIFT_AWS_REGION }}
 
       - name: Run config-drift check via SSM
         id: ssm
         env:
-          INSTANCE_ID: ${{ steps.target.outputs.id }}
-          SERVICE: ${{ matrix.service }}
+          INSTANCE_ID: ${{ secrets.CONFIG_DRIFT_INSTANCE_ID }}
+          DRIFT_SCRIPT: ${{ secrets.CONFIG_DRIFT_SCRIPT }}
+          ROUND_JSON: ${{ secrets.CONFIG_DRIFT_ROUND_JSON }}
+          SERVICE: ${{ secrets.CONFIG_DRIFT_SERVICE }}
         run: |
           set -euo pipefail
 
-          # The drift script lives on the host (deployed alongside the config
-          # by deploy-configs). It queries the RUNNING process's effective
-          # config via 127.0.0.1:9464/metrics, the on-disk YAML mtime/sha, and
-          # the committed round.json — all host-local, so it must run on-host.
-          # SSM runs as root, which can read journald + the metrics endpoint.
-          # `set +e` so we can capture the script's exit code (0=no drift,
-          # 2=drift, 1=usage/runtime error) without SSM marking the command
-          # Failed; we surface it on the sentinel line CONFIG_DRIFT_RC=.
-          cat > /tmp/script.sh <<'BASH'
+          missing=()
+          for var in INSTANCE_ID DRIFT_SCRIPT ROUND_JSON SERVICE; do
+            if [ -z "${!var:-}" ]; then
+              missing+=("$var")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required environment secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+          # The drift script must run on-host because it compares host-local
+          # process state with the expected config. `set +e` inside the remote
+          # script lets us capture the script exit code (0=no drift, 2=drift,
+          # 1=usage/runtime error) without SSM marking the command failed; the
+          # sentinel line CONFIG_DRIFT_RC= carries the result back.
+          quote_shell() {
+            jq -Rr @sh <<<"$1"
+          }
+
+          drift_script_q=$(quote_shell "$DRIFT_SCRIPT")
+          round_json_q=$(quote_shell "$ROUND_JSON")
+          service_q=$(quote_shell "$SERVICE")
+
+          cat > /tmp/script.sh <<BASH
           set +e
-          DRIFT_SCRIPT=/opt/debot/scripts/check_config_drift.sh
-          ROUND_JSON=/opt/debot/configs/pairtrade/round.json
+          DRIFT_SCRIPT=$drift_script_q
+          ROUND_JSON=$round_json_q
+          SERVICE=$service_q
           if [ ! -x "$DRIFT_SCRIPT" ]; then
-            echo "drift script missing or not executable: $DRIFT_SCRIPT"
+            echo "drift script missing or not executable"
             echo "CONFIG_DRIFT_RC=1"
             exit 0
           fi
-          OUT=$(bash "$DRIFT_SCRIPT" --round-json "$ROUND_JSON" --service "__SERVICE__" 2>&1)
+          OUT=$(bash "$DRIFT_SCRIPT" --round-json "$ROUND_JSON" --service "$SERVICE" 2>&1)
           RC=$?
-          printf '%s\n' "$OUT"
+          printf "%s\n" "$OUT"
           echo "CONFIG_DRIFT_RC=$RC"
           exit 0
           BASH
-          # Inject the service name (matrix value) into the on-host script.
-          sed -i "s/__SERVICE__/${SERVICE}/g" /tmp/script.sh
 
           jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
 
@@ -119,7 +118,7 @@ jobs:
                 aws ssm get-command-invocation \
                   --command-id "$CMD_ID" \
                   --instance-id "$INSTANCE_ID" \
-                  --output text || true
+                  --query "StatusDetails" --output text || true
                 exit 1
                 ;;
             esac
@@ -136,7 +135,6 @@ jobs:
             --query "StandardOutputContent" --output text)
 
           printf '%s\n' "$OUT" > out.txt
-          cat out.txt
 
           RC=$(awk -F= '/^CONFIG_DRIFT_RC=/{print $2; exit}' out.txt)
           if [ -z "$RC" ]; then
@@ -156,8 +154,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           REPO: shigeo-nakamura/bot-strategy
-          NAME: ${{ matrix.name }}
-          SERVICE: ${{ matrix.service }}
+          NAME: ${{ vars.CONFIG_DRIFT_TARGET_NAME || 'configured-target' }}
+          SERVICE: ${{ secrets.CONFIG_DRIFT_SERVICE }}
           RC: ${{ steps.ssm.outputs.rc }}
           OUTPUT: ${{ steps.ssm.outputs.output }}
           SIMULATE: ${{ inputs.simulate_drift }}
@@ -166,9 +164,9 @@ jobs:
           set -euo pipefail
 
           # Route auto-created issues to the GitHub Projects v2 board.
-          # The remaining host (frankfurt) goes to project #3 (pairtrade).
-          # PROJECTS_TOKEN is a fine-grained PAT with user-account Projects
-          # RW; the default GITHUB_TOKEN cannot write user-scope projects.
+          # Config-drift issues go to project #3. PROJECTS_TOKEN is a
+          # fine-grained PAT with user-account Projects RW; the default
+          # GITHUB_TOKEN cannot write user-scope projects.
           add_to_project() {
             local issue_url="$1"
             if [ -z "${PROJECTS_TOKEN:-}" ]; then
@@ -190,11 +188,9 @@ jobs:
           fi
 
           {
-            echo "## $NAME / $SERVICE — config-drift check (rc=$RC)"
+            echo "## Config-drift check (rc=$RC)"
             echo
-            echo '```'
-            printf '%s\n' "$OUTPUT"
-            echo '```'
+            echo "Raw drift output is omitted from the public workflow summary and is only written to the private bot-strategy issue when rc=2."
           } >> "$GITHUB_STEP_SUMMARY"
 
           case "$RC" in
@@ -216,10 +212,10 @@ jobs:
           esac
 
           gh label create config-drift --repo "$REPO" --color b60205 \
-            --description "Auto-created by config-drift-watch workflow" 2>/dev/null || true
+            --description "Auto-created by config-drift-watch workflow" >/dev/null 2>&1 || true
           host_label="host-$NAME"
           gh label create "$host_label" --repo "$REPO" --color ededed \
-            --description "Host: $NAME" 2>/dev/null || true
+            --description "Host: $NAME" >/dev/null 2>&1 || true
 
           # Fingerprint = host + UTC day + the drift output itself. Unlike
           # disk-watch (a single scalar metric, host+day is enough), config
@@ -249,15 +245,14 @@ jobs:
             echo "Auto-created by config-drift-watch workflow (bot-strategy#580)."
             echo
             echo "The **running** \`$SERVICE\` process on \`$NAME\` no longer matches the"
-            echo "expected round config (\`configs/pairtrade/round.json\`). This usually means"
+            echo "expected round config. This usually means"
             echo "a config was deployed but the service was never restarted to load it"
             echo "(deploy != restart, bot-strategy#269) — the exact failure that wasted ~8"
             echo "days in #491."
             echo
-            echo "**Remediation** (operator, manual per #269 — Frankfurt needs explicit OK):"
-            echo "1. \`sudo systemctl restart $SERVICE\`"
-            echo "2. Confirm the startup \`[CONFIG] variant=… fp=…\` line matches the intended round."
-            echo "3. Re-run this workflow (or \`scripts/check_config_drift.sh --round-json\`) to confirm green."
+            echo "**Remediation**: follow the private operator runbook for this service."
+            echo "After the manual remediation, confirm the startup \`[CONFIG] variant=... fp=...\`"
+            echo "line matches the intended round and re-run this workflow to confirm green."
             echo
             echo "> The check **fails closed**: if \`/metrics\` is missing the \`pairtrade_effective_*\` gauges this also trips as drift. That can mean an **old binary without the #580 gauges** (live binary lags source) rather than a real config mismatch — confirm the running binary exposes the gauges before assuming the YAML drifted."
             echo
