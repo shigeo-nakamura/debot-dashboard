@@ -77,11 +77,17 @@ jobs:
           round_json_q=$(quote_shell "$ROUND_JSON")
           service_q=$(quote_shell "$SERVICE")
 
-          cat > /tmp/script.sh <<BASH
+          # Inject only the three locally-substituted values (already shell-
+          # quoted by jq @sh) as assignments, then a QUOTED heredoc for the body
+          # so the runner does not expand the remote-only $DRIFT_SCRIPT/$OUT/$RC
+          # or — worse, under `set -u` / command substitution — run the drift
+          # script locally on the runner. With <<'BASH' those survive to the host.
+          {
+          printf 'DRIFT_SCRIPT=%s\n' "$drift_script_q"
+          printf 'ROUND_JSON=%s\n' "$round_json_q"
+          printf 'SERVICE=%s\n' "$service_q"
+          cat <<'BASH'
           set +e
-          DRIFT_SCRIPT=$drift_script_q
-          ROUND_JSON=$round_json_q
-          SERVICE=$service_q
           if [ ! -x "$DRIFT_SCRIPT" ]; then
             echo "drift script missing or not executable"
             echo "CONFIG_DRIFT_RC=1"
@@ -93,6 +99,7 @@ jobs:
           echo "CONFIG_DRIFT_RC=$RC"
           exit 0
           BASH
+          } > /tmp/script.sh
 
           jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
 
@@ -145,8 +152,10 @@ jobs:
 
           {
             echo 'output<<DRIFTWATCH_EOF'
-            # Drop the sentinel line from the human-facing copy
-            grep -v '^CONFIG_DRIFT_RC=' out.txt
+            # Drop the sentinel line from the human-facing copy. `|| true` so a
+            # clean run (out.txt is only the CONFIG_DRIFT_RC= sentinel -> grep
+            # matches nothing -> exit 1) does not trip `set -e` on the no-drift path.
+            grep -v '^CONFIG_DRIFT_RC=' out.txt || true
             echo 'DRIFTWATCH_EOF'
           } >> "$GITHUB_OUTPUT"
 
