@@ -106,7 +106,12 @@ jobs:
           BASH
           } > /tmp/script.sh
 
-          jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
+          # executionTimeout bounds the on-host run: AWS-RunShellScript otherwise
+          # defaults to 3600s, so a hung drift script would keep running long
+          # after the 180s local poll below gives up and turns the job red,
+          # piling a new hung command on the target every 15-min cron. Match the
+          # poll deadline so SSM terminates it when we stop waiting.
+          jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd], executionTimeout: ["180"]}' > /tmp/params.json
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
