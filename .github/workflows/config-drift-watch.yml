@@ -95,8 +95,13 @@ jobs:
           fi
           OUT=$(bash "$DRIFT_SCRIPT" --round-json "$ROUND_JSON" --service "$SERVICE" 2>&1)
           RC=$?
-          printf "%s\n" "$OUT"
+          # Sentinel BEFORE $OUT: SSM StandardOutputContent returns only the
+          # first 24000 chars, so a >24KB drift dump would push the sentinel
+          # past the cutoff and the RC parser would fail the job (no issue filed
+          # for a real drift). First means RC is always captured; only the
+          # human-facing diff tail may truncate.
           echo "CONFIG_DRIFT_RC=$RC"
+          printf "%s\n" "$OUT"
           exit 0
           BASH
           } > /tmp/script.sh
