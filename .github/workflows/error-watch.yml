@@ -126,20 +126,28 @@ jobs:
           # only and a startup ERROR on main is rare enough to be
           # genuinely worth filing on. See also #378 (the auto-issue
           # closed as transient noise that motivated this carve-out).
+          #
+          # Suppression is evaluated per severity: last_warn_message /
+          # last_error_message are NOT bounded to the 30m count window
+          # (see the #338 staleness note below), so a days-old benign
+          # warn line must not suppress a current actionable canary
+          # error, and a stale [Startup] error must not mask a current
+          # actionable warn burst. When the in-window count is > 0 the
+          # corresponding last message is by definition in-window, so
+          # per-severity matching needs no extra count-gating.
           jq -r '.targets[]
                  | select(.status.error_summary != null)
                  | select((.status.maintenance // null) == null)
                  | . as $t
                  | ($t.status.error_summary.error_count_30m // $t.status.error_summary.error_count_5m // 0) as $errc
                  | ($t.status.error_summary.warn_count_30m  // $t.status.error_summary.warn_count_5m  // 0) as $warnc
-                 | ((($t.status.error_summary.last_warn_message // "")
-                     + " "
-                     + ($t.status.error_summary.last_error_message // ""))
-                    | test("CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[MAINTENANCE\\] Lighter degraded-mode|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API|WebSocket price is stale .* falling back to REST API")) as $suppressed
+                 | "CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[MAINTENANCE\\] Lighter degraded-mode|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API|WebSocket price is stale .* falling back to REST API" as $benign
+                 | (($t.status.error_summary.last_warn_message // "") | test($benign)) as $warn_suppressed
+                 | (($t.status.error_summary.last_error_message // "") | test($benign)) as $err_suppressed
                  | (($t.service // "") == "debot-pair-canary") as $is_canary
                  | select(
-                     ($errc > 0 and ((($is_canary | not)) or ($suppressed | not)))
-                     or ($warnc > 0 and ($suppressed | not))
+                     ($errc > 0 and ((($is_canary | not)) or ($err_suppressed | not)))
+                     or ($warnc > 0 and ($warn_suppressed | not))
                    )
                  | {
                     name: $t.name,
