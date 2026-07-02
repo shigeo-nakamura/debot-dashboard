@@ -107,6 +107,12 @@ jobs:
           #     the [Startup] pattern above. Suppressed globally as a
           #     WARN; for canary it also covers the recurring auto-restart
           #     case. bot-strategy#412.
+          #   - "[MAINTENANCE] Lighter degraded-mode ..." and
+          #     "WebSocket price is stale ..., falling back to REST API":
+          #     transient read_mid / WS-staleness fallout while the bot is
+          #     already routing through REST fallback. These are represented
+          #     by the dedicated maintenance / ws-reset signals; warn-only
+          #     auto-error issues are duplicate noise. See bot-strategy#665.
           # Window count: prefer the 30m field (bot-strategy#168); fall back
           # to the legacy 5m field for bots not yet restarted onto the new
           # code. Either name may be missing, so `// 0` after the fallback.
@@ -120,30 +126,40 @@ jobs:
           # only and a startup ERROR on main is rare enough to be
           # genuinely worth filing on. See also #378 (the auto-issue
           # closed as transient noise that motivated this carve-out).
+          #
+          # Suppression is evaluated per severity: last_warn_message /
+          # last_error_message are NOT bounded to the 30m count window
+          # (see the #338 staleness note below), so a days-old benign
+          # warn line must not suppress a current actionable canary
+          # error, and a stale [Startup] error must not mask a current
+          # actionable warn burst. When the in-window count is > 0 the
+          # corresponding last message is by definition in-window, so
+          # per-severity matching needs no extra count-gating.
           jq -r '.targets[]
                  | select(.status.error_summary != null)
                  | select((.status.maintenance // null) == null)
                  | . as $t
                  | ($t.status.error_summary.error_count_30m // $t.status.error_summary.error_count_5m // 0) as $errc
                  | ($t.status.error_summary.warn_count_30m  // $t.status.error_summary.warn_count_5m  // 0) as $warnc
-                 | ((($t.status.error_summary.last_warn_message // "")
-                     + " "
-                     + ($t.status.error_summary.last_error_message // ""))
-                    | test("CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API")) as $suppressed
+                 | "CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[MAINTENANCE\\] Lighter degraded-mode|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API|WebSocket price is stale .* falling back to REST API" as $benign
+                 | (($t.status.error_summary.last_warn_message // "") | test($benign)) as $warn_suppressed
+                 | (($t.status.error_summary.last_error_message // "") | test($benign)) as $err_suppressed
                  | (($t.service // "") == "debot-pair-canary") as $is_canary
                  | select(
-                     ($errc > 0 and ((($is_canary | not)) or ($suppressed | not)))
-                     or ($warnc > 0 and ($suppressed | not))
+                     ($errc > 0 and ((($is_canary | not)) or ($err_suppressed | not)))
+                     or ($warnc > 0 and ($warn_suppressed | not))
                    )
-                 | [$t.name,
-                    ($t.service // ""),
-                    $errc,
-                    $warnc,
-                    ($t.status.error_summary.last_error_message // ""),
-                    ($t.status.error_summary.last_warn_message // "")]
-                 | @tsv' status.json > errors.tsv
+                 | {
+                    name: $t.name,
+                    service: ($t.service // ""),
+                    errors: $errc,
+                    warns: $warnc,
+                    err_msg: ($t.status.error_summary.last_error_message // ""),
+                    warn_msg: ($t.status.error_summary.last_warn_message // "")
+                   }
+                 | @json' status.json > errors.jsonl
 
-          if [ ! -s errors.tsv ]; then
+          if [ ! -s errors.jsonl ]; then
             echo "No targets with errors/warnings"
             exit 0
           fi
@@ -156,7 +172,13 @@ jobs:
           # previously produced 3 issues per cycle. See bot-strategy#164.
           declare -A seen_sfp
 
-          while IFS=$'\t' read -r name service errors warns err_msg warn_msg; do
+          while IFS= read -r row; do
+            name=$(jq -r '.name' <<<"$row")
+            service=$(jq -r '.service' <<<"$row")
+            errors=$(jq -r '.errors' <<<"$row")
+            warns=$(jq -r '.warns' <<<"$row")
+            err_msg=$(jq -r '.err_msg' <<<"$row")
+            warn_msg=$(jq -r '.warn_msg' <<<"$row")
             slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9]|-|g; s|--*|-|g; s|^-||; s|-$||')
             svc_label="svc-$slug"
 
@@ -260,7 +282,7 @@ jobs:
             issue_url=$(gh issue create --repo "$REPO" --title "$title" --body-file body.md --label auto-error --label "$svc_label")
             echo "Created $issue_url"
             add_to_project "$issue_url" "$svc_label"
-          done < errors.tsv
+          done < errors.jsonl
 
       - name: Create issues for targets exceeding WS reset threshold
         env:
