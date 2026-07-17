@@ -118,7 +118,11 @@ jobs:
           #     and an INFO when it clears. The state is self-clearing and any
           #     configured entry gate reacts inside the bot, so treating the
           #     transition notice as an operational error creates stale issues
-          #     after the paired INFO clear is invisible to error-watch.
+          #     after the paired INFO clear is invisible to error-watch. The
+          #     detector only ever logs this at WARN, so the pattern lives in
+          #     the warn-only regex: it must not join the canary error
+          #     carve-out below, where a matching last_error_message would
+          #     silence a genuine canary error.
           # Window count: prefer the 30m field (bot-strategy#168); fall back
           # to the legacy 5m field for bots not yet restarted onto the new
           # code. Either name may be missing, so `// 0` after the fallback.
@@ -147,8 +151,9 @@ jobs:
                  | . as $t
                  | ($t.status.error_summary.error_count_30m // $t.status.error_summary.error_count_5m // 0) as $errc
                  | ($t.status.error_summary.warn_count_30m  // $t.status.error_summary.warn_count_5m  // 0) as $warnc
-                 | "CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[MAINTENANCE\\] Lighter degraded-mode|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API|WebSocket price is stale .* falling back to REST API|\\[REGIME\\] .* persistent-shift ACTIVE" as $benign
-                 | (($t.status.error_summary.last_warn_message // "") | test($benign)) as $warn_suppressed
+                 | "CIRCUIT_BREAKER|CircuitBreakerCooldown|DailyDdHalted|SessionDdHalted|STD_COLLAPSE_BLOCK|STD_COLLAPSE_OBSERVE|TICK_FILTER|\\[MAINTENANCE\\] refresh failed|\\[MAINTENANCE\\] Lighter degraded-mode|\\[Startup\\] get_positions failed|WebSocket data not available, falling back to REST API|WebSocket price is stale .* falling back to REST API" as $benign
+                 | ($benign + "|\\[REGIME\\] .* persistent-shift ACTIVE") as $benign_warn
+                 | (($t.status.error_summary.last_warn_message // "") | test($benign_warn)) as $warn_suppressed
                  | (($t.status.error_summary.last_error_message // "") | test($benign)) as $err_suppressed
                  | (($t.service // "") == "debot-pair-canary") as $is_canary
                  | select(
