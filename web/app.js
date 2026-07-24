@@ -1078,10 +1078,8 @@ const renderRiskPanel = (card, data) => {
 
   // Halt history strip (#231 Phase B). Renders a 30-d horizontal
   // axis with one colored dot per past halt event from
-  // data.risk_history. Empty for old bots that haven't picked up the
-  // pairtrade@9755490 binary yet — gracefully hidden in that case.
-  renderRiskHistory(card, data.risk_history);
-  if (data.risk_history && data.risk_history.length > 0) {
+  // data.risk_history. Non-halt audit events are ignored.
+  if (renderRiskHistory(card, data.risk_history)) {
     anyVisible = true;
   }
 
@@ -1089,20 +1087,28 @@ const renderRiskPanel = (card, data) => {
 };
 
 const RISK_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const HALT_HISTORY_EVENT_TYPES = new Set(["activated", "cleared", "ack"]);
 
 const renderRiskHistory = (card, events) => {
   const container = card.querySelector('[data-field="risk-history"]');
   const strip = card.querySelector('[data-field="risk-history-strip"]');
-  if (!container || !strip) return;
+  if (!container || !strip) return false;
   if (!events || events.length === 0) {
     container.hidden = true;
     strip.innerHTML = "";
-    return;
+    return false;
   }
   const nowMs = Date.now();
   const cutoffMs = nowMs - RISK_HISTORY_WINDOW_MS;
   const dots = events
-    .filter((ev) => ev.ts * 1000 >= cutoffMs)
+    // risk_history is also an audit stream for non-halt state changes
+    // such as capital_rebaseline. The strip is explicitly halt history,
+    // so only actual halt lifecycle transitions belong here (#748).
+    .filter(
+      (ev) =>
+        HALT_HISTORY_EVENT_TYPES.has(ev.event_type) &&
+        ev.ts * 1000 >= cutoffMs,
+    )
     .map((ev) => {
       const tsMs = ev.ts * 1000;
       const ageFrac = (nowMs - tsMs) / RISK_HISTORY_WINDOW_MS; // 0 = now, 1 = 30d ago
@@ -1127,10 +1133,11 @@ const renderRiskHistory = (card, events) => {
   if (!dots) {
     container.hidden = true;
     strip.innerHTML = "";
-    return;
+    return false;
   }
   strip.innerHTML = dots;
   container.hidden = false;
+  return true;
 };
 
 const setRiskBar = (card, prefix, text, pct) => {
