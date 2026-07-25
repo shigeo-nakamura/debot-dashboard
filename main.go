@@ -137,18 +137,18 @@ type StatusData struct {
 	DailyRisk      *DailyRiskSnapshot      `json:"daily_risk,omitempty"`
 	SessionRisk    *SessionRiskSnapshot    `json:"session_risk,omitempty"`
 	CircuitBreaker *CircuitBreakerSnapshot `json:"circuit_breaker,omitempty"`
-	// RiskHistory is a bounded ring buffer (cap 200) of recent halt
-	// transitions emitted by pairtrade since 9755490. Empty when no
-	// gate has ever fired (or for old bots not yet restarted with the
-	// Phase B binary).
+	// RiskHistory is a bounded ring buffer (cap 200) of recent risk-audit
+	// events emitted by pairtrade since 9755490. Besides halt lifecycle
+	// transitions, newer bots may include non-halt events such as capital
+	// rebaselines; the frontend filters those out of its halt-history strip.
 	RiskHistory []RiskHistoryEvent `json:"risk_history,omitempty"`
 }
 
 // RiskHistoryEvent mirrors pairtrade's RiskHistoryEvent (status.rs).
-// The dashboard renders these as colored dots on a 30-d strip below
-// each card's risk panel; severity color comes from `kind`. Detail
-// is forwarded raw to the FE which extracts whichever fields it
-// wants for the tooltip.
+// Actual halt lifecycle transitions render as colored dots on a 30-d
+// strip below each card's risk panel; other risk-audit event types stay
+// available in the API but are not presented as halts. Detail is
+// forwarded raw to the FE for best-effort tooltips.
 type RiskHistoryEvent struct {
 	TS         int64                  `json:"ts"`
 	InstanceID string                 `json:"instance_id"`
