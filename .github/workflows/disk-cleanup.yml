@@ -10,7 +10,7 @@ on:
         type: boolean
         default: true
       host:
-        description: 'Limit to one host (frankfurt); empty = all'
+        description: 'Limit to one host (frankfurt, arcus); empty = all'
         type: string
         default: ''
 
@@ -31,11 +31,14 @@ jobs:
         include:
           - name: frankfurt
             region: eu-central-1
+          - name: arcus
+            region: eu-central-1
     steps:
       - name: Resolve target / host filter
         id: target
         env:
           FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+          ARCUS_INSTANCE_ID: ${{ secrets.ARCUS_INSTANCE_ID }}
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.host }}" ] && [ "${{ inputs.host }}" != "${{ matrix.name }}" ]; then
@@ -46,6 +49,7 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           case "${{ matrix.name }}" in
             frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            arcus) echo "id=$ARCUS_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Configure AWS credentials
