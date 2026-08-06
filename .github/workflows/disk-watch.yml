@@ -30,6 +30,8 @@ jobs:
         include:
           - name: frankfurt
             region: eu-central-1
+          - name: arcus
+            region: eu-central-1
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -41,9 +43,11 @@ jobs:
         id: target
         env:
           FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+          ARCUS_INSTANCE_ID: ${{ secrets.ARCUS_INSTANCE_ID }}
         run: |
           case "${{ matrix.name }}" in
             frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            arcus) echo "id=$ARCUS_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Run disk check via SSM
@@ -137,10 +141,10 @@ jobs:
           set -euo pipefail
 
           # Route auto-created issues to the GitHub Projects v2 board.
-          # The remaining host (frankfurt) goes to project #3
-          # (pairtrade). PROJECTS_TOKEN is a fine-grained PAT with
-          # user-account Projects RW; the default GITHUB_TOKEN cannot
-          # write user-scope projects.
+          # frankfurt goes to project #3 (pairtrade); arcus goes to
+          # project #6 (Arcus, bot-strategy#758). PROJECTS_TOKEN is a
+          # fine-grained PAT with user-account Projects RW; the default
+          # GITHUB_TOKEN cannot write user-scope projects.
           add_to_project() {
             local issue_url="$1" label="$2"
             if [ -z "${PROJECTS_TOKEN:-}" ]; then
@@ -148,6 +152,9 @@ jobs:
               return 0
             fi
             local project_num=3
+            case "$NAME" in
+              arcus) project_num=6 ;;
+            esac
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \
               || echo "::warning::Failed to add $issue_url to project #$project_num"
