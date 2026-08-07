@@ -14,7 +14,9 @@ on:
 permissions:
   issues: write
   contents: read
-  actions: write
+  # Read-only: this workflow only lists ARCUS_WALLET_EVER_FUNDED, it never
+  # sets it (see the funding-runbook note below).
+  actions: read
 
 env:
   # KMS-derived Arcus Spot signer address (bot-strategy#772/#758). Public
@@ -69,25 +71,31 @@ jobs:
           # low-gas state there is) -- inferring it from the current
           # reading would silently suppress the latter forever (Codex P1
           # follow-up, debot-dashboard#16). A persisted repo variable is
-          # the explicit signal instead: it flips to true the first time
-          # this workflow observes a positive balance, and never resets.
+          # the explicit signal instead.
+          #
+          # This workflow only *reads* ARCUS_WALLET_EVER_FUNDED, never
+          # sets it. The wallet address is public, so anyone can send it
+          # a dust amount before the real, deliberate funding step in
+          # bot-strategy#775's runbook (~08-10) -- auto-setting the flag
+          # from any observed positive balance would let that dust
+          # transfer permanently defeat the pre-launch suppression it
+          # exists to provide (Codex P2 follow-up, debot-dashboard#16).
+          # The funding runbook itself must run, once, as part of
+          # actually funding the wallet:
+          #   gh variable set ARCUS_WALLET_EVER_FUNDED --repo shigeo-nakamura/debot-dashboard --body true
+          #
           # `gh variable` has no `get` subcommand, so existence is checked
           # via `list`. Only a *successful* list that simply doesn't
-          # contain the variable yet (the expected first-ever run) may
+          # contain the variable yet (the expected pre-funding state) may
           # default to false. The list command itself failing -- auth,
           # rate limit, a transient API error -- must fail the job loudly
           # instead of silently reintroducing the exact zero-balance-
-          # suppression bug this step exists to close (Codex P1 follow-up,
-          # debot-dashboard#16): a masked lookup failure on a genuinely
-          # drained, previously-funded wallet would again report it as
-          # merely "not yet funded".
+          # suppression bug this step exists to close: a masked lookup
+          # failure on a genuinely drained, previously-funded wallet would
+          # again report it as merely "not yet funded".
           list_output=$(gh variable list --repo "$DASHBOARD_REPO" --json name,value)
           ever_funded=$(echo "$list_output" | jq -r '.[] | select(.name == "ARCUS_WALLET_EVER_FUNDED") | .value')
           ever_funded="${ever_funded:-false}"
-          if [ "$WEI" != "0" ] && [ "$ever_funded" != "true" ]; then
-            gh variable set ARCUS_WALLET_EVER_FUNDED --repo "$DASHBOARD_REPO" --body true
-            ever_funded=true
-          fi
           echo "ever_funded=$ever_funded" >> "$GITHUB_OUTPUT"
 
       - name: Evaluate threshold and report
@@ -129,9 +137,12 @@ jobs:
           # a duplicate (Codex P2 follow-up, debot-dashboard#16). Find the
           # candidate by label/recency only, then inspect its full
           # body+comments the same way the open-issue path below does.
+          # Filter by *closed* date, not created date -- an issue opened
+          # more than a day ago but closed today must still be found
+          # (Codex P2 follow-up, debot-dashboard#16, round 3).
           recently_closed=$(gh issue list --repo "$REPO" --state closed \
             --label arcus-gas-watch \
-            --search "created:>$(date -u --date='1 day ago' +%Y-%m-%d)" \
+            --search "closed:>$(date -u --date='1 day ago' +%Y-%m-%d)" \
             --json number --jq '.[0].number // ""')
           if [ -n "$recently_closed" ]; then
             seen=$(gh issue view "$recently_closed" --repo "$REPO" --json body,comments \
