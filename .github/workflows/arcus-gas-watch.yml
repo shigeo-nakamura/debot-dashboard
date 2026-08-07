@@ -71,7 +71,19 @@ jobs:
           # follow-up, debot-dashboard#16). A persisted repo variable is
           # the explicit signal instead: it flips to true the first time
           # this workflow observes a positive balance, and never resets.
-          ever_funded=$(gh variable get ARCUS_WALLET_EVER_FUNDED --repo "$DASHBOARD_REPO" 2>/dev/null || echo false)
+          # `gh variable` has no `get` subcommand, so existence is checked
+          # via `list`. Only a *successful* list that simply doesn't
+          # contain the variable yet (the expected first-ever run) may
+          # default to false. The list command itself failing -- auth,
+          # rate limit, a transient API error -- must fail the job loudly
+          # instead of silently reintroducing the exact zero-balance-
+          # suppression bug this step exists to close (Codex P1 follow-up,
+          # debot-dashboard#16): a masked lookup failure on a genuinely
+          # drained, previously-funded wallet would again report it as
+          # merely "not yet funded".
+          list_output=$(gh variable list --repo "$DASHBOARD_REPO" --json name,value)
+          ever_funded=$(echo "$list_output" | jq -r '.[] | select(.name == "ARCUS_WALLET_EVER_FUNDED") | .value')
+          ever_funded="${ever_funded:-false}"
           if [ "$WEI" != "0" ] && [ "$ever_funded" != "true" ]; then
             gh variable set ARCUS_WALLET_EVER_FUNDED --repo "$DASHBOARD_REPO" --body true
             ever_funded=true
@@ -111,13 +123,24 @@ jobs:
           # issue rather than spawn duplicates (mirrors disk-watch.yml).
           fp=$(date -u +%F | sha256sum | cut -c1-16)
 
+          # A multi-day-open issue's later fingerprints land in *comments*,
+          # not the body -- searching "in:body" alone would miss those
+          # once the issue is closed, letting the next hourly run recreate
+          # a duplicate (Codex P2 follow-up, debot-dashboard#16). Find the
+          # candidate by label/recency only, then inspect its full
+          # body+comments the same way the open-issue path below does.
           recently_closed=$(gh issue list --repo "$REPO" --state closed \
             --label arcus-gas-watch \
-            --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+            --search "created:>$(date -u --date='1 day ago' +%Y-%m-%d)" \
             --json number --jq '.[0].number // ""')
           if [ -n "$recently_closed" ]; then
-            echo "Skip: fp:$fp already handled on closed #$recently_closed"
-            exit 0
+            seen=$(gh issue view "$recently_closed" --repo "$REPO" --json body,comments \
+              --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+              | grep -c "fp:$fp" || true)
+            if [ "$seen" -gt 0 ]; then
+              echo "Skip: fp:$fp already handled on closed #$recently_closed"
+              exit 0
+            fi
           fi
 
           existing=$(gh issue list --repo "$REPO" --state open \
