@@ -14,6 +14,7 @@ on:
 permissions:
   issues: write
   contents: read
+  actions: write
 
 env:
   # KMS-derived Arcus Spot signer address (bot-strategy#772/#758). Public
@@ -54,11 +55,35 @@ jobs:
           wei=$(python3 -c "print(int('$hex', 16))")
           echo "wei=$wei" >> "$GITHUB_OUTPUT"
 
+      - name: Track whether the wallet has ever held a positive balance
+        id: funded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DASHBOARD_REPO: shigeo-nakamura/debot-dashboard
+          WEI: ${{ steps.balance.outputs.wei }}
+        run: |
+          set -euo pipefail
+          # Zero alone can't distinguish "never funded yet" (expected
+          # pre-launch, per bot-strategy#772's separate funding approval)
+          # from "was funded, now fully drained" (the single most urgent
+          # low-gas state there is) -- inferring it from the current
+          # reading would silently suppress the latter forever (Codex P1
+          # follow-up, debot-dashboard#16). A persisted repo variable is
+          # the explicit signal instead: it flips to true the first time
+          # this workflow observes a positive balance, and never resets.
+          ever_funded=$(gh variable get ARCUS_WALLET_EVER_FUNDED --repo "$DASHBOARD_REPO" 2>/dev/null || echo false)
+          if [ "$WEI" != "0" ] && [ "$ever_funded" != "true" ]; then
+            gh variable set ARCUS_WALLET_EVER_FUNDED --repo "$DASHBOARD_REPO" --body true
+            ever_funded=true
+          fi
+          echo "ever_funded=$ever_funded" >> "$GITHUB_OUTPUT"
+
       - name: Evaluate threshold and report
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           REPO: shigeo-nakamura/bot-strategy
           WEI: ${{ steps.balance.outputs.wei }}
+          EVER_FUNDED: ${{ steps.funded.outputs.ever_funded }}
           PAGE_WEI_OVERRIDE: ${{ inputs.force_page_wei }}
           PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
         run: |
@@ -67,14 +92,10 @@ jobs:
           effective_page="${PAGE_WEI_OVERRIDE:-$PAGE_WEI}"
 
           {
-            echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei)"
+            echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei, ever funded: ${EVER_FUNDED})"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Exactly zero means the wallet has never been funded yet -- an
-          # expected pre-launch state (bot-strategy#772 gates real funding
-          # on a separate explicit approval), not a "ran out of gas" event.
-          # Only page once it has held a positive balance and dropped low.
-          if [ "$WEI" -eq 0 ]; then
+          if [ "$WEI" -eq 0 ] && [ "$EVER_FUNDED" != "true" ]; then
             echo "Wallet not yet funded -- no issue filed"
             exit 0
           fi
