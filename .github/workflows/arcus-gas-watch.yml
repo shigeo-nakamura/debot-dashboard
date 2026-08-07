@@ -1,0 +1,140 @@
+name: Arcus Gas Watch
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_page_wei:
+        description: 'Temporary page threshold override (wei) -- for smoke-testing the issue-creation path'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  # KMS-derived Arcus Spot signer address (bot-strategy#772/#758). Public
+  # on-chain data, not a secret -- the private key never leaves KMS.
+  ARCUS_WALLET_ADDRESS: '0x53cb889b5f3928921abb5ec413a2501cbf6170c6'
+  ROBINHOOD_CHAIN_RPC: 'https://rpc.mainnet.chain.robinhood.com'
+  # 0.002 ETH: comfortably above a single Permit2 + swap's typical gas cost
+  # on an Arbitrum-Orbit L2, well below the probe's overall loss caps.
+  PAGE_WEI: '2000000000000000'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Arcus wallet gas balance
+        id: balance
+        run: |
+          set -euo pipefail
+          response=""
+          for attempt in 1 2 3; do
+            response=$(curl -sS --fail --max-time 15 -X POST "$ROBINHOOD_CHAIN_RPC" \
+              -H 'Content-Type: application/json' \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getBalance\",\"params\":[\"$ARCUS_WALLET_ADDRESS\",\"latest\"]}") && break
+            echo "::warning::attempt $attempt failed to reach $ROBINHOOD_CHAIN_RPC"
+            response=""
+            sleep 5
+          done
+          if [ -z "$response" ]; then
+            echo "::error::could not reach $ROBINHOOD_CHAIN_RPC after 3 attempts"
+            exit 1
+          fi
+          echo "response=$response"
+          hex=$(echo "$response" | jq -r '.result // empty')
+          if [ -z "$hex" ] || [ "$hex" = "null" ]; then
+            echo "::error::malformed eth_getBalance response: $response"
+            exit 1
+          fi
+          wei=$(python3 -c "print(int('$hex', 16))")
+          echo "wei=$wei" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate threshold and report
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          REPO: shigeo-nakamura/bot-strategy
+          WEI: ${{ steps.balance.outputs.wei }}
+          PAGE_WEI_OVERRIDE: ${{ inputs.force_page_wei }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          effective_page="${PAGE_WEI_OVERRIDE:-$PAGE_WEI}"
+
+          {
+            echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Exactly zero means the wallet has never been funded yet -- an
+          # expected pre-launch state (bot-strategy#772 gates real funding
+          # on a separate explicit approval), not a "ran out of gas" event.
+          # Only page once it has held a positive balance and dropped low.
+          if [ "$WEI" -eq 0 ]; then
+            echo "Wallet not yet funded -- no issue filed"
+            exit 0
+          fi
+          if [ "$WEI" -ge "$effective_page" ]; then
+            echo "Above page threshold (${effective_page} wei) -- no issue filed"
+            exit 0
+          fi
+
+          gh label create arcus-gas-watch --repo "$REPO" --color b60205 \
+            --description "Auto-created by arcus-gas-watch workflow" 2>/dev/null || true
+
+          # One fingerprint per day; subsequent triggers comment on the open
+          # issue rather than spawn duplicates (mirrors disk-watch.yml).
+          fp=$(date -u +%F | sha256sum | cut -c1-16)
+
+          recently_closed=$(gh issue list --repo "$REPO" --state closed \
+            --label arcus-gas-watch \
+            --search "fp:$fp created:>$(date -u --date='1 day ago' +%Y-%m-%d) in:body" \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$recently_closed" ]; then
+            echo "Skip: fp:$fp already handled on closed #$recently_closed"
+            exit 0
+          fi
+
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --label arcus-gas-watch \
+            --json number --jq '.[0].number // ""')
+
+          body_file=$(mktemp)
+          {
+            echo "Auto-created by arcus-gas-watch workflow (bot-strategy#758)."
+            echo
+            echo "- **Wallet**: \`$ARCUS_WALLET_ADDRESS\`"
+            echo "- **Gas balance**: ${WEI} wei (page threshold: ${effective_page} wei)"
+            echo
+            echo "Detected at: $(date -u +%FT%TZ)"
+            echo "<!-- fp:$fp -->"
+          } > "$body_file"
+
+          if [ -n "$existing" ]; then
+            seen=$(gh issue view "$existing" --repo "$REPO" --json body,comments \
+              --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+              | grep -c "fp:$fp" || true)
+            if [ "$seen" -gt 0 ]; then
+              echo "Skip: fp:$fp already on open #$existing"
+              exit 0
+            fi
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
+            echo "Commented on #$existing"
+          else
+            issue_url=$(gh issue create --repo "$REPO" \
+              --title "[arcus] Gas balance at ${WEI} wei (page threshold)" \
+              --body-file "$body_file" \
+              --label arcus-gas-watch)
+            echo "Created $issue_url"
+            if [ -n "${PROJECTS_TOKEN:-}" ]; then
+              GH_TOKEN="$PROJECTS_TOKEN" gh project item-add 6 \
+                --owner shigeo-nakamura --url "$issue_url" \
+                || echo "::warning::Failed to add $issue_url to project #6"
+            else
+              echo "::warning::PROJECTS_TOKEN unset -- skipping project link"
+            fi
+          fi
