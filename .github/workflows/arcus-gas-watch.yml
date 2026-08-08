@@ -18,6 +18,15 @@ permissions:
   # sets it (see the funding-runbook note below).
   actions: read
 
+# Serialize runs instead of letting an overlapping hourly + workflow_dispatch
+# (e.g. a smoke test) both pass the "no open issue yet" check and create a
+# duplicate. Never cancel an in-flight run: it could be mid-way through
+# filing or updating a genuine low-gas incident (Codex P2 follow-up,
+# debot-dashboard#16).
+concurrency:
+  group: arcus-gas-watch
+  cancel-in-progress: false
+
 env:
   # KMS-derived Arcus Spot signer address (bot-strategy#772/#758). Public
   # on-chain data, not a secret -- the private key never leaves KMS.
@@ -115,11 +124,21 @@ jobs:
             echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei, ever funded: ${EVER_FUNDED})"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$WEI" -eq 0 ] && [ "$EVER_FUNDED" != "true" ]; then
+          # Bash's `[ -eq/-ge ]` parses operands as signed 64-bit integers;
+          # a wei value >= 2^63 (~9.22 native tokens) makes it emit
+          # "integer expression expected" and, because that happens inside
+          # an `if` condition, `set -e` does not stop the script -- it
+          # just silently falls through as if the comparison were false,
+          # which could file a low-gas issue for a well-funded wallet
+          # (Codex P2 follow-up, debot-dashboard#16, round 4). Compare with
+          # Python's arbitrary-precision integers instead.
+          is_zero=$(python3 -c "print('true' if int('$WEI') == 0 else 'false')")
+          if [ "$is_zero" = "true" ] && [ "$EVER_FUNDED" != "true" ]; then
             echo "Wallet not yet funded -- no issue filed"
             exit 0
           fi
-          if [ "$WEI" -ge "$effective_page" ]; then
+          above_threshold=$(python3 -c "print('true' if int('$WEI') >= int('$effective_page') else 'false')")
+          if [ "$above_threshold" = "true" ]; then
             echo "Above page threshold (${effective_page} wei) -- no issue filed"
             exit 0
           fi
