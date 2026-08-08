@@ -156,9 +156,17 @@ jobs:
           # break out of the literal and run arbitrary Python with
           # PROJECTS_TOKEN in the environment (Codex P1 follow-up,
           # debot-dashboard#16, round 5).
-          is_zero=$(WEI="$WEI" python3 -c "import os; print('true' if int(os.environ['WEI']) == 0 else 'false')")
-          if [ "$is_zero" = "true" ] && [ "$EVER_FUNDED" != "true" ]; then
-            echo "Wallet not yet funded -- no issue filed"
+          # Gate on the authorized funding flag alone, not on the observed
+          # balance being exactly zero: the wallet address is public, so
+          # an unsolicited dust transfer below the page threshold (not
+          # zero, but not a real funding either) would otherwise bypass
+          # this guard and file a production low-gas issue every day
+          # until the wallet is genuinely funded (Codex P2 follow-up,
+          # debot-dashboard#16, round 7). A smoke-test dispatch
+          # (force_page_wei set) explicitly bypasses this gate so the
+          # alert path can still be tested before launch.
+          if [ "$EVER_FUNDED" != "true" ] && [ -z "$PAGE_WEI_OVERRIDE" ]; then
+            echo "Wallet not yet authorized-funded -- no issue filed"
             exit 0
           fi
           above_threshold=$(WEI="$WEI" EFFECTIVE_PAGE="$effective_page" python3 -c "import os; print('true' if int(os.environ['WEI']) >= int(os.environ['EFFECTIVE_PAGE']) else 'false')")
