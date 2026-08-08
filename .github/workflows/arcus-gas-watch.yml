@@ -63,7 +63,13 @@ jobs:
             echo "::error::malformed eth_getBalance response: $response"
             exit 1
           fi
-          wei=$(python3 -c "print(int('$hex', 16))")
+          # Pass through an environment variable, never shell-interpolated
+          # into the Python source string: the RPC response is untrusted
+          # external data, and string interpolation into `python3 -c`
+          # would let a crafted value break out of the string literal and
+          # execute arbitrary Python (Codex P1 follow-up,
+          # debot-dashboard#16, round 5).
+          wei=$(HEX="$hex" python3 -c "import os; print(int(os.environ['HEX'], 16))")
           echo "wei=$wei" >> "$GITHUB_OUTPUT"
 
       - name: Track whether the wallet has ever held a positive balance
@@ -119,6 +125,17 @@ jobs:
           set -euo pipefail
 
           effective_page="${PAGE_WEI_OVERRIDE:-$PAGE_WEI}"
+          # A manual workflow_dispatch can supply force_page_wei freely;
+          # reject anything that isn't plain decimal digits before it goes
+          # anywhere near Python (defense in depth alongside passing it
+          # through the environment below, not shell-interpolated into
+          # source -- Codex P1 follow-up, debot-dashboard#16, round 5).
+          case "$effective_page" in
+            ''|*[!0-9]*)
+              echo "::error::PAGE_WEI_OVERRIDE/PAGE_WEI must be decimal digits, got: $effective_page"
+              exit 1
+              ;;
+          esac
 
           {
             echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei, ever funded: ${EVER_FUNDED})"
@@ -131,13 +148,20 @@ jobs:
           # just silently falls through as if the comparison were false,
           # which could file a low-gas issue for a well-funded wallet
           # (Codex P2 follow-up, debot-dashboard#16, round 4). Compare with
-          # Python's arbitrary-precision integers instead.
-          is_zero=$(python3 -c "print('true' if int('$WEI') == 0 else 'false')")
+          # Python's arbitrary-precision integers instead, passed through
+          # the environment rather than interpolated into `python3 -c`'s
+          # source: WEI ultimately traces back to an external RPC
+          # response, and EFFECTIVE_PAGE can be attacker-supplied via
+          # workflow_dispatch -- string interpolation would let either
+          # break out of the literal and run arbitrary Python with
+          # PROJECTS_TOKEN in the environment (Codex P1 follow-up,
+          # debot-dashboard#16, round 5).
+          is_zero=$(WEI="$WEI" python3 -c "import os; print('true' if int(os.environ['WEI']) == 0 else 'false')")
           if [ "$is_zero" = "true" ] && [ "$EVER_FUNDED" != "true" ]; then
             echo "Wallet not yet funded -- no issue filed"
             exit 0
           fi
-          above_threshold=$(python3 -c "print('true' if int('$WEI') >= int('$effective_page') else 'false')")
+          above_threshold=$(WEI="$WEI" EFFECTIVE_PAGE="$effective_page" python3 -c "import os; print('true' if int(os.environ['WEI']) >= int(os.environ['EFFECTIVE_PAGE']) else 'false')")
           if [ "$above_threshold" = "true" ]; then
             echo "Above page threshold (${effective_page} wei) -- no issue filed"
             exit 0
@@ -147,8 +171,17 @@ jobs:
             --description "Auto-created by arcus-gas-watch workflow" 2>/dev/null || true
 
           # One fingerprint per day; subsequent triggers comment on the open
-          # issue rather than spawn duplicates (mirrors disk-watch.yml).
-          fp=$(date -u +%F | sha256sum | cut -c1-16)
+          # issue rather than spawn duplicates (mirrors disk-watch.yml). A
+          # force_page_wei smoke test gets its own distinct fingerprint
+          # namespace: sharing the plain date-only fingerprint with a real
+          # alert would let a closed (or even still-open) test issue
+          # suppress a genuine low-balance reading for the rest of that
+          # UTC day (Codex P2 follow-up, debot-dashboard#16, round 5).
+          fp_seed="$(date -u +%F)"
+          if [ -n "$PAGE_WEI_OVERRIDE" ]; then
+            fp_seed="${fp_seed}-smoketest"
+          fi
+          fp=$(echo "$fp_seed" | sha256sum | cut -c1-16)
 
           # A multi-day-open issue's later fingerprints land in *comments*,
           # not the body -- searching "in:body" alone would miss those
@@ -199,8 +232,12 @@ jobs:
             gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
             echo "Commented on #$existing"
           else
+            title_prefix="[arcus]"
+            if [ -n "$PAGE_WEI_OVERRIDE" ]; then
+              title_prefix="[arcus] [SMOKE TEST]"
+            fi
             issue_url=$(gh issue create --repo "$REPO" \
-              --title "[arcus] Gas balance at ${WEI} wei (page threshold)" \
+              --title "${title_prefix} Gas balance at ${WEI} wei (page threshold)" \
               --body-file "$body_file" \
               --label arcus-gas-watch)
             echo "Created $issue_url"
