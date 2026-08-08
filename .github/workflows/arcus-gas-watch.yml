@@ -167,47 +167,61 @@ jobs:
             exit 0
           fi
 
-          gh label create arcus-gas-watch --repo "$REPO" --color b60205 \
+          # A force_page_wei smoke test gets its own label, fingerprint
+          # namespace, and title prefix -- fully separate from the
+          # production incident stream at every lookup, not just the
+          # fingerprint. Sharing the "arcus-gas-watch" label meant a
+          # left-open smoke-test issue would absorb a genuine low-balance
+          # reading as a comment under a title still marked [SMOKE TEST]
+          # instead of ever creating a real production alert (Codex P2
+          # follow-up, debot-dashboard#16, rounds 5-6).
+          label="arcus-gas-watch"
+          title_prefix="[arcus]"
+          if [ -n "$PAGE_WEI_OVERRIDE" ]; then
+            label="arcus-gas-watch-smoketest"
+            title_prefix="[arcus] [SMOKE TEST]"
+          fi
+          gh label create "$label" --repo "$REPO" --color b60205 \
             --description "Auto-created by arcus-gas-watch workflow" 2>/dev/null || true
 
-          # One fingerprint per day; subsequent triggers comment on the open
-          # issue rather than spawn duplicates (mirrors disk-watch.yml). A
-          # force_page_wei smoke test gets its own distinct fingerprint
-          # namespace: sharing the plain date-only fingerprint with a real
-          # alert would let a closed (or even still-open) test issue
-          # suppress a genuine low-balance reading for the rest of that
-          # UTC day (Codex P2 follow-up, debot-dashboard#16, round 5).
-          fp_seed="$(date -u +%F)"
-          if [ -n "$PAGE_WEI_OVERRIDE" ]; then
-            fp_seed="${fp_seed}-smoketest"
-          fi
-          fp=$(echo "$fp_seed" | sha256sum | cut -c1-16)
+          # One fingerprint per day per stream (production vs smoke-test);
+          # subsequent triggers comment on the open issue rather than
+          # spawn duplicates (mirrors disk-watch.yml).
+          fp=$(echo "${label}-$(date -u +%F)" | sha256sum | cut -c1-16)
 
           # A multi-day-open issue's later fingerprints land in *comments*,
           # not the body -- searching "in:body" alone would miss those
           # once the issue is closed, letting the next hourly run recreate
-          # a duplicate (Codex P2 follow-up, debot-dashboard#16). Find the
-          # candidate by label/recency only, then inspect its full
-          # body+comments the same way the open-issue path below does.
-          # Filter by *closed* date, not created date -- an issue opened
-          # more than a day ago but closed today must still be found
-          # (Codex P2 follow-up, debot-dashboard#16, round 3).
+          # a duplicate (Codex P2 follow-up, debot-dashboard#16). Find
+          # candidates by label/recency only, then inspect each one's full
+          # body+comments the same way the open-issue path below does --
+          # not just the single newest match: if more than one issue in
+          # this label closed within the window, the fingerprint could be
+          # on an older one that `.[0]` would skip past (Codex P2
+          # follow-up, debot-dashboard#16, round 6). Filter by *closed*
+          # date, not created date -- an issue opened more than a day ago
+          # but closed today must still be found (round 3).
           recently_closed=$(gh issue list --repo "$REPO" --state closed \
-            --label arcus-gas-watch \
+            --label "$label" \
             --search "closed:>$(date -u --date='1 day ago' +%Y-%m-%d)" \
-            --json number --jq '.[0].number // ""')
-          if [ -n "$recently_closed" ]; then
-            seen=$(gh issue view "$recently_closed" --repo "$REPO" --json body,comments \
+            --json number --jq '.[].number')
+          already_handled=false
+          for candidate in $recently_closed; do
+            seen=$(gh issue view "$candidate" --repo "$REPO" --json body,comments \
               --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
               | grep -c "fp:$fp" || true)
             if [ "$seen" -gt 0 ]; then
-              echo "Skip: fp:$fp already handled on closed #$recently_closed"
-              exit 0
+              echo "Skip: fp:$fp already handled on closed #$candidate"
+              already_handled=true
+              break
             fi
+          done
+          if [ "$already_handled" = "true" ]; then
+            exit 0
           fi
 
           existing=$(gh issue list --repo "$REPO" --state open \
-            --label arcus-gas-watch \
+            --label "$label" \
             --json number --jq '.[0].number // ""')
 
           body_file=$(mktemp)
@@ -232,14 +246,10 @@ jobs:
             gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
             echo "Commented on #$existing"
           else
-            title_prefix="[arcus]"
-            if [ -n "$PAGE_WEI_OVERRIDE" ]; then
-              title_prefix="[arcus] [SMOKE TEST]"
-            fi
             issue_url=$(gh issue create --repo "$REPO" \
               --title "${title_prefix} Gas balance at ${WEI} wei (page threshold)" \
               --body-file "$body_file" \
-              --label arcus-gas-watch)
+              --label "$label")
             echo "Created $issue_url"
             if [ -n "${PROJECTS_TOKEN:-}" ]; then
               GH_TOKEN="$PROJECTS_TOKEN" gh project item-add 6 \
