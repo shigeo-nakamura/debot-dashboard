@@ -16,6 +16,15 @@ permissions:
   issues: write
   contents: read
 
+# Serialize runs instead of letting an overlapping scheduled run and a
+# workflow_dispatch (e.g. a smoke test) both observe "no open issue yet"
+# and create duplicates. Never cancel an in-flight run: it could be
+# mid-way through filing or updating a genuine incident (Codex P2
+# follow-up, debot-dashboard#17).
+concurrency:
+  group: arcus-health-watch
+  cancel-in-progress: false
+
 env:
   ROBINHOOD_CHAIN_ROUTER: 'https://router.spot.arcus.xyz'
   # Both collectors run on a ~15-minute timer; page only once data is more
@@ -27,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       status: ${{ steps.check.outputs.status }}
+      kind: ${{ steps.check.outputs.kind }}
     steps:
       - name: Check the public Arcus Spot router
         id: check
@@ -37,8 +47,14 @@ jobs:
           echo "http_code=$http_code"
           if [ "$http_code" = "200" ]; then
             echo "status=ok" >> "$GITHUB_OUTPUT"
+            echo "kind=" >> "$GITHUB_OUTPUT"
           else
             echo "status=unavailable (http $http_code)" >> "$GITHUB_OUTPUT"
+            # A stable kind for the fingerprint -- deliberately omits the
+            # dynamic http_code, which would otherwise defeat same-day
+            # dedup for an ongoing outage (Codex P1 follow-up,
+            # debot-dashboard#17).
+            echo "kind=router_unavailable" >> "$GITHUB_OUTPUT"
           fi
 
   host-health:
@@ -46,6 +62,7 @@ jobs:
     environment: disk-watch
     outputs:
       findings: ${{ steps.ssm.outputs.findings }}
+      kinds: ${{ steps.ssm.outputs.kinds }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -123,7 +140,16 @@ jobs:
 
           now=$(awk -F= '/^NOW=/ {print $2}' out.txt)
 
+          # Two parallel outputs: `findings` is the human-readable text
+          # (can include dynamic values like exact staleness in seconds),
+          # `kinds` is a *stable* space-separated list of which specific
+          # checks failed (never a dynamic value), used only to build the
+          # dedup fingerprint downstream. Collapsing every failure kind
+          # into one date-only fingerprint would let an early failure's
+          # fingerprint suppress a later, different failure the same day
+          # (Codex P1 follow-up, debot-dashboard#17).
           findings=""
+          kinds=""
           while IFS= read -r line; do
             case "$line" in
               TIMER*)
@@ -132,21 +158,25 @@ jobs:
                 result=$(echo "$line" | sed -n 's/.*last_result=\([^ ]*\).*/\1/p')
                 if [ "$active" != "active" ]; then
                   findings="${findings}${name}.timer is not active (${active}); "
+                  kinds="${kinds}timer:${name}:inactive "
                 fi
                 if [ -n "$result" ] && [ "$result" != "success" ]; then
                   findings="${findings}${name}.service last run did not succeed (Result=${result}); "
+                  kinds="${kinds}timer:${name}:result_failed "
                 fi
                 ;;
               FILE*)
                 if echo "$line" | grep -q "missing"; then
                   path=$(echo "$line" | awk '{print $2}')
                   findings="${findings}${path} is missing; "
+                  kinds="${kinds}file:${path}:missing "
                 else
                   path=$(echo "$line" | awk '{print $2}')
                   mtime=$(echo "$line" | sed -n 's/.*mtime=\([0-9]*\).*/\1/p')
                   age=$(( now - mtime ))
                   if [ "$age" -gt "$STALE_SECS" ]; then
                     findings="${findings}${path} is ${age}s stale (threshold ${STALE_SECS}s); "
+                    kinds="${kinds}file:${path}:stale "
                   fi
                 fi
                 ;;
@@ -158,6 +188,7 @@ jobs:
             echo "$findings"
             echo 'HEALTHWATCH_EOF'
           } >> "$GITHUB_OUTPUT"
+          echo "kinds=${kinds}" >> "$GITHUB_OUTPUT"
 
   report:
     needs: [router-availability, host-health]
@@ -168,8 +199,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           REPO: shigeo-nakamura/bot-strategy
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ROUTER_STATUS: ${{ needs.router-availability.outputs.status }}
+          ROUTER_KIND: ${{ needs.router-availability.outputs.kind }}
           HOST_FINDINGS: ${{ needs.host-health.outputs.findings }}
+          HOST_KINDS: ${{ needs.host-health.outputs.kinds }}
           HOST_HEALTH_RESULT: ${{ needs.host-health.result }}
           FORCE_PAGE: ${{ inputs.force_page }}
           PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
@@ -177,14 +211,25 @@ jobs:
           set -euo pipefail
 
           problems=""
+          problem_kinds=""
           if [ "$ROUTER_STATUS" != "ok" ]; then
             problems="${problems}Router unavailable: ${ROUTER_STATUS}; "
+            problem_kinds="${problem_kinds}${ROUTER_KIND} "
           fi
           if [ "$HOST_HEALTH_RESULT" != "success" ]; then
-            problems="${problems}host-health job itself failed (SSM/AWS-side issue) -- see workflow run; "
+            # The host-health job failing outright (AWS credentials, SSM
+            # command itself erroring, etc.) never populates HOST_FINDINGS
+            # -- without this branch the issue body would say "Host
+            # findings: none" with no indication anything went wrong
+            # (Codex P2 follow-up, debot-dashboard#17).
+            problems="${problems}host-health job itself failed (result=${HOST_HEALTH_RESULT}); see ${RUN_URL}; "
+            problem_kinds="${problem_kinds}host_health_job_failed:${HOST_HEALTH_RESULT} "
           fi
           if [ -n "$HOST_FINDINGS" ]; then
             problems="${problems}${HOST_FINDINGS}"
+          fi
+          if [ -n "$HOST_KINDS" ]; then
+            problem_kinds="${problem_kinds}${HOST_KINDS}"
           fi
           if [ "$FORCE_PAGE" = "true" ]; then
             problems="${problems}[forced smoke test] "
@@ -193,7 +238,9 @@ jobs:
           {
             echo "## Arcus health watch"
             echo "- Router: ${ROUTER_STATUS}"
+            echo "- host-health job result: ${HOST_HEALTH_RESULT}"
             echo "- Host findings: ${HOST_FINDINGS:-none}"
+            echo "- Run: ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ -z "$problems" ]; then
@@ -208,7 +255,13 @@ jobs:
           gh label create "$label" --repo "$REPO" --color b60205 \
             --description "Auto-created by arcus-health-watch workflow" 2>/dev/null || true
 
-          fp=$(echo "${label}-$(date -u +%F)" | sha256sum | cut -c1-16)
+          # Stable failure identities only (never a dynamic value like an
+          # http_code or a staleness-in-seconds count), so a genuinely
+          # different failure later the same day gets its own fingerprint
+          # instead of being suppressed by an earlier, unrelated one's
+          # (Codex P1 follow-up, debot-dashboard#17).
+          normalized_kinds=$(echo "$problem_kinds" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ',')
+          fp=$(echo "${label}-$(date -u +%F)-${normalized_kinds}" | sha256sum | cut -c1-16)
 
           recently_closed=$(gh issue list --repo "$REPO" --state closed \
             --label "$label" \
@@ -238,7 +291,9 @@ jobs:
             echo "Auto-created by arcus-health-watch workflow (bot-strategy#758)."
             echo
             echo "- **Router**: ${ROUTER_STATUS}"
+            echo "- **host-health job result**: ${HOST_HEALTH_RESULT}"
             echo "- **Host findings**: ${HOST_FINDINGS:-none}"
+            echo "- **Run**: ${RUN_URL}"
             echo
             echo "Detected at: $(date -u +%FT%TZ)"
             echo "<!-- fp:$fp -->"
