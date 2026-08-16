@@ -81,10 +81,11 @@ jobs:
           set -e
           now=$(date +%s)
           echo "NOW=$now"
-          for timer in arcus-spot-quote-collector arcus-spot-rust-recorder archive-arcus-quotes; do
+          for timer in arcus-spot-quote-collector arcus-spot-rust-recorder archive-arcus-quotes arcus-spot-live-tick; do
             active=$(systemctl is-active "${timer}.timer" 2>&1 || true)
+            enabled=$(systemctl is-enabled "${timer}.timer" 2>&1 || true)
             result=$(systemctl show "${timer}.service" -p Result --value 2>&1 || true)
-            echo "TIMER ${timer} active=${active} last_result=${result}"
+            echo "TIMER ${timer} active=${active} enabled=${enabled} last_result=${result}"
           done
           for f in /var/lib/debot-arcus/spot-quote/latest.json /var/lib/debot-arcus/spot-rust/latest.json; do
             if [ -f "$f" ]; then
@@ -155,10 +156,15 @@ jobs:
               TIMER*)
                 name=$(echo "$line" | awk '{print $2}')
                 active=$(echo "$line" | sed -n 's/.*active=\([^ ]*\).*/\1/p')
+                enabled=$(echo "$line" | sed -n 's/.*enabled=\([^ ]*\).*/\1/p')
                 result=$(echo "$line" | sed -n 's/.*last_result=\([^ ]*\).*/\1/p')
                 if [ "$active" != "active" ]; then
                   findings="${findings}${name}.timer is not active (${active}); "
                   kinds="${kinds}timer:${name}:inactive "
+                fi
+                if [ "$enabled" != "enabled" ]; then
+                  findings="${findings}${name}.timer is not enabled (${enabled}); "
+                  kinds="${kinds}timer:${name}:disabled "
                 fi
                 if [ -n "$result" ] && [ "$result" != "success" ]; then
                   findings="${findings}${name}.service last run did not succeed (Result=${result}); "
