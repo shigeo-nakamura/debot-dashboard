@@ -11,12 +11,11 @@ on:
         required: false
         default: ''
 
-permissions:
-  issues: write
-  contents: read
-  # Read-only: this workflow only lists ARCUS_WALLET_EVER_FUNDED, it never
-  # sets it (see the funding-runbook note below).
-  actions: read
+# The workflow's cross-repository issue/project operations authenticate with
+# PROJECTS_TOKEN only when an alert must be reported. Reading repository
+# configuration through the `vars` context does not require a GitHub API call
+# or any GITHUB_TOKEN permission.
+permissions: {}
 
 # Serialize runs instead of letting an overlapping hourly + workflow_dispatch
 # (e.g. a smoke test) both pass the "no open issue yet" check and create a
@@ -28,9 +27,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # KMS-derived Arcus Spot signer address (bot-strategy#772/#758). Public
-  # on-chain data, not a secret -- the private key never leaves KMS.
-  ARCUS_WALLET_ADDRESS: '0x53cb889b5f3928921abb5ec413a2501cbf6170c6'
+  # Public, non-secret operational configuration. Both values are required
+  # repository variables and are validated before the RPC call. Wallet
+  # rotations must update ARCUS_WALLET_ADDRESS as part of the custody
+  # rotation runbook; see deploy/arcus-gas-watch.md.
+  ARCUS_WALLET_ADDRESS: ${{ vars.ARCUS_WALLET_ADDRESS }}
+  ARCUS_WALLET_EVER_FUNDED: ${{ vars.ARCUS_WALLET_EVER_FUNDED }}
   ROBINHOOD_CHAIN_RPC: 'https://rpc.mainnet.chain.robinhood.com'
   # 0.002 ETH: comfortably above a single Permit2 + swap's typical gas cost
   # on an Arbitrum-Orbit L2, well below the probe's overall loss caps.
@@ -40,6 +42,21 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate Arcus gas-watch configuration
+        run: |
+          set -euo pipefail
+          if [[ ! "$ARCUS_WALLET_ADDRESS" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::ARCUS_WALLET_ADDRESS must be a configured 20-byte EVM address"
+            exit 1
+          fi
+          case "$ARCUS_WALLET_EVER_FUNDED" in
+            true|false) ;;
+            *)
+              echo "::error::ARCUS_WALLET_EVER_FUNDED must be explicitly configured as true or false"
+              exit 1
+              ;;
+          esac
+
       - name: Read Arcus wallet gas balance
         id: balance
         run: |
@@ -72,53 +89,11 @@ jobs:
           wei=$(HEX="$hex" python3 -c "import os; print(int(os.environ['HEX'], 16))")
           echo "wei=$wei" >> "$GITHUB_OUTPUT"
 
-      - name: Track whether the wallet has ever held a positive balance
-        id: funded
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DASHBOARD_REPO: shigeo-nakamura/debot-dashboard
-          WEI: ${{ steps.balance.outputs.wei }}
-        run: |
-          set -euo pipefail
-          # Zero alone can't distinguish "never funded yet" (expected
-          # pre-launch, per bot-strategy#772's separate funding approval)
-          # from "was funded, now fully drained" (the single most urgent
-          # low-gas state there is) -- inferring it from the current
-          # reading would silently suppress the latter forever (Codex P1
-          # follow-up, debot-dashboard#16). A persisted repo variable is
-          # the explicit signal instead.
-          #
-          # This workflow only *reads* ARCUS_WALLET_EVER_FUNDED, never
-          # sets it. The wallet address is public, so anyone can send it
-          # a dust amount before the real, deliberate funding step in
-          # bot-strategy#775's runbook (~08-10) -- auto-setting the flag
-          # from any observed positive balance would let that dust
-          # transfer permanently defeat the pre-launch suppression it
-          # exists to provide (Codex P2 follow-up, debot-dashboard#16).
-          # The funding runbook itself must run, once, as part of
-          # actually funding the wallet:
-          #   gh variable set ARCUS_WALLET_EVER_FUNDED --repo shigeo-nakamura/debot-dashboard --body true
-          #
-          # `gh variable` has no `get` subcommand, so existence is checked
-          # via `list`. Only a *successful* list that simply doesn't
-          # contain the variable yet (the expected pre-funding state) may
-          # default to false. The list command itself failing -- auth,
-          # rate limit, a transient API error -- must fail the job loudly
-          # instead of silently reintroducing the exact zero-balance-
-          # suppression bug this step exists to close: a masked lookup
-          # failure on a genuinely drained, previously-funded wallet would
-          # again report it as merely "not yet funded".
-          list_output=$(gh variable list --repo "$DASHBOARD_REPO" --json name,value)
-          ever_funded=$(echo "$list_output" | jq -r '.[] | select(.name == "ARCUS_WALLET_EVER_FUNDED") | .value')
-          ever_funded="${ever_funded:-false}"
-          echo "ever_funded=$ever_funded" >> "$GITHUB_OUTPUT"
-
       - name: Evaluate threshold and report
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           REPO: shigeo-nakamura/bot-strategy
           WEI: ${{ steps.balance.outputs.wei }}
-          EVER_FUNDED: ${{ steps.funded.outputs.ever_funded }}
           PAGE_WEI_OVERRIDE: ${{ inputs.force_page_wei }}
           PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
         run: |
@@ -138,7 +113,7 @@ jobs:
           esac
 
           {
-            echo "## Arcus gas balance -- ${WEI} wei (page threshold: ${effective_page} wei, ever funded: ${EVER_FUNDED})"
+            echo "## Arcus gas balance -- ${WEI} wei (wallet: ${ARCUS_WALLET_ADDRESS}, page threshold: ${effective_page} wei, ever funded: ${ARCUS_WALLET_EVER_FUNDED})"
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Bash's `[ -eq/-ge ]` parses operands as signed 64-bit integers;
@@ -165,7 +140,7 @@ jobs:
           # debot-dashboard#16, round 7). A smoke-test dispatch
           # (force_page_wei set) explicitly bypasses this gate so the
           # alert path can still be tested before launch.
-          if [ "$EVER_FUNDED" != "true" ] && [ -z "$PAGE_WEI_OVERRIDE" ]; then
+          if [ "$ARCUS_WALLET_EVER_FUNDED" != "true" ] && [ -z "$PAGE_WEI_OVERRIDE" ]; then
             echo "Wallet not yet authorized-funded -- no issue filed"
             exit 0
           fi
