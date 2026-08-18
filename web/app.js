@@ -229,7 +229,6 @@ const updateFleetSummary = (targets) => {
   // initial WS position sync (`positions_ready: false`) doesn't report
   // as falsely flat.
   let positionsTotal = 0;
-  let botsWithPositions = 0;
   const cutoff24hSec = Math.floor(Date.now() / 1000) - 86400;
   const monthStartMs = currentUtcMonthStartMs();
   targets.forEach((target, index) => {
@@ -253,7 +252,6 @@ const updateFleetSummary = (targets) => {
       }
       if (data.positions_ready !== false && typeof data.position_count === "number") {
         positionsTotal += data.position_count;
-        if (data.position_count > 0) botsWithPositions += 1;
       }
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
@@ -331,7 +329,6 @@ const updateFleetSummary = (targets) => {
   // Each pairtrade position is two legs (e.g. BTC+ETH); halve the raw leg
   // count so this reads as a pair count.
   setField("fleet-positions-total", `${positionsTotal / 2}`);
-  setField("fleet-bots-with-positions", `${botsWithPositions}`);
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
