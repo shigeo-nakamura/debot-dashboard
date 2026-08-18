@@ -328,7 +328,9 @@ const updateFleetSummary = (targets) => {
     applySignedClass(cagrMonthEl, null);
   }
   setField("fleet-equity-total", formatUsdc(equityTotal));
-  setField("fleet-positions-total", `${positionsTotal}`);
+  // Each pairtrade position is two legs (e.g. BTC+ETH); halve the raw leg
+  // count so this reads as a pair count.
+  setField("fleet-positions-total", `${positionsTotal / 2}`);
   setField("fleet-bots-with-positions", `${botsWithPositions}`);
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
