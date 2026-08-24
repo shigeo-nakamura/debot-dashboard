@@ -268,7 +268,7 @@ const updateFleetSummary = (targets) => {
       }
     }
     if (target.kill_switch_active === true) killSwitches += 1;
-    if (target.service_status && target.service_status !== "active") servicesDown += 1;
+    if (isTargetUnhealthy(target)) servicesDown += 1;
   });
   setField("fleet-total", `${targets.length}`);
   setField("fleet-pnl-today", formatPnl(pnlToday));
@@ -861,6 +861,16 @@ const updateCard = (card, target, pollSecs, index, key) => {
 };
 
 const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
+
+const isTargetUnhealthy = (target) => {
+  const serviceUnhealthy = Boolean(
+    target.service_status && target.service_status !== "active",
+  );
+  const accumulator = isAccumulatorStatus(target.status)
+    ? target.status.accumulator
+    : null;
+  return serviceUnhealthy || (accumulator !== null && accumulator.healthy !== true);
+};
 
 const formatHype = (value) => {
   const number = parseNumber(value);

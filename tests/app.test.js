@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, accumulatorViewModel };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel };`;
 const context = {
   document: { getElementById: () => null },
   fetch: () => new Promise(() => {}),
@@ -99,4 +99,28 @@ test("accumulator view reports balances, activity age, and cadence", () => {
   assert.match(model.lastTrade, /2h ago$/);
   assert.equal(model.cadence, "Mon/Wed/Fri at 12:00 UTC");
   assert.match(model.observed, /0s ago$/);
+});
+
+test("fleet health counts a fresh degraded accumulator once", () => {
+  assert.equal(
+    context.__test.isTargetUnhealthy({
+      service_status: "active",
+      status: { accumulator: { healthy: false } },
+    }),
+    true,
+  );
+  assert.equal(
+    context.__test.isTargetUnhealthy({
+      service_status: "active",
+      status: { accumulator: { healthy: true } },
+    }),
+    false,
+  );
+  assert.equal(
+    context.__test.isTargetUnhealthy({
+      service_status: "stale",
+      status: { accumulator: { healthy: false } },
+    }),
+    true,
+  );
 });
