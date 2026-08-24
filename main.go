@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	defaultPollIntervalSecs = 20
-	commandTimeout          = 15 * time.Second
+	defaultPollIntervalSecs  = 20
+	commandTimeout           = 15 * time.Second
+	accumulatorSchemaVersion = 1
 	// Status objects older than this are reported as "stale". Bot
 	// status writers emit at 60s cadence, so 180s gives 3× headroom
 	// before the dashboard flips a target to stale (bot-strategy#343).
@@ -106,8 +107,9 @@ type AccumulatorStatus struct {
 }
 
 type StatusData struct {
-	TS        int64  `json:"ts"`
-	UpdatedAt string `json:"updated_at"`
+	SchemaVersion uint8  `json:"schema_version,omitempty"`
+	TS            int64  `json:"ts"`
+	UpdatedAt     string `json:"updated_at"`
 	// ProcessStartedAt is the bot process boot time (epoch s),
 	// self-reported by both pairtrade and xvenue-arb since
 	// bot-strategy#343.
@@ -621,8 +623,8 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 		return result
 	}
 
-	var status StatusData
-	if err := json.Unmarshal(body, &status); err != nil {
+	status, err := decodeStatusPayload(body)
+	if err != nil {
 		result.Error = fmt.Sprintf("s3 parse error: %v", err)
 		return result
 	}
@@ -671,6 +673,21 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 	}
 	result.Status = &status
 	return result
+}
+
+func decodeStatusPayload(payload []byte) (StatusData, error) {
+	var status StatusData
+	if err := json.Unmarshal(payload, &status); err != nil {
+		return StatusData{}, err
+	}
+	if status.Accumulator != nil && status.SchemaVersion != accumulatorSchemaVersion {
+		return StatusData{}, fmt.Errorf(
+			"unsupported accumulator schema_version %d (want %d)",
+			status.SchemaVersion,
+			accumulatorSchemaVersion,
+		)
+	}
+	return status, nil
 }
 
 func historyCutoff(rangeParam string) (bool, int64) {

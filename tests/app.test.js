@@ -12,6 +12,13 @@ const context = {
 };
 vm.runInNewContext(source, context);
 
+const accumulatorFixture = JSON.parse(
+  fs.readFileSync(
+    `${__dirname}/fixtures/hype-accumulator-status-v1.json`,
+    "utf8",
+  ),
+);
+
 const makeCard = () => {
   const container = { hidden: true };
   const strip = { innerHTML: "" };
@@ -74,29 +81,22 @@ test("halt history stays hidden when only non-halt audit events exist", () => {
   assert.equal(view.strip.innerHTML, "");
 });
 
-test("accumulator view reports balances, activity age, and cadence", () => {
-  const accumulator = {
-    total_equity_usdc: 125,
-    usdc_balance: 25,
-    hype_balance: 2.5,
-    hype_price_usdc: 40,
-    balance_observed_at: "2026-08-24T10:00:00Z",
-    last_trade_at: "2026-08-24T08:00:00Z",
-    trade_cadence: "Mon/Wed/Fri at 12:00 UTC",
-    healthy: true,
-  };
+test("producer fixture reports balances, activity age, and cadence", () => {
+  const accumulator = accumulatorFixture.accumulator;
   const model = context.__test.accumulatorViewModel(
     accumulator,
-    Date.parse("2026-08-24T10:00:00Z"),
+    Date.parse(accumulator.balance_observed_at),
   );
 
+  assert.equal(accumulatorFixture.schema_version, 1);
+  assert.equal(accumulatorFixture.dry_run, true);
   assert.equal(context.__test.isAccumulatorStatus({ accumulator }), true);
   assert.equal(context.__test.isAccumulatorStatus({ pnl_total: 100 }), false);
   assert.equal(model.total, "125.0 USDC");
   assert.equal(model.usdc, "25.0 USDC");
   assert.equal(model.hype, "2.5 HYPE");
   assert.equal(model.mark, "40.0 USDC");
-  assert.match(model.lastTrade, /2h ago$/);
+  assert.match(model.lastTrade, /24h ago$/);
   assert.equal(model.cadence, "Mon/Wed/Fri at 12:00 UTC");
   assert.match(model.observed, /0s ago$/);
 });
