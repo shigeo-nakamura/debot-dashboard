@@ -27,38 +27,38 @@ type metricsCollector struct {
 	statusAgeSec          *prometheus.GaugeVec
 
 	// Group 2 — DD timing.
-	dailyPnlUsd        *prometheus.GaugeVec
-	dailyPnlBps        *prometheus.GaugeVec
-	dailyMaxLossBps    *prometheus.GaugeVec
-	dailyRiskHalted    *prometheus.GaugeVec
-	sessionStartTS     *prometheus.GaugeVec
-	currentEquity      *prometheus.GaugeVec
-	peakEquity         *prometheus.GaugeVec
-	sessionDDBps       *prometheus.GaugeVec
-	sessionMaxLossBps  *prometheus.GaugeVec
-	sessionHalted      *prometheus.GaugeVec
-	sessionHaltTS      *prometheus.GaugeVec
+	dailyPnlUsd       *prometheus.GaugeVec
+	dailyPnlBps       *prometheus.GaugeVec
+	dailyMaxLossBps   *prometheus.GaugeVec
+	dailyRiskHalted   *prometheus.GaugeVec
+	sessionStartTS    *prometheus.GaugeVec
+	currentEquity     *prometheus.GaugeVec
+	peakEquity        *prometheus.GaugeVec
+	sessionDDBps      *prometheus.GaugeVec
+	sessionMaxLossBps *prometheus.GaugeVec
+	sessionHalted     *prometheus.GaugeVec
+	sessionHaltTS     *prometheus.GaugeVec
 
 	// Group 3 — risk halt state.
-	cbActive             *prometheus.GaugeVec
-	cbConsecutiveLosses  *prometheus.GaugeVec
-	cbUntilTS            *prometheus.GaugeVec
-	cbCooldownRemaining  *prometheus.GaugeVec
-	killSwitchActive     *prometheus.GaugeVec
-	shutdownPending      *prometheus.GaugeVec
-	riskEventsTotal      *prometheus.CounterVec
+	cbActive            *prometheus.GaugeVec
+	cbConsecutiveLosses *prometheus.GaugeVec
+	cbUntilTS           *prometheus.GaugeVec
+	cbCooldownRemaining *prometheus.GaugeVec
+	killSwitchActive    *prometheus.GaugeVec
+	shutdownPending     *prometheus.GaugeVec
+	riskEventsTotal     *prometheus.CounterVec
 
 	// Group 6 — system health.
-	serviceActive       *prometheus.GaugeVec
-	serviceStartedTS    *prometheus.GaugeVec
-	processUptimeSec    *prometheus.GaugeVec
-	wsReset24h          *prometheus.GaugeVec
-	errorCount30m       *prometheus.GaugeVec
-	warnCount30m        *prometheus.GaugeVec
-	errorCountTotal     *prometheus.GaugeVec
-	warnCountTotal      *prometheus.GaugeVec
-	lastErrorTS         *prometheus.GaugeVec
-	lastWarnTS          *prometheus.GaugeVec
+	serviceActive    *prometheus.GaugeVec
+	serviceStartedTS *prometheus.GaugeVec
+	processUptimeSec *prometheus.GaugeVec
+	wsReset24h       *prometheus.GaugeVec
+	errorCount30m    *prometheus.GaugeVec
+	warnCount30m     *prometheus.GaugeVec
+	errorCountTotal  *prometheus.GaugeVec
+	warnCountTotal   *prometheus.GaugeVec
+	lastErrorTS      *prometheus.GaugeVec
+	lastWarnTS       *prometheus.GaugeVec
 
 	// Group 7 — config visibility.
 	dryRun       *prometheus.GaugeVec
@@ -67,8 +67,8 @@ type metricsCollector struct {
 	// Phase 2 derived "when X happened" timestamps (answers the
 	// user's "when did the DD start / when did we last trade"
 	// question without needing pairtrade-side instrumentation).
-	lastTradeTS               *prometheus.GaugeVec
-	peakEquityLastChangedTS   *prometheus.GaugeVec
+	lastTradeTS             *prometheus.GaugeVec
+	peakEquityLastChangedTS *prometheus.GaugeVec
 
 	// Dashboard self-metrics.
 	pollErrorsTotal *prometheus.CounterVec
