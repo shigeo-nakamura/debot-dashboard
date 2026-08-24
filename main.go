@@ -78,21 +78,36 @@ type TradeStats struct {
 }
 
 type ShutdownPosition struct {
-	Key              string `json:"key"`
-	EnteredTS        int64  `json:"entered_ts"`
-	ForceCloseEtaTS  int64  `json:"force_close_eta_ts"`
+	Key             string `json:"key"`
+	EnteredTS       int64  `json:"entered_ts"`
+	ForceCloseEtaTS int64  `json:"force_close_eta_ts"`
 }
 
 type ShutdownStatus struct {
-	Pending          bool               `json:"pending"`
-	GraceDeadlineTS  int64              `json:"grace_deadline_ts"`
-	ForceCloseEtaTS  *int64             `json:"force_close_eta_ts"`
-	Positions        []ShutdownPosition `json:"positions"`
+	Pending         bool               `json:"pending"`
+	GraceDeadlineTS int64              `json:"grace_deadline_ts"`
+	ForceCloseEtaTS *int64             `json:"force_close_eta_ts"`
+	Positions       []ShutdownPosition `json:"positions"`
+}
+
+// AccumulatorStatus is the dashboard-safe balance/activity view emitted by
+// hype-accumulator. It intentionally excludes account identity and signing
+// material. TotalEquityUSDC is derived bot-side from the reconciled balances.
+type AccumulatorStatus struct {
+	TotalEquityUSDC   float64 `json:"total_equity_usdc"`
+	USDCBalance       float64 `json:"usdc_balance"`
+	HYPEBalance       float64 `json:"hype_balance"`
+	HYPEPriceUSDC     float64 `json:"hype_price_usdc"`
+	BalanceObservedAt string  `json:"balance_observed_at"`
+	LastTradeAt       *string `json:"last_trade_at,omitempty"`
+	TradeCadence      string  `json:"trade_cadence"`
+	Healthy           bool    `json:"healthy"`
+	HealthReason      *string `json:"health_reason,omitempty"`
 }
 
 type StatusData struct {
-	TS             int64            `json:"ts"`
-	UpdatedAt      string           `json:"updated_at"`
+	TS        int64  `json:"ts"`
+	UpdatedAt string `json:"updated_at"`
 	// ProcessStartedAt is the bot process boot time (epoch s),
 	// self-reported by both pairtrade and xvenue-arb since
 	// bot-strategy#343.
@@ -100,35 +115,36 @@ type StatusData struct {
 	// WsReset24hCount is the count of `Connection reset without
 	// closing handshake` events over the last 24h, self-reported by
 	// the bot via bot-strategy#343.
-	WsReset24hCount  uint64 `json:"ws_reset_24h_count,omitempty"`
+	WsReset24hCount uint64 `json:"ws_reset_24h_count,omitempty"`
 	// KillSwitchActive reports whether `/opt/debot/KILL_SWITCH`
 	// exists on the bot host, self-reported via bot-strategy#343.
-	KillSwitchActive bool   `json:"kill_switch_active,omitempty"`
-	ID             *string          `json:"id"`
-	Agent          *string          `json:"agent"`
-	Dex            string           `json:"dex"`
-	DryRun         bool             `json:"dry_run"`
-	BacktestMode   bool             `json:"backtest_mode"`
-	IntervalSecs   int              `json:"interval_secs"`
-	PositionsReady bool             `json:"positions_ready"`
-	PositionCount  int              `json:"position_count"`
-	HasPosition    bool             `json:"has_position"`
-	Positions      []StatusPosition `json:"positions"`
-	PnlTotal       float64          `json:"pnl_total"`
-	PnlToday       float64          `json:"pnl_today"`
-	PnlSource      string           `json:"pnl_source"`
+	KillSwitchActive bool             `json:"kill_switch_active,omitempty"`
+	ID               *string          `json:"id"`
+	Agent            *string          `json:"agent"`
+	Dex              string           `json:"dex"`
+	DryRun           bool             `json:"dry_run"`
+	BacktestMode     bool             `json:"backtest_mode"`
+	IntervalSecs     int              `json:"interval_secs"`
+	PositionsReady   bool             `json:"positions_ready"`
+	PositionCount    int              `json:"position_count"`
+	HasPosition      bool             `json:"has_position"`
+	Positions        []StatusPosition `json:"positions"`
+	PnlTotal         float64          `json:"pnl_total"`
+	PnlToday         float64          `json:"pnl_today"`
+	PnlSource        string           `json:"pnl_source"`
 	// Sum of `funding_carry_usd` across cycles closed during the
 	// current UTC session (bot-strategy#371). Pointer so a pre-#371
 	// binary's missing field deserialises to nil and the dashboard
 	// renders "-" instead of a misleading "$0.00". Post-#371
 	// binaries always emit the field (zero is a meaningful "no
 	// closed cycles today" measurement).
-	FundingCarryToday *float64 `json:"funding_carry_today,omitempty"`
-	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
-	Maintenance    *string                `json:"maintenance,omitempty"`
-	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
-	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
-	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
+	FundingCarryToday *float64           `json:"funding_carry_today,omitempty"`
+	Accumulator       *AccumulatorStatus `json:"accumulator,omitempty"`
+	TradeStats        *TradeStats        `json:"trade_stats,omitempty"`
+	Maintenance       *string            `json:"maintenance,omitempty"`
+	Shutdown          *ShutdownStatus    `json:"shutdown,omitempty"`
+	ErrorSummary      *ErrorSummary      `json:"error_summary,omitempty"`
+	EquityHistory     []EquityPoint      `json:"equity_history,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -293,7 +309,7 @@ type TargetStatus struct {
 	// WebSocket events over the last 24 hours, self-reported by the bot
 	// via `WsReset24hCount` in status.json (bot-strategy#343). Alerting
 	// threshold is 25/day per bot-strategy#47 (raised from 10, see #547).
-	WsReset24h       *int      `json:"ws_reset_24h,omitempty"`
+	WsReset24h *int `json:"ws_reset_24h,omitempty"`
 	// KillSwitchActive reports whether `/opt/debot/KILL_SWITCH` exists
 	// on the target instance, self-reported by the bot via status.json
 	// (bot-strategy#343). True → operator-triggered halt file is
@@ -698,4 +714,3 @@ func parseEquityHistory(payload string, cutoffMs int64) []EquityPoint {
 	}
 	return points
 }
-

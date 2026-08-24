@@ -20,6 +20,15 @@ targets:
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
     s3_key: debot/status/frankfurt/debot-pair-btceth-a.json
+# HYPE accumulator targets use the same freshness/health path but render the
+# nested accumulator balance/activity view instead of PnL statistics.
+#  - name: HYPE Accumulator
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: hype-accumulator
+#    region: ap-northeast-1
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: debot/status/example/hype-accumulator.json
 # auth:
 #   username: admin
 #   password: change-me

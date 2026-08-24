@@ -233,7 +233,10 @@ const updateFleetSummary = (targets) => {
   const monthStartMs = currentUtcMonthStartMs();
   targets.forEach((target, index) => {
     const data = target.status;
-    if (data) {
+    // Accumulator equity is an asset balance, not trading PnL. Keep the HYPE
+    // target in fleet health/target counts while excluding it from every PnL,
+    // return, drawdown, and open-position aggregate.
+    if (data && !isAccumulatorStatus(data)) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
       if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
       if (typeof data.funding_carry_today === "number") {
@@ -432,6 +435,21 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <div class="accumulator-view" data-field="accumulator-view" hidden>
+        <div class="accumulator-equity">
+          <span>Total equity</span>
+          <strong data-field="accumulator-total"></strong>
+        </div>
+        <div class="kv accumulator-balances">
+          <div>USDC amount <span data-field="accumulator-usdc"></span></div>
+          <div>HYPE amount <span data-field="accumulator-hype"></span></div>
+          <div>HYPE mark <span data-field="accumulator-mark"></span></div>
+        </div>
+        <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
+        <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
+        <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
+      </div>
+      <div data-field="trading-view">
       <div class="kv">
         <div>PnL today <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
@@ -450,6 +468,7 @@ const createCard = (key) => {
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
       </div>
       <div class="positions" data-field="positions-list"></div>
+      </div>
       <div class="error" data-field="error" hidden></div>
       </div>
     `;
@@ -469,8 +488,15 @@ const createCard = (key) => {
 
 const updateCard = (card, target, pollSecs, index, key) => {
   const status = target.service_status || "unknown";
-  const statusClass = status === "active" ? "active" : status === "inactive" ? "inactive" : "unknown";
   const data = target.status || {};
+  const accumulator = isAccumulatorStatus(data) ? data.accumulator : null;
+  const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
+  const displayStatus = status === "active" && accumulator
+    ? accumulatorDegraded ? "degraded" : "healthy"
+    : status;
+  const statusClass = displayStatus === "healthy" || displayStatus === "active"
+    ? "active"
+    : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
   const stale = isStale(updatedAt, pollSecs);
   const pnlTodayValue = parseNumber(data.pnl_today);
@@ -487,6 +513,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
 
   card.classList.toggle("stale", stale);
+  card.classList.toggle("degraded", accumulatorDegraded);
   card.style.animationDelay = `${index * 0.04}s`;
 
   const nameEl = card.querySelector('[data-field="name"]');
@@ -504,7 +531,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const chartEmptyEl = card.querySelector('[data-field="equity-empty"]');
 
   nameEl.textContent = target.name || target.service || "debot";
-  statusEl.textContent = status;
+  statusEl.textContent = displayStatus;
   statusEl.className = `status-pill ${statusClass}`;
 
   // Maintenance badge
@@ -725,6 +752,21 @@ const updateCard = (card, target, pollSecs, index, key) => {
     startedEl.textContent = formatStarted(target.service_started_at);
   }
   ageEl.textContent = ageText;
+  const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
+  const tradingViewEl = card.querySelector('[data-field="trading-view"]');
+  if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
+  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null;
+  if (accumulator) {
+    renderAccumulatorStatus(card, accumulator);
+    if (target.error || accumulatorDegraded) {
+      errorEl.hidden = false;
+      errorEl.textContent = target.error || accumulator.health_reason || "Accumulator health check failed";
+    } else {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+    }
+    return;
+  }
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
   applySignedClass(pnlTodayEl, pnlTodayValue);
@@ -816,6 +858,49 @@ const updateCard = (card, target, pollSecs, index, key) => {
     errorEl.hidden = true;
     errorEl.textContent = "";
   }
+};
+
+const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
+
+const formatHype = (value) => {
+  const number = parseNumber(value);
+  if (number === null) return "-";
+  const amount = number.toFixed(6).replace(/\.?0+$/, "");
+  return `${amount} HYPE`;
+};
+
+const formatDateWithAge = (value, nowMs = Date.now()) => {
+  if (!value) return "Never";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "-";
+  return `${new Date(timestamp).toLocaleString()} · ${formatAge(nowMs - timestamp)} ago`;
+};
+
+const accumulatorViewModel = (accumulator, nowMs = Date.now()) => ({
+  total: formatUsdc(parseNumber(accumulator.total_equity_usdc)),
+  usdc: formatUsdc(parseNumber(accumulator.usdc_balance)),
+  hype: formatHype(accumulator.hype_balance),
+  mark: formatUsdc(parseNumber(accumulator.hype_price_usdc)),
+  lastTrade: formatDateWithAge(accumulator.last_trade_at, nowMs),
+  cadence: accumulator.trade_cadence || "-",
+  observed: formatDateWithAge(accumulator.balance_observed_at, nowMs),
+});
+
+const renderAccumulatorStatus = (card, accumulator) => {
+  const view = accumulatorViewModel(accumulator);
+  const fields = {
+    "accumulator-total": view.total,
+    "accumulator-usdc": view.usdc,
+    "accumulator-hype": view.hype,
+    "accumulator-mark": view.mark,
+    "accumulator-last-trade": view.lastTrade,
+    "accumulator-cadence": view.cadence,
+    "accumulator-observed": view.observed,
+  };
+  Object.entries(fields).forEach(([field, value]) => {
+    const element = card.querySelector(`[data-field="${field}"]`);
+    if (element) element.textContent = value;
+  });
 };
 
 const setupRangeToggle = () => {

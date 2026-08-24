@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, accumulatorViewModel };`;
 const context = {
   document: { getElementById: () => null },
   fetch: () => new Promise(() => {}),
@@ -72,4 +72,31 @@ test("halt history stays hidden when only non-halt audit events exist", () => {
   assert.equal(rendered, false);
   assert.equal(view.container.hidden, true);
   assert.equal(view.strip.innerHTML, "");
+});
+
+test("accumulator view reports balances, activity age, and cadence", () => {
+  const accumulator = {
+    total_equity_usdc: 125,
+    usdc_balance: 25,
+    hype_balance: 2.5,
+    hype_price_usdc: 40,
+    balance_observed_at: "2026-08-24T10:00:00Z",
+    last_trade_at: "2026-08-24T08:00:00Z",
+    trade_cadence: "Mon/Wed/Fri at 12:00 UTC",
+    healthy: true,
+  };
+  const model = context.__test.accumulatorViewModel(
+    accumulator,
+    Date.parse("2026-08-24T10:00:00Z"),
+  );
+
+  assert.equal(context.__test.isAccumulatorStatus({ accumulator }), true);
+  assert.equal(context.__test.isAccumulatorStatus({ pnl_total: 100 }), false);
+  assert.equal(model.total, "125.0 USDC");
+  assert.equal(model.usdc, "25.0 USDC");
+  assert.equal(model.hype, "2.5 HYPE");
+  assert.equal(model.mark, "40.0 USDC");
+  assert.match(model.lastTrade, /2h ago$/);
+  assert.equal(model.cadence, "Mon/Wed/Fri at 12:00 UTC");
+  assert.match(model.observed, /0s ago$/);
 });

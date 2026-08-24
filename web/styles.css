@@ -483,6 +483,11 @@ body::after {
   background: rgba(220, 38, 38, 0.12);
 }
 
+.status-pill.degraded {
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.12);
+}
+
 .status-pill.unknown {
   color: var(--warning);
   background: rgba(245, 158, 11, 0.14);
@@ -598,6 +603,44 @@ body::after {
 .row strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+.accumulator-view[hidden],
+[data-field="trading-view"][hidden] {
+  display: none;
+}
+
+.accumulator-equity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 16px 0 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(22, 163, 74, 0.06);
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.accumulator-equity strong {
+  color: var(--ink);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 28px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.accumulator-balances {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.card.degraded .accumulator-equity {
+  background: rgba(220, 38, 38, 0.06);
 }
 
 .kv {
@@ -773,4 +816,3 @@ body::after {
     gap: 8px;
   }
 }
-
