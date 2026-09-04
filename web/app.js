@@ -259,6 +259,7 @@ const updateFleetSummary = (targets) => {
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
+      if (isHanBridgeHalted(data)) halts += 1;
       if (Array.isArray(data.risk_history)) {
         for (const ev of data.risk_history) {
           if (ev.event_type === "activated" && ev.ts >= cutoff24hSec) {
@@ -693,7 +694,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
     target.kill_switch_active === true ||
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
-    (data.circuit_breaker && data.circuit_breaker.active === true);
+    (data.circuit_breaker && data.circuit_breaker.active === true) ||
+    isHanBridgeHalted(data);
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -862,7 +864,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const hanBridge = isHanBridgeStatus(data) ? data.han_bridge : null;
   if (hanBridgeViewEl) {
     hanBridgeViewEl.hidden = hanBridge === null;
-    if (hanBridge) renderHanBridgeStatus(card, hanBridge);
+    if (hanBridge) {
+      renderHanBridgeStatus(card, hanBridge, {
+        hasPosition: Boolean(data.has_position),
+        killSwitchActive: target.kill_switch_active === true,
+        sessionHalted: data.session_halted === true,
+      });
+    }
   }
 
   if (target.error) {
@@ -878,11 +886,33 @@ const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
 
 const isHanBridgeStatus = (data) => Boolean(data && data.han_bridge);
 
+// Han Bridge's risk halt is a single string reason on its own nested
+// block (session_halt_reason), not the session_risk/daily_risk/
+// circuit_breaker shape pairtrade emits -- callers that fold halts into
+// a fleet-wide count or an auto-expand condition need this alongside
+// those three checks, or a halted Han Bridge target silently drops out
+// of both (code-review finding on PR #23).
+const isHanBridgeHalted = (data) =>
+  Boolean(data && data.han_bridge && data.han_bridge.session_halt_reason);
+
 // Unlike accumulator (which replaces the trading view entirely), Han
 // Bridge is a real directional single-symbol strategy with its own
 // positions/PnL -- this renders as an *additional* section below the
 // normal trading view, not instead of it.
-const hanBridgeViewModel = (hanBridge) => {
+// `day_entered` means "today's entry decision is finalized", NOT "a
+// position was opened" -- it is also set true on a below-threshold
+// no-signal day (engine_b_live.rs's maybe_enter) and stays false while
+// entries are merely blocked by the kill switch or a risk halt (neither
+// of which finalizes the day -- the block could lift before the entry
+// deadline). `hasPosition`/`killSwitchActive`/`sessionHalted` come from
+// the same status.json document's top-level fields, not from han_bridge
+// itself, so callers must pass them alongside (code-review findings on
+// PR #23: the first cut conflated day_entered with "holding", which
+// mislabeled a no-signal day as "Entered, holding").
+const hanBridgeViewModel = (
+  hanBridge,
+  { hasPosition = false, killSwitchActive = false, sessionHalted = false } = {},
+) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -891,8 +921,12 @@ const hanBridgeViewModel = (hanBridge) => {
     today = { label: "Skipped (ineligible)", tone: "warn" };
   } else if (hanBridge.day_exited) {
     today = { label: "Entered & exited", tone: "ok" };
-  } else if (hanBridge.day_entered) {
+  } else if (hasPosition) {
     today = { label: "Entered, holding", tone: "ok" };
+  } else if (hanBridge.day_entered) {
+    today = { label: "No signal today", tone: "neutral" };
+  } else if (killSwitchActive || sessionHalted) {
+    today = { label: "Blocked (halted)", tone: "warn" };
   } else {
     today = { label: "Not decided yet", tone: "neutral" };
   }
@@ -904,8 +938,8 @@ const hanBridgeViewModel = (hanBridge) => {
   };
 };
 
-const renderHanBridgeStatus = (card, hanBridge) => {
-  const view = hanBridgeViewModel(hanBridge);
+const renderHanBridgeStatus = (card, hanBridge, extra) => {
+  const view = hanBridgeViewModel(hanBridge, extra);
   const pairEl = card.querySelector('[data-field="han-bridge-pair"]');
   if (pairEl) pairEl.textContent = view.pair;
   const todayEl = card.querySelector('[data-field="han-bridge-today"]');

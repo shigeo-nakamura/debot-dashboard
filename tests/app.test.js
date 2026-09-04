@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted };`;
 const context = {
   document: { getElementById: () => null },
   fetch: () => new Promise(() => {}),
@@ -129,36 +129,62 @@ test("fleet health counts a fresh degraded accumulator once", () => {
   );
 });
 
-test("han_bridge fixture reports pair and today's decision", () => {
+test("han_bridge fixture reports pair and a no-signal today (day_entered without a position)", () => {
   const hanBridge = hanBridgeFixture.han_bridge;
 
   assert.equal(context.__test.isHanBridgeStatus({ han_bridge: hanBridge }), true);
   assert.equal(context.__test.isHanBridgeStatus({ pnl_total: 100 }), false);
 
-  const model = context.__test.hanBridgeViewModel(hanBridge);
+  // The captured fixture is day_entered=true / has_position=false: a
+  // below-threshold no-signal day, not an actual trade -- day_entered
+  // means "today's decision is finalized", not "holding a position"
+  // (code-review finding on PR #23).
+  assert.equal(hanBridgeFixture.has_position, false);
+  const model = context.__test.hanBridgeViewModel(hanBridge, { hasPosition: false });
   assert.equal(model.pair, "SKHY → SNDK");
-  assert.equal(model.today.label, "Entered, holding");
-  assert.equal(model.today.tone, "ok");
+  assert.equal(model.today.label, "No signal today");
+  assert.equal(model.today.tone, "neutral");
   assert.deepEqual(model.reasons, []);
   assert.equal(model.sessionHaltReason, null);
 });
 
-test("han_bridge view model surfaces ineligible reasons and reflects skip over entry", () => {
-  const model = context.__test.hanBridgeViewModel({
+test("han_bridge view model labels a real position as entered/holding only when hasPosition is true", () => {
+  const hanBridge = {
     kr_primary_symbol: "SKHY",
     us_primary_symbol: "SNDK",
     day_entered: true,
     day_exited: false,
-    ineligible_reasons: ["kr_primary=SKHY:force_reduce_only"],
-    session_halt_reason: "max_session_loss_bps exceeded",
-  });
+    ineligible_reasons: [],
+  };
+  assert.equal(
+    context.__test.hanBridgeViewModel(hanBridge, { hasPosition: true }).today.label,
+    "Entered, holding",
+  );
+  assert.equal(
+    context.__test.hanBridgeViewModel(hanBridge, { hasPosition: false }).today.label,
+    "No signal today",
+  );
+});
+
+test("han_bridge view model surfaces ineligible reasons and reflects skip over entry", () => {
+  const model = context.__test.hanBridgeViewModel(
+    {
+      kr_primary_symbol: "SKHY",
+      us_primary_symbol: "SNDK",
+      day_entered: true,
+      day_exited: false,
+      ineligible_reasons: ["kr_primary=SKHY:force_reduce_only"],
+      session_halt_reason: "max_session_loss_bps exceeded",
+    },
+    { hasPosition: false },
+  );
   assert.equal(model.today.label, "Skipped (ineligible)");
   assert.equal(model.today.tone, "warn");
   assert.deepEqual(model.reasons, ["kr_primary=SKHY:force_reduce_only"]);
   assert.equal(model.sessionHaltReason, "max_session_loss_bps exceeded");
 });
 
-test("han_bridge view model distinguishes not-decided from entered-and-exited", () => {
+test("han_bridge view model distinguishes not-decided, kill-switch-blocked, and entered-and-exited", () => {
   const notDecided = context.__test.hanBridgeViewModel({
     kr_primary_symbol: "SKHY",
     us_primary_symbol: "SNDK",
@@ -169,13 +195,41 @@ test("han_bridge view model distinguishes not-decided from entered-and-exited", 
   assert.equal(notDecided.today.label, "Not decided yet");
   assert.equal(notDecided.today.tone, "neutral");
 
-  const exited = context.__test.hanBridgeViewModel({
-    kr_primary_symbol: "SKHY",
-    us_primary_symbol: "SNDK",
-    day_entered: true,
-    day_exited: true,
-    ineligible_reasons: [],
-  });
+  const blocked = context.__test.hanBridgeViewModel(
+    {
+      kr_primary_symbol: "SKHY",
+      us_primary_symbol: "SNDK",
+      day_entered: false,
+      day_exited: false,
+      ineligible_reasons: [],
+    },
+    { killSwitchActive: true },
+  );
+  assert.equal(blocked.today.label, "Blocked (halted)");
+  assert.equal(blocked.today.tone, "warn");
+
+  const exited = context.__test.hanBridgeViewModel(
+    {
+      kr_primary_symbol: "SKHY",
+      us_primary_symbol: "SNDK",
+      day_entered: true,
+      day_exited: true,
+      ineligible_reasons: [],
+    },
+    { hasPosition: false },
+  );
   assert.equal(exited.today.label, "Entered & exited");
   assert.equal(exited.today.tone, "ok");
+});
+
+test("isHanBridgeHalted reflects the nested session_halt_reason, not the top-level fields", () => {
+  assert.equal(
+    context.__test.isHanBridgeHalted({ han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } }),
+    true,
+  );
+  assert.equal(
+    context.__test.isHanBridgeHalted({ han_bridge: { session_halt_reason: null } }),
+    false,
+  );
+  assert.equal(context.__test.isHanBridgeHalted({ pnl_total: 100 }), false);
 });
