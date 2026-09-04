@@ -868,7 +868,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
       renderHanBridgeStatus(card, hanBridge, {
         hasPosition: Boolean(data.has_position),
         killSwitchActive: target.kill_switch_active === true,
-        sessionHalted: data.session_halted === true,
       });
     }
   }
@@ -904,15 +903,18 @@ const isHanBridgeHalted = (data) =>
 // no-signal day (engine_b_live.rs's maybe_enter) and stays false while
 // entries are merely blocked by the kill switch or a risk halt (neither
 // of which finalizes the day -- the block could lift before the entry
-// deadline). `hasPosition`/`killSwitchActive`/`sessionHalted` come from
-// the same status.json document's top-level fields, not from han_bridge
-// itself, so callers must pass them alongside (code-review findings on
-// PR #23: the first cut conflated day_entered with "holding", which
-// mislabeled a no-signal day as "Entered, holding").
-const hanBridgeViewModel = (
-  hanBridge,
-  { hasPosition = false, killSwitchActive = false, sessionHalted = false } = {},
-) => {
+// deadline). `hasPosition`/`killSwitchActive` come from the same
+// status.json document's top-level fields, not from han_bridge itself,
+// so callers must pass them alongside (code-review findings on PR #23:
+// the first cut conflated day_entered with "holding", which mislabeled
+// a no-signal day as "Entered, holding"). The halt check itself reads
+// hanBridge.session_halt_reason directly rather than taking a
+// `sessionHalted` param sourced from `data.session_halted` -- StatusData
+// (main.go) has no such top-level field (session halts are nested under
+// pairtrade-specific `session_risk.session_halted`, which engine_b_live
+// never populates), so that param was always false in practice
+// (code-review finding on PR #23, second round).
+const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -925,7 +927,7 @@ const hanBridgeViewModel = (
     today = { label: "Entered, holding", tone: "ok" };
   } else if (hanBridge.day_entered) {
     today = { label: "No signal today", tone: "neutral" };
-  } else if (killSwitchActive || sessionHalted) {
+  } else if (killSwitchActive || Boolean(hanBridge.session_halt_reason)) {
     today = { label: "Blocked (halted)", tone: "warn" };
   } else {
     today = { label: "Not decided yet", tone: "neutral" };

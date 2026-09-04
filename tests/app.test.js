@@ -208,6 +208,22 @@ test("han_bridge view model distinguishes not-decided, kill-switch-blocked, and 
   assert.equal(blocked.today.label, "Blocked (halted)");
   assert.equal(blocked.today.tone, "warn");
 
+  // Regression for PR #23 round 2 self-review: the halt check must read
+  // hanBridge.session_halt_reason directly, not a `sessionHalted` param
+  // sourced from data.session_halted -- StatusData (main.go) has no
+  // such top-level field, so that param was always false. A session
+  // DD halt with the kill switch NOT engaged must still show "Blocked".
+  const haltedNoKillSwitch = context.__test.hanBridgeViewModel({
+    kr_primary_symbol: "SKHY",
+    us_primary_symbol: "SNDK",
+    day_entered: false,
+    day_exited: false,
+    ineligible_reasons: [],
+    session_halt_reason: "max_session_loss_bps exceeded",
+  });
+  assert.equal(haltedNoKillSwitch.today.label, "Blocked (halted)");
+  assert.equal(haltedNoKillSwitch.today.tone, "warn");
+
   const exited = context.__test.hanBridgeViewModel(
     {
       kr_primary_symbol: "SKHY",
