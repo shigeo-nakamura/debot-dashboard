@@ -468,6 +468,13 @@ const createCard = (key) => {
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
       </div>
       <div class="positions" data-field="positions-list"></div>
+      <div class="han-bridge-view" data-field="han-bridge-view" hidden>
+        <div class="han-bridge-header">Engine B (Han Bridge)</div>
+        <div class="row"><span>Pair</span><strong data-field="han-bridge-pair"></strong></div>
+        <div class="row"><span>Today</span><strong class="tone-neutral" data-field="han-bridge-today"></strong></div>
+        <div class="row" data-field="han-bridge-reasons-row" hidden><span>Reason</span><strong data-field="han-bridge-reasons"></strong></div>
+        <div class="row" data-field="han-bridge-halt-row" hidden><span>Session halt</span><strong data-field="han-bridge-halt"></strong></div>
+      </div>
       </div>
       <div class="error" data-field="error" hidden></div>
       </div>
@@ -851,6 +858,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
     : `<div class="empty">No open positions</div>`;
   positionsListEl.innerHTML = positionsHtml;
 
+  const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
+  const hanBridge = isHanBridgeStatus(data) ? data.han_bridge : null;
+  if (hanBridgeViewEl) {
+    hanBridgeViewEl.hidden = hanBridge === null;
+    if (hanBridge) renderHanBridgeStatus(card, hanBridge);
+  }
+
   if (target.error) {
     errorEl.hidden = false;
     errorEl.textContent = target.error;
@@ -861,6 +875,68 @@ const updateCard = (card, target, pollSecs, index, key) => {
 };
 
 const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
+
+const isHanBridgeStatus = (data) => Boolean(data && data.han_bridge);
+
+// Unlike accumulator (which replaces the trading view entirely), Han
+// Bridge is a real directional single-symbol strategy with its own
+// positions/PnL -- this renders as an *additional* section below the
+// normal trading view, not instead of it.
+const hanBridgeViewModel = (hanBridge) => {
+  const reasons = Array.isArray(hanBridge.ineligible_reasons)
+    ? hanBridge.ineligible_reasons
+    : [];
+  let today;
+  if (reasons.length > 0) {
+    today = { label: "Skipped (ineligible)", tone: "warn" };
+  } else if (hanBridge.day_exited) {
+    today = { label: "Entered & exited", tone: "ok" };
+  } else if (hanBridge.day_entered) {
+    today = { label: "Entered, holding", tone: "ok" };
+  } else {
+    today = { label: "Not decided yet", tone: "neutral" };
+  }
+  return {
+    pair: `${hanBridge.kr_primary_symbol || "?"} → ${hanBridge.us_primary_symbol || "?"}`,
+    today,
+    reasons,
+    sessionHaltReason: hanBridge.session_halt_reason || null,
+  };
+};
+
+const renderHanBridgeStatus = (card, hanBridge) => {
+  const view = hanBridgeViewModel(hanBridge);
+  const pairEl = card.querySelector('[data-field="han-bridge-pair"]');
+  if (pairEl) pairEl.textContent = view.pair;
+  const todayEl = card.querySelector('[data-field="han-bridge-today"]');
+  if (todayEl) {
+    todayEl.textContent = view.today.label;
+    todayEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+    todayEl.classList.add(`tone-${view.today.tone}`);
+  }
+  const reasonsRowEl = card.querySelector('[data-field="han-bridge-reasons-row"]');
+  const reasonsEl = card.querySelector('[data-field="han-bridge-reasons"]');
+  if (reasonsRowEl && reasonsEl) {
+    if (view.reasons.length > 0) {
+      reasonsRowEl.hidden = false;
+      reasonsEl.textContent = view.reasons.join("; ");
+    } else {
+      reasonsRowEl.hidden = true;
+      reasonsEl.textContent = "";
+    }
+  }
+  const haltRowEl = card.querySelector('[data-field="han-bridge-halt-row"]');
+  const haltEl = card.querySelector('[data-field="han-bridge-halt"]');
+  if (haltRowEl && haltEl) {
+    if (view.sessionHaltReason) {
+      haltRowEl.hidden = false;
+      haltEl.textContent = view.sessionHaltReason;
+    } else {
+      haltRowEl.hidden = true;
+      haltEl.textContent = "";
+    }
+  }
+};
 
 const isTargetUnhealthy = (target) => {
   const serviceUnhealthy = Boolean(

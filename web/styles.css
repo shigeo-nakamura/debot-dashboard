@@ -610,6 +610,37 @@ body::after {
   display: none;
 }
 
+.han-bridge-view {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.han-bridge-view[hidden] {
+  display: none;
+}
+
+.han-bridge-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.han-bridge-view .tone-ok {
+  color: var(--success);
+}
+
+.han-bridge-view .tone-warn {
+  color: var(--danger);
+}
+
+.han-bridge-view .tone-neutral {
+  color: var(--ink);
+}
+
 .accumulator-equity {
   display: flex;
   flex-direction: column;

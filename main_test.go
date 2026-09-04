@@ -74,6 +74,49 @@ func readAccumulatorFixture(t *testing.T) []byte {
 	return payload
 }
 
+const hanBridgeFixturePath = "tests/fixtures/han-bridge-status-v1.json"
+
+func TestHanBridgeStatusFixtureMatchesDashboardContract(t *testing.T) {
+	payload, err := os.ReadFile(hanBridgeFixturePath)
+	if err != nil {
+		t.Fatalf("read han_bridge fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.HanBridge == nil {
+		t.Fatal("han_bridge status missing")
+	}
+	if got := status.HanBridge.KrPrimarySymbol; got != "SKHY" {
+		t.Fatalf("kr_primary_symbol = %q, want SKHY", got)
+	}
+	if got := status.HanBridge.UsPrimarySymbol; got != "SNDK" {
+		t.Fatalf("us_primary_symbol = %q, want SNDK", got)
+	}
+	if !status.HanBridge.DayEntered {
+		t.Fatal("day_entered decoded as false")
+	}
+	if status.HanBridge.IneligibleReasons == nil {
+		t.Fatal("ineligible_reasons decoded as nil, want an empty (but present) slice")
+	}
+	// This bot has real trading fields alongside han_bridge (unlike
+	// hype-accumulator, which has none) -- unmarshal must not lose them.
+	if status.TradeStats == nil {
+		t.Fatal("trade_stats missing alongside han_bridge")
+	}
+}
+
+func TestTradingStatusWithoutHanBridgeStillDecodes(t *testing.T) {
+	status, err := decodeStatusPayload([]byte(`{"ts":1,"pnl_total":12.5}`))
+	if err != nil {
+		t.Fatalf("decode status without han_bridge: %v", err)
+	}
+	if status.HanBridge != nil {
+		t.Fatalf("unexpected han_bridge on a plain trading status: %+v", status.HanBridge)
+	}
+}
+
 func assertNoForbiddenFields(t *testing.T, value any, path string) {
 	t.Helper()
 	forbidden := map[string]struct{}{

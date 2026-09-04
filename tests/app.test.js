@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel };`;
 const context = {
   document: { getElementById: () => null },
   fetch: () => new Promise(() => {}),
@@ -17,6 +17,10 @@ const accumulatorFixture = JSON.parse(
     `${__dirname}/fixtures/hype-accumulator-status-v1.json`,
     "utf8",
   ),
+);
+
+const hanBridgeFixture = JSON.parse(
+  fs.readFileSync(`${__dirname}/fixtures/han-bridge-status-v1.json`, "utf8"),
 );
 
 const makeCard = () => {
@@ -123,4 +127,55 @@ test("fleet health counts a fresh degraded accumulator once", () => {
     }),
     true,
   );
+});
+
+test("han_bridge fixture reports pair and today's decision", () => {
+  const hanBridge = hanBridgeFixture.han_bridge;
+
+  assert.equal(context.__test.isHanBridgeStatus({ han_bridge: hanBridge }), true);
+  assert.equal(context.__test.isHanBridgeStatus({ pnl_total: 100 }), false);
+
+  const model = context.__test.hanBridgeViewModel(hanBridge);
+  assert.equal(model.pair, "SKHY → SNDK");
+  assert.equal(model.today.label, "Entered, holding");
+  assert.equal(model.today.tone, "ok");
+  assert.deepEqual(model.reasons, []);
+  assert.equal(model.sessionHaltReason, null);
+});
+
+test("han_bridge view model surfaces ineligible reasons and reflects skip over entry", () => {
+  const model = context.__test.hanBridgeViewModel({
+    kr_primary_symbol: "SKHY",
+    us_primary_symbol: "SNDK",
+    day_entered: true,
+    day_exited: false,
+    ineligible_reasons: ["kr_primary=SKHY:force_reduce_only"],
+    session_halt_reason: "max_session_loss_bps exceeded",
+  });
+  assert.equal(model.today.label, "Skipped (ineligible)");
+  assert.equal(model.today.tone, "warn");
+  assert.deepEqual(model.reasons, ["kr_primary=SKHY:force_reduce_only"]);
+  assert.equal(model.sessionHaltReason, "max_session_loss_bps exceeded");
+});
+
+test("han_bridge view model distinguishes not-decided from entered-and-exited", () => {
+  const notDecided = context.__test.hanBridgeViewModel({
+    kr_primary_symbol: "SKHY",
+    us_primary_symbol: "SNDK",
+    day_entered: false,
+    day_exited: false,
+    ineligible_reasons: [],
+  });
+  assert.equal(notDecided.today.label, "Not decided yet");
+  assert.equal(notDecided.today.tone, "neutral");
+
+  const exited = context.__test.hanBridgeViewModel({
+    kr_primary_symbol: "SKHY",
+    us_primary_symbol: "SNDK",
+    day_entered: true,
+    day_exited: true,
+    ineligible_reasons: [],
+  });
+  assert.equal(exited.today.label, "Entered & exited");
+  assert.equal(exited.today.tone, "ok");
 });
