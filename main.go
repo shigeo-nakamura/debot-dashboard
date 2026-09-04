@@ -106,6 +106,23 @@ type AccumulatorStatus struct {
 	HealthReason      *string `json:"health_reason,omitempty"`
 }
 
+// HanBridgeStatus is the Engine B (bot-strategy#866/#872, codename "Han
+// Bridge") dashboard block: which symbols this instance trades and why
+// today's entry was or wasn't taken, so an operator does not have to grep
+// journalctl or read status.json by hand to answer "why didn't it trade
+// today". Unlike AccumulatorStatus, this bot has real positions/PnL too
+// (it is a directional single-symbol strategy, not a passive holder), so
+// the dashboard renders this as an *additional* section alongside the
+// normal trading view rather than replacing it.
+type HanBridgeStatus struct {
+	KrPrimarySymbol   string   `json:"kr_primary_symbol"`
+	UsPrimarySymbol   string   `json:"us_primary_symbol"`
+	DayEntered        bool     `json:"day_entered"`
+	DayExited         bool     `json:"day_exited"`
+	IneligibleReasons []string `json:"ineligible_reasons"`
+	SessionHaltReason *string  `json:"session_halt_reason,omitempty"`
+}
+
 type StatusData struct {
 	SchemaVersion uint8  `json:"schema_version,omitempty"`
 	TS            int64  `json:"ts"`
@@ -142,6 +159,7 @@ type StatusData struct {
 	// closed cycles today" measurement).
 	FundingCarryToday *float64           `json:"funding_carry_today,omitempty"`
 	Accumulator       *AccumulatorStatus `json:"accumulator,omitempty"`
+	HanBridge         *HanBridgeStatus   `json:"han_bridge,omitempty"`
 	TradeStats        *TradeStats        `json:"trade_stats,omitempty"`
 	Maintenance       *string            `json:"maintenance,omitempty"`
 	Shutdown          *ShutdownStatus    `json:"shutdown,omitempty"`

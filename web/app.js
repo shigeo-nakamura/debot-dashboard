@@ -259,6 +259,7 @@ const updateFleetSummary = (targets) => {
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
+      if (isHanBridgeHalted(data)) halts += 1;
       if (Array.isArray(data.risk_history)) {
         for (const ev of data.risk_history) {
           if (ev.event_type === "activated" && ev.ts >= cutoff24hSec) {
@@ -468,6 +469,13 @@ const createCard = (key) => {
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
       </div>
       <div class="positions" data-field="positions-list"></div>
+      <div class="han-bridge-view" data-field="han-bridge-view" hidden>
+        <div class="han-bridge-header">Engine B (Han Bridge)</div>
+        <div class="row"><span>Pair</span><strong data-field="han-bridge-pair"></strong></div>
+        <div class="row"><span>Today</span><strong class="tone-neutral" data-field="han-bridge-today"></strong></div>
+        <div class="row" data-field="han-bridge-reasons-row" hidden><span>Reason</span><strong data-field="han-bridge-reasons"></strong></div>
+        <div class="row" data-field="han-bridge-halt-row" hidden><span>Session halt</span><strong data-field="han-bridge-halt"></strong></div>
+      </div>
       </div>
       <div class="error" data-field="error" hidden></div>
       </div>
@@ -686,7 +694,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
     target.kill_switch_active === true ||
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
-    (data.circuit_breaker && data.circuit_breaker.active === true);
+    (data.circuit_breaker && data.circuit_breaker.active === true) ||
+    isHanBridgeHalted(data);
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -851,6 +860,18 @@ const updateCard = (card, target, pollSecs, index, key) => {
     : `<div class="empty">No open positions</div>`;
   positionsListEl.innerHTML = positionsHtml;
 
+  const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
+  const hanBridge = isHanBridgeStatus(data) ? data.han_bridge : null;
+  if (hanBridgeViewEl) {
+    hanBridgeViewEl.hidden = hanBridge === null;
+    if (hanBridge) {
+      renderHanBridgeStatus(card, hanBridge, {
+        hasPosition: Boolean(data.has_position),
+        killSwitchActive: target.kill_switch_active === true,
+      });
+    }
+  }
+
   if (target.error) {
     errorEl.hidden = false;
     errorEl.textContent = target.error;
@@ -861,6 +882,97 @@ const updateCard = (card, target, pollSecs, index, key) => {
 };
 
 const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
+
+const isHanBridgeStatus = (data) => Boolean(data && data.han_bridge);
+
+// Han Bridge's risk halt is a single string reason on its own nested
+// block (session_halt_reason), not the session_risk/daily_risk/
+// circuit_breaker shape pairtrade emits -- callers that fold halts into
+// a fleet-wide count or an auto-expand condition need this alongside
+// those three checks, or a halted Han Bridge target silently drops out
+// of both (code-review finding on PR #23).
+const isHanBridgeHalted = (data) =>
+  Boolean(data && data.han_bridge && data.han_bridge.session_halt_reason);
+
+// Unlike accumulator (which replaces the trading view entirely), Han
+// Bridge is a real directional single-symbol strategy with its own
+// positions/PnL -- this renders as an *additional* section below the
+// normal trading view, not instead of it.
+// `day_entered` means "today's entry decision is finalized", NOT "a
+// position was opened" -- it is also set true on a below-threshold
+// no-signal day (engine_b_live.rs's maybe_enter) and stays false while
+// entries are merely blocked by the kill switch or a risk halt (neither
+// of which finalizes the day -- the block could lift before the entry
+// deadline). `hasPosition`/`killSwitchActive` come from the same
+// status.json document's top-level fields, not from han_bridge itself,
+// so callers must pass them alongside (code-review findings on PR #23:
+// the first cut conflated day_entered with "holding", which mislabeled
+// a no-signal day as "Entered, holding"). The halt check itself reads
+// hanBridge.session_halt_reason directly rather than taking a
+// `sessionHalted` param sourced from `data.session_halted` -- StatusData
+// (main.go) has no such top-level field (session halts are nested under
+// pairtrade-specific `session_risk.session_halted`, which engine_b_live
+// never populates), so that param was always false in practice
+// (code-review finding on PR #23, second round).
+const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false } = {}) => {
+  const reasons = Array.isArray(hanBridge.ineligible_reasons)
+    ? hanBridge.ineligible_reasons
+    : [];
+  let today;
+  if (reasons.length > 0) {
+    today = { label: "Skipped (ineligible)", tone: "warn" };
+  } else if (hanBridge.day_exited) {
+    today = { label: "Entered & exited", tone: "ok" };
+  } else if (hasPosition) {
+    today = { label: "Entered, holding", tone: "ok" };
+  } else if (hanBridge.day_entered) {
+    today = { label: "No signal today", tone: "neutral" };
+  } else if (killSwitchActive || Boolean(hanBridge.session_halt_reason)) {
+    today = { label: "Blocked (halted)", tone: "warn" };
+  } else {
+    today = { label: "Not decided yet", tone: "neutral" };
+  }
+  return {
+    pair: `${hanBridge.kr_primary_symbol || "?"} → ${hanBridge.us_primary_symbol || "?"}`,
+    today,
+    reasons,
+    sessionHaltReason: hanBridge.session_halt_reason || null,
+  };
+};
+
+const renderHanBridgeStatus = (card, hanBridge, extra) => {
+  const view = hanBridgeViewModel(hanBridge, extra);
+  const pairEl = card.querySelector('[data-field="han-bridge-pair"]');
+  if (pairEl) pairEl.textContent = view.pair;
+  const todayEl = card.querySelector('[data-field="han-bridge-today"]');
+  if (todayEl) {
+    todayEl.textContent = view.today.label;
+    todayEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+    todayEl.classList.add(`tone-${view.today.tone}`);
+  }
+  const reasonsRowEl = card.querySelector('[data-field="han-bridge-reasons-row"]');
+  const reasonsEl = card.querySelector('[data-field="han-bridge-reasons"]');
+  if (reasonsRowEl && reasonsEl) {
+    if (view.reasons.length > 0) {
+      reasonsRowEl.hidden = false;
+      reasonsEl.textContent = view.reasons.join("; ");
+    } else {
+      reasonsRowEl.hidden = true;
+      reasonsEl.textContent = "";
+    }
+  }
+  const haltRowEl = card.querySelector('[data-field="han-bridge-halt-row"]');
+  const haltEl = card.querySelector('[data-field="han-bridge-halt"]');
+  if (haltRowEl && haltEl) {
+    if (view.sessionHaltReason) {
+      haltRowEl.hidden = false;
+      haltEl.textContent = view.sessionHaltReason;
+    } else {
+      haltRowEl.hidden = true;
+      haltEl.textContent = "";
+    }
+  }
+};
 
 const isTargetUnhealthy = (target) => {
   const serviceUnhealthy = Boolean(

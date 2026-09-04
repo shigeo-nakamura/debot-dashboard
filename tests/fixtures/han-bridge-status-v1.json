@@ -1,0 +1,30 @@
+{
+  "ts": 1788528851,
+  "updated_at": "2026-09-04T13:34:11.364305050+00:00",
+  "id": "engine-b-live",
+  "dex": "lighter",
+  "dry_run": true,
+  "has_position": false,
+  "position_count": 0,
+  "positions_ready": true,
+  "positions": [],
+  "pnl_total": 0.0,
+  "pnl_today": 0.0,
+  "pnl_source": "engine_b_live_risk_state",
+  "kill_switch_active": false,
+  "trade_stats": {
+    "trades": 0,
+    "wins": 0,
+    "win_rate": 0.0,
+    "max_dd": 0.0,
+    "pnl": 0.0
+  },
+  "han_bridge": {
+    "kr_primary_symbol": "SKHY",
+    "us_primary_symbol": "SNDK",
+    "day_entered": true,
+    "day_exited": false,
+    "ineligible_reasons": [],
+    "session_halt_reason": null
+  }
+}
