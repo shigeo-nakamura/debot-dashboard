@@ -169,6 +169,16 @@ func TestHolderSampledKillSwitchReachesHeaderWithoutProducer(t *testing.T) {
 		}
 	}
 }
+func TestHolderSampledKillSwitchRemovalOverridesOldProducer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+	writeHolder(t, path, `{"bot":"bull_holder","ts":1,"dry_run":true,"mode":"Off","kill_switch":true}`)
+	got := fetchBullHolder(context.Background(), TargetConfig{BullHolder: &BullHolderConfig{StatusPath: path}}, holderClient(t, holderBalances, holderLighter))
+	if got.KillSwitchActive == nil || *got.KillSwitchActive || got.Status.KillSwitchActive || got.Status.BullHolder.KillSwitch || got.Status.BullHolder.Pending["KILL_SWITCH"] {
+		t.Fatal("removed sentinel retained stale producer kill switch")
+	}
+}
+
 func TestHolderConfigSourceValidation(t *testing.T) {
 	for _, target := range []TargetConfig{
 		{BullHolder: &BullHolderConfig{StatusPath: "relative"}},

@@ -129,7 +129,11 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	// Sentinel sampling can be newer than the last producer write, including
 	// when the bot has stopped. Keep all header/fleet/detail consumers aligned.
 	if b.Pending != nil || s.TS != 0 {
-		kill := b.KillSwitch || b.Pending["KILL_SWITCH"]
+		kill := b.KillSwitch
+		if b.Pending != nil {
+			kill = b.Pending["KILL_SWITCH"]
+		}
+		b.KillSwitch = kill
 		r.KillSwitchActive = &kill
 		s.KillSwitchActive = kill
 	}
