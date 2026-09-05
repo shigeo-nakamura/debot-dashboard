@@ -938,6 +938,12 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   };
   add("h3", "Bull-holder");
   row("Mode", view.mode);
+  add("h3", "Configured investment · read-only");
+  const investment = b.investment;
+  row("Configured capital (USD)", holderAmount(investment?.equity_usd));
+  row("Hyperliquid spot allocation (USD)", investment ? holderAmount(investment.equity_usd * investment.spot_fraction) : "—");
+  row("Lighter perp notional target (USD)", investment ? holderAmount(investment.equity_usd * investment.perp_fraction) : "—");
+  add("p", investment ? `Verified startup settings · fingerprint ${investment.config_fp}. These are configured targets, not account balances or remaining purchase amounts. Perp notional is not required margin; ADD can increase the cycle beyond the initial allocation. Editing the dashboard does not change bot settings.` : b.investment_error || "Verified startup investment settings unavailable.", container, "holder-note");
   row("ARM accepted", holderTime(b.armed_at));
   row("Last exit", holderTime(b.exited_at));
   if (b.exit_reason) row("Exit reason", b.exit_reason);
@@ -972,6 +978,8 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   });
   add("h3", "Actual account assets");
   row("Combined monitored equity", view.total);
+  row("Combined unrealized PnL · estimate", holderMoney(b.unrealized_pnl_usdc));
+  add("p", "Actual account PnL only, never DRY_RUN simulation. Spot estimate = current value minus venue-reported entry notional; transfers and fees may not be fully reflected. Missing/zero basis for held tokens makes PnL unavailable. PnL is already included in equity; do not add it again.", container, "holder-note");
   add("p", "Hyperliquid spot value + Lighter account equity. Perp notional is exposure, not an asset to add again. Actual balances remain separate from simulated strategy holdings.", container, "holder-note");
   [["Hyperliquid · spot", b.hyperliquid || {}, false], ["Lighter · perpetuals", b.lighter || {}, true]].forEach(([name, account, perp]) => {
     const panel = add("div", "", container, "holder-account");
@@ -980,13 +988,15 @@ const renderBullHolderStatus = (container, b, dryRun) => {
     row(perp ? "Account equity (incl. unrealized PnL)" : "Spot account value", holderMoney(account.equity_usdc), panel);
     row(perp ? "USDC collateral" : "USDC balance", holderMoney(account.usdc), panel);
     row("Available USDC", holderMoney(account.available_usdc), panel);
+    row(perp ? "Unrealized PnL" : "Unrealized PnL · estimate", holderMoney(account.unrealized_pnl_usdc), panel);
     row("Balance observed", holderTime(account.observed_at), panel);
     if (!(account.holdings || []).length) add("p", account.observed_at ? (perp ? "No open perp positions." : "No non-USDC spot holdings.") : "Holdings unavailable.", panel, "holder-note");
     (account.holdings || []).forEach((h) => {
       row(h.symbol, `${holderAmount(h.size)} · ${perp ? "notional" : "value"} ${holderMoney(h.value_usdc)}`, panel);
       row("Mark", holderMoney(h.price_usdc), panel);
+      row(perp ? "Unrealized PnL" : "Unrealized PnL · estimate", holderMoney(h.unrealized_pnl_usdc), panel);
+      if (!perp) row("Venue entry notional", holderMoney(h.cost_basis_usdc), panel);
       if (perp) {
-        row("Unrealized PnL", holderMoney(h.unrealized_pnl_usdc), panel);
         row("Liquidation price", holderMoney(h.liquidation_price), panel);
       }
     });
