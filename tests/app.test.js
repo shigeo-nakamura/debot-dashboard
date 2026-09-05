@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -344,4 +344,59 @@ test("isHanBridgeHalted reflects the nested session_halt_reason, not the top-lev
     false,
   );
   assert.equal(context.__test.isHanBridgeHalted({ pnl_total: 100 }), false);
+});
+
+test("Arcus fleet tracks halt and health without treating inventory as trading PnL", () => {
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 1 } },
+    { service_status: "active", status: { pnl_total: 3000, pnl_today: 200, position_count: 2, arcus: { healthy: false, risk_halt: { kind: "daily_loss" } } } },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("fleet-equity-total"), "100.0 USDC");
+  assert.equal(value("fleet-halts"), "1");
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: true } } }), false);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: false } } }), true);
+});
+
+test("freshness uses target cadence, rejects unknown and future clocks", () => {
+  const old = new Date(Date.now() - 900000);
+  assert.equal(context.__test.isStale(old, 1920), false);
+  assert.equal(context.__test.isStale(old), true);
+  assert.equal(context.__test.isStale(new Date(Date.now() - 90000)), false);
+  assert.equal(context.__test.isStale(new Date("invalid"), 1920), true);
+  assert.equal(context.__test.isStale(null, 1920), true);
+  assert.equal(context.__test.isStale(new Date(Date.now() + 60000), 1920), true);
+});
+
+test("Arcus render separates failed tick, pending decision, strategy risk and gas observation", () => {
+  const node = () => ({ children: [], textContent: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; } });
+  const tags = [];
+  context.document.createElement = (tag) => { tags.push(tag); return node(); };
+  const root = node();
+  const fixture = { pair: "SPY/QQQ", mode: "live", sequence: 1915, healthy: false, tick_outcome: "failed", service_result: "exit-code", exit_code: 1, decision: "observe", hold_code: "route_unavailable", decision_pending: true, daily_loss_usd: null, cumulative_loss_usd: 0, inventory_drawdown_usd: 12, risk_halt: { kind: "daily_loss", loss_usd: 21, limit_usd: 20 }, gas_balance_eth: .001, gas_observed_at: "2026-09-05T14:59:58Z", health_reasons: ["<script>alert(1)</script>"] };
+  context.__test.renderArcusStatus(root, fixture);
+  const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
+  const content = text(root);
+  assert.match(content, /Last tick\s+failed/);
+  assert.match(content, /route_unavailable · pending event commit/);
+  const rowValue = (label) => root.children.find((n) => n.children[0]?.textContent === label)?.children[1]?.textContent;
+  assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
+  assert.match(content, /Cumulative strategy loss\s+\$0.00/);
+  assert.match(content, /Starting basket drawdown\s+\$12.00/);
+  assert.match(content, /Gas · last reconciled snapshot\s+0.001 ETH/);
+  assert.match(content, /Gas observed/);
+  assert.match(content, /Risk halt\s+daily_loss/);
+  assert.match(content, /Daily execution budget.*UTC\s+— \/ —/);
+  assert.equal(tags.includes("button"), false);
+  assert.equal(tags.includes("script"), false);
+  context.__test.renderArcusStatus(root, { sequence: 0 });
+  assert.match(text(root), /Risk halt\s+Unknown/);
+  assert.doesNotMatch(text(root), /route_unavailable/);
+  for (const unknown of [null, undefined, "", " ", false]) {
+    context.__test.renderArcusStatus(root, { z_score: unknown, equity_usd: unknown, daily_loss_usd: unknown, daily_loss_limit_usd: unknown, cumulative_loss_usd: 0 });
+    assert.equal(rowValue("Signal z"), "—");
+    assert.equal(rowValue("Inventory equity"), "—");
+    assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
+    assert.equal(rowValue("Cumulative strategy loss"), "$0.00 / — limit");
+  }
 });

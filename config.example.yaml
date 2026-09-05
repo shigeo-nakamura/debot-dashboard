@@ -11,7 +11,7 @@ poll_interval_secs: 20
 # `region: ap-northeast-1` + `s3_region: eu-central-1`.
 #
 # Service liveness is derived from object freshness — a status object
-# older than 180 s flips the target to "stale". No probe traffic
+# older than stale_after_secs (default 180 s) flips the target to "stale". No probe traffic
 # touches the bot host.
 targets:
   - name: Pair-A (Frankfurt)
@@ -58,3 +58,13 @@ targets:
 # auth:
 #   username: admin
 #   password: change-me
+
+# Arcus: independent read-only exporter; see deploy/arcus-status.md.
+#  - name: Arcus SPY/QQQ
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: arcus-spot-live-tick
+#    region: eu-central-1
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: arcus-archive/status/arcus-spot.json
+#    stale_after_secs: 1920

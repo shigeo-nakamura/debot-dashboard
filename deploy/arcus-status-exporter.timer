@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish Arcus spot dashboard status every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=arcus-status-exporter.service
+
+[Install]
+WantedBy=timers.target

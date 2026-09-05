@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"debot-dashboard/internal/arcusstatus"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -44,11 +46,12 @@ type AuthConfig struct {
 }
 
 type TargetConfig struct {
-	BullHolder *BullHolderConfig `yaml:"bull_holder"`
-	Name       string            `yaml:"name"`
-	InstanceID string            `yaml:"instance_id"`
-	Service    string            `yaml:"service"`
-	Region     string            `yaml:"region"`
+	StaleAfterSecs int               `yaml:"stale_after_secs"`
+	BullHolder     *BullHolderConfig `yaml:"bull_holder"`
+	Name           string            `yaml:"name"`
+	InstanceID     string            `yaml:"instance_id"`
+	Service        string            `yaml:"service"`
+	Region         string            `yaml:"region"`
 	// Bucket name and full key for the bot's `<id>.json` object.
 	// Sibling files (equity_history.jsonl) are derived by suffix-
 	// replacing the key. The bot mirrors `status.json` to this key
@@ -181,6 +184,7 @@ type StatusData struct {
 	Shutdown          *ShutdownStatus        `json:"shutdown,omitempty"`
 	ErrorSummary      *ErrorSummary          `json:"error_summary,omitempty"`
 	EquityHistory     []EquityPoint          `json:"equity_history,omitempty"`
+	Arcus             *arcusstatus.Status    `json:"arcus,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -334,6 +338,7 @@ type EquityPoint struct {
 }
 
 type TargetStatus struct {
+	StaleAfterSecs   int         `json:"stale_after_secs"`
 	Name             string      `json:"name"`
 	InstanceID       string      `json:"instance_id"`
 	Service          string      `json:"service"`
@@ -482,6 +487,12 @@ func normalizeConfig(cfg *Config) error {
 	}
 	for i := range cfg.Targets {
 		target := &cfg.Targets[i]
+		if target.StaleAfterSecs < 0 {
+			return fmt.Errorf("targets[%d]: stale_after_secs must be positive", i)
+		}
+		if target.StaleAfterSecs == 0 {
+			target.StaleAfterSecs = s3StatusStaleSecs
+		}
 		if target.Service == "" {
 			return fmt.Errorf("targets[%d] missing service", i)
 		}
@@ -627,12 +638,16 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 // `KillSwitchActive` and `WsReset24h` come straight from the JSON
 // payload (#343), no separate probes needed.
 func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPool, includeHistory bool, cutoffMs int64) TargetStatus {
+	if target.StaleAfterSecs <= 0 {
+		target.StaleAfterSecs = s3StatusStaleSecs
+	}
 	result := TargetStatus{
-		Name:       target.Name,
-		InstanceID: target.InstanceID,
-		Service:    target.Service,
-		Region:     target.Region,
-		CheckedAt:  time.Now(),
+		StaleAfterSecs: target.StaleAfterSecs,
+		Name:           target.Name,
+		InstanceID:     target.InstanceID,
+		Service:        target.Service,
+		Region:         target.Region,
+		CheckedAt:      time.Now(),
 	}
 	if target.S3Bucket == "" || target.S3Key == "" {
 		result.Error = "target missing s3_bucket / s3_key"
@@ -679,12 +694,18 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 	// systemctl probe in this code path.
 	now := time.Now().Unix()
 	age := now - status.TS
-	if status.TS == 0 {
+	if status.TS <= 0 || age < -30 {
 		result.ServiceStatus = "unknown"
-	} else if age > s3StatusStaleSecs {
+	} else if age > int64(target.StaleAfterSecs) {
 		result.ServiceStatus = "stale"
 	} else {
 		result.ServiceStatus = "active"
+	}
+	if status.Arcus != nil {
+		result.ServiceStatus = status.Arcus.ServiceStatus(time.Unix(now, 0), target.StaleAfterSecs)
+		// Arcus has no pairtrade WebSocket counter, kill-switch or equity history.
+		result.Status = &status
+		return result
 	}
 	if status.ProcessStartedAt != 0 {
 		started := time.Unix(status.ProcessStartedAt, 0).UTC()
@@ -725,6 +746,9 @@ func decodeStatusPayload(payload []byte) (StatusData, error) {
 	var status StatusData
 	if err := json.Unmarshal(payload, &status); err != nil {
 		return StatusData{}, err
+	}
+	if status.Arcus != nil && (status.SchemaVersion != arcusstatus.SchemaVersion || status.Accumulator != nil || status.BullHolder != nil || status.HanBridge != nil) {
+		return StatusData{}, errors.New("unsupported or ambiguous Arcus status schema")
 	}
 	if status.Accumulator != nil && status.SchemaVersion != accumulatorSchemaVersion {
 		return StatusData{}, fmt.Errorf(

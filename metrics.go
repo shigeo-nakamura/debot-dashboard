@@ -223,7 +223,7 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 		}
 		// Holder assets are not trading PnL, but operational monitoring must
 		// still observe sampled sentinels, producer freshness and dry-run mode.
-		if s.BullHolder != nil {
+		if s.BullHolder != nil || s.Arcus != nil {
 			if t.KillSwitchActive != nil {
 				mc.killSwitchActive.With(labels).Set(boolToFloat(*t.KillSwitchActive))
 			} else {
