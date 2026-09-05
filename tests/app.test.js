@@ -41,7 +41,7 @@ test("bull holder render is read-only and separates simulation from actual holdi
   assert.match(text(root), /Actual account assets/);
   assert.match(text(root), /20.00%/);
   assert.match(text(root), /Unavailable/);
-  assert.match(text(root), /Combined monitored equity —/);
+  assert.match(text(root), /Combined monitored equity\s+—/);
   assert.equal(tags.includes("button"), false);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
   fixture.lighter = {};
