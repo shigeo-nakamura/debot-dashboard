@@ -234,3 +234,18 @@ func TestMissingOrMalformedRiskLimitsDegrade(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingStartingEquityDegrades(t *testing.T) {
+	for _, replacement := range []string{`null`, `"invalid"`} {
+		t.Run(replacement, func(t *testing.T) {
+			dir := fixture(t)
+			path := filepath.Join(dir, "runtime_state.json")
+			b, _ := os.ReadFile(path)
+			put(t, dir, "runtime_state.json", strings.Replace(string(b), `"initial_equity_usd":"800"`, `"initial_equity_usd":`+replacement, 1))
+			s := collect(t, dir, testUnits()).Arcus
+			if s.Healthy || s.InventoryDrawdownUSD != nil || s.ServiceStatus(testNow, 1920) == "active" {
+				t.Fatal("unavailable starting-basket drawdown reported healthy")
+			}
+		})
+	}
+}
