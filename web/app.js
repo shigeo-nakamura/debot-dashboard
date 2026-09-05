@@ -898,12 +898,16 @@ const updateCard = (card, target, pollSecs, index, key) => {
 
 const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
 
+const holderNumber = (value) => {
+  if (value == null || (typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && value.trim() === "")) return null;
+  return parseNumber(value);
+};
 const holderMoney = (value) => {
-  const n = parseNumber(value);
+  const n = holderNumber(value);
   return n === null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + " USDC";
 };
 const holderAmount = (value) => {
-  const n = parseNumber(value);
+  const n = holderNumber(value);
   return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 8 });
 };
 const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
@@ -914,9 +918,9 @@ const bullHolderViewModel = (b) => ({
     .filter(([name, active]) => active && name !== "KILL_SWITCH")
     .map(([name]) => name === "ADD" && b.pending_add != null ? `ADD × ${b.pending_add}` : name).join(" · ") || "None pending",
   legs: Object.entries(b.legs || {}).sort(([a], [z]) => a.localeCompare(z)).map(([symbol, leg]) => {
-    const close = parseNumber(leg.last_close), peak = parseNumber(leg.peak_close);
+    const close = holderNumber(leg.last_close), peak = holderNumber(leg.peak_close);
     const drop = close !== null && close > 0 && peak !== null && peak > 0 ? Math.max(0, 100 * (1 - close / peak)) : null;
-    const exit = parseNumber(leg.exit_level);
+    const exit = holderNumber(leg.exit_level);
     return { symbol, ...leg, drop, triggerPct: exit !== null && exit > 0 && peak > 0 ? 100 * (1 - exit / peak) : null };
   }),
 });

@@ -19,6 +19,10 @@ test("bull holder uses daily close, distinguishes unknown peaks and pending ADD"
   assert.equal(model.pending, "ADD × 2");
   assert.equal(model.total, "—");
   assert.equal(context.__test.holderMoney(0), "0.00 USDC");
+  for (const missing of [null, undefined, "", " ", false]) {
+    assert.equal(context.__test.holderMoney(missing), "—");
+  }
+  assert.equal(context.__test.bullHolderViewModel({ total_equity_usdc: null, legs: {} }).total, "—");
   assert.equal(context.__test.holderMoney(0.003691), "0.003691 USDC");
 });
 
@@ -30,12 +34,14 @@ test("bull holder render is read-only and separates simulation from actual holdi
   const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));
   fixture.hyperliquid = { equity_usdc: 100, usdc: 100, observed_at: 1788600000, holdings: [] };
   fixture.lighter = { error: "Unavailable" };
+  fixture.total_equity_usdc = null;
   context.__test.renderBullHolderStatus(root, fixture, true);
   const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
   assert.match(text(root), /Strategy holdings · simulated/);
   assert.match(text(root), /Actual account assets/);
   assert.match(text(root), /20.00%/);
   assert.match(text(root), /Unavailable/);
+  assert.match(text(root), /Combined monitored equity —/);
   assert.equal(tags.includes("button"), false);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
   fixture.lighter = {};
