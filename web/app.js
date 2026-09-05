@@ -1034,11 +1034,11 @@ const renderArcusStatus = (root, a) => {
     add("strong", text, r);
   };
   const amount = (v, digits = 6) => {
-    const n = parseNumber(v);
+    const n = holderNumber(v);
     return n === null ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: digits });
   };
   const usd = (v) => {
-    const n = parseNumber(v);
+    const n = holderNumber(v);
     return n === null ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
   };
   const at = (v) => v ? formatDateWithAge(v) : "Unknown";

@@ -379,7 +379,8 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
   const content = text(root);
   assert.match(content, /Last tick\s+failed/);
   assert.match(content, /route_unavailable · pending event commit/);
-  assert.match(content, /Daily strategy loss.*UTC\s+—/);
+  const rowValue = (label) => root.children.find((n) => n.children[0]?.textContent === label)?.children[1]?.textContent;
+  assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
   assert.match(content, /Cumulative strategy loss\s+\$0.00/);
   assert.match(content, /Starting basket drawdown\s+\$12.00/);
   assert.match(content, /Gas · last reconciled snapshot\s+0.001 ETH/);
@@ -391,4 +392,11 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
   context.__test.renderArcusStatus(root, { sequence: 0 });
   assert.match(text(root), /Risk halt\s+Unknown/);
   assert.doesNotMatch(text(root), /route_unavailable/);
+  for (const unknown of [null, undefined, "", " ", false]) {
+    context.__test.renderArcusStatus(root, { z_score: unknown, equity_usd: unknown, daily_loss_usd: unknown, daily_loss_limit_usd: unknown, cumulative_loss_usd: 0 });
+    assert.equal(rowValue("Signal z"), "—");
+    assert.equal(rowValue("Inventory equity"), "—");
+    assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
+    assert.equal(rowValue("Cumulative strategy loss"), "$0.00 / — limit");
+  }
 });

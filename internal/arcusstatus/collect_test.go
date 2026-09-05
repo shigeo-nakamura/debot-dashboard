@@ -210,3 +210,27 @@ func TestMissingModeIsNotClaimedDryRun(t *testing.T) {
 		t.Fatal("unknown mode must not imply safe dry-run or healthy status")
 	}
 }
+
+func TestMissingOrMalformedRiskLimitsDegrade(t *testing.T) {
+	for _, field := range []string{"daily_loss_limit_usd", "cumulative_loss_limit_usd"} {
+		for _, replacement := range []string{`null`, `"invalid"`} {
+			t.Run(field+replacement, func(t *testing.T) {
+				dir := fixture(t)
+				path := filepath.Join(dir, "runtime_state.json")
+				b, _ := os.ReadFile(path)
+				var raw map[string]json.RawMessage
+				json.Unmarshal(b, &raw)
+				var config map[string]json.RawMessage
+				json.Unmarshal(raw["config"], &config)
+				config[field] = json.RawMessage(replacement)
+				raw["config"], _ = json.Marshal(config)
+				b, _ = json.Marshal(raw)
+				put(t, dir, "runtime_state.json", string(b))
+				s := collect(t, dir, testUnits()).Arcus
+				if s.Healthy || s.ServiceStatus(testNow, 1920) == "active" {
+					t.Fatal("unavailable risk limit reported healthy")
+				}
+			})
+		}
+	}
+}

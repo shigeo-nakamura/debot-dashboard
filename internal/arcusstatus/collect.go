@@ -265,8 +265,8 @@ func (s *Status) readCheckpoint(c checkpoint) {
 	s.InventoryDrawdownUSD = loss(number(x.InitialEquity), cumulativeBenchmark)
 	s.DailyLossLimitUSD = number(c.Config.DailyLimit)
 	s.CumulativeLossLimitUSD = number(c.Config.CumulativeLimit)
-	if s.EquityUSD == nil || s.DailyLossUSD == nil || s.CumulativeLossUSD == nil {
-		s.problem("Inventory or risk valuation unavailable")
+	if s.EquityUSD == nil || s.DailyLossUSD == nil || s.CumulativeLossUSD == nil || s.DailyLossLimitUSD == nil || s.CumulativeLossLimitUSD == nil {
+		s.problem("Inventory, risk valuation or limits unavailable")
 	}
 	if x.Halt != nil {
 		s.RiskHalt = &Halt{x.Halt.Kind, x.Halt.At, number(x.Halt.Loss), number(x.Halt.Limit)}
