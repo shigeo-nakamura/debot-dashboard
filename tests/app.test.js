@@ -60,6 +60,14 @@ test("bull holder render is read-only and separates simulation from actual holdi
   assert.match(text(root), /Unavailable/);
   assert.match(text(root), /Combined monitored equity\s+—/);
   assert.equal(tags.includes("button"), false);
+  context.__test.renderBullHolderStatus(root, { pending: null, kill_switch: false }, false);
+  assert.match(text(root), /KILL_SWITCH\s+Unknown · monitoring unavailable/);
+  for (const known of [{ pending: { KILL_SWITCH: false } }, { mode: "Off", kill_switch: false }]) {
+    context.__test.renderBullHolderStatus(root, known, true);
+    assert.match(text(root), /KILL_SWITCH\s+Not engaged/);
+  }
+  context.__test.renderBullHolderStatus(root, { pending: { KILL_SWITCH: true } }, true);
+  assert.match(text(root), /KILL_SWITCH\s+Engaged/);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
   fixture.lighter = {};
   fixture.halted = true;

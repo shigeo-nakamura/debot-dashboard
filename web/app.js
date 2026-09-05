@@ -946,7 +946,8 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   row("Tranche / symbol", b.armed_at ? `spot ${holderMoney(b.tranche_spot_usd)} · perp ${holderMoney(b.tranche_perp_usd)}` : "Set at ARM");
   row("Operator requests", view.pending);
   add("p", "Pending files are sampled requests, not execution confirmations. Consumed ADD requests are reflected in scheduled entries.", container, "holder-note");
-  row("KILL_SWITCH", b.pending?.KILL_SWITCH || b.kill_switch ? "Engaged · entries paused" : "Not engaged");
+  const killKnown = b.pending != null || ["Off", "On", "Exited"].includes(b.mode);
+  row("KILL_SWITCH", !killKnown ? "Unknown · monitoring unavailable" : b.pending?.KILL_SWITCH || b.kill_switch ? "Engaged · entries paused" : "Not engaged");
   row("Risk", b.halted ? `HALTED · ${b.halt_reason || "RISK_ACK required"}` : b.mode ? "No bot halt reported" : "Unknown");
   if (b.halted) add("p", "While halted, automatic exits and DISARM can also be blocked.", container, "holder-warning");
   if (b.operator_error) add("p", b.operator_error, container, "holder-warning");
