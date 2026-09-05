@@ -213,10 +213,6 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			continue
 		}
 		s := t.Status
-		// Holder account assets and simulated holdings are not trading PnL.
-		if s.BullHolder != nil {
-			continue
-		}
 
 		labels := prometheus.Labels{
 			"target":      t.Name,
@@ -224,6 +220,23 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			"instance_id": t.InstanceID,
 			"agent":       derefString(s.Agent),
 			"dex":         s.Dex,
+		}
+		// Holder assets are not trading PnL, but operational monitoring must
+		// still observe sampled sentinels, producer freshness and dry-run mode.
+		if s.BullHolder != nil {
+			if t.KillSwitchActive != nil {
+				mc.killSwitchActive.With(labels).Set(boolToFloat(*t.KillSwitchActive))
+			} else {
+				mc.killSwitchActive.Delete(labels)
+			}
+			if s.TS > 0 {
+				mc.statusAgeSec.With(labels).Set(float64(time.Now().Unix() - s.TS))
+				mc.dryRun.With(labels).Set(boolToFloat(s.DryRun))
+			} else {
+				mc.statusAgeSec.Delete(labels)
+				mc.dryRun.Delete(labels)
+			}
+			continue
 		}
 
 		// Group 1 — trade activity.
