@@ -21,14 +21,20 @@ targets:
     s3_region: eu-central-1
     s3_key: debot/status/frankfurt/debot-pair-btceth-a.json
 # HYPE accumulator targets use the same freshness/health path but render the
-# nested accumulator balance/activity view instead of PnL statistics.
+# nested accumulator balance/activity view instead of PnL statistics — it
+# also shows an "Unrealized PnL" row when the S3 object was written by the
+# bot's `--dry-run-cycle` (which attaches an `operations.spent_usdc` figure),
+# not by the lightweight read-only `hype-status` observer (bot-strategy#908).
+# Point `s3_key` at the dry-run-cycle's mirrored status.json — the two
+# processes must use distinct STATUS_S3_KEY_PREFIX values on the host or
+# they will overwrite each other's object on the same 5-minute cadence.
 #  - name: HYPE Accumulator
 #    instance_id: i-xxxxxxxxxxxxxxxxx
 #    service: hype-accumulator
 #    region: ap-northeast-1
 #    s3_bucket: debot-dashboard
 #    s3_region: eu-central-1
-#    s3_key: debot/status/example/hype-accumulator.json
+#    s3_key: debot/status/hype-accumulator/status.json
 # Bull-holder uses its existing same-host status file and public read-only
 # balance APIs. Do not set s3_bucket/s3_key for this target. See
 # deploy/bull-holder.md for data meanings and rollout instructions.

@@ -176,6 +176,31 @@ test("producer fixture reports balances, activity age, and cadence", () => {
   assert.match(model.observed, /0s ago$/);
 });
 
+test("accumulator view model derives unrealized PnL from operations.spent_usdc", () => {
+  const accumulator = accumulatorFixture.accumulator;
+  const nowMs = Date.parse(accumulator.balance_observed_at);
+
+  const withoutOperations = context.__test.accumulatorViewModel(
+    accumulator,
+    nowMs,
+  );
+  assert.equal(withoutOperations.unrealizedPnl, null);
+
+  // hype_balance (2.5) * hype_price_usdc (40.0) = 100.0 mark value;
+  // spent 80.0 to acquire it => +20.0 unrealized.
+  const gaining = context.__test.accumulatorViewModel(accumulator, nowMs, {
+    spent_usdc: 80.0,
+  });
+  assert.equal(gaining.unrealizedPnlUsdc, 20.0);
+  assert.equal(gaining.unrealizedPnl, "+20.0");
+
+  // Spent more than the current mark value => unrealized loss.
+  const losing = context.__test.accumulatorViewModel(accumulator, nowMs, {
+    spent_usdc: 150.0,
+  });
+  assert.equal(losing.unrealizedPnlUsdc, -50.0);
+});
+
 test("fleet health counts a fresh degraded accumulator once", () => {
   assert.equal(
     context.__test.isTargetUnhealthy({

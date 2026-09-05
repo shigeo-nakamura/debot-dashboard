@@ -110,6 +110,19 @@ type AccumulatorStatus struct {
 	HealthReason      *string `json:"health_reason,omitempty"`
 }
 
+// AccumulatorOperations is the subset of hype-accumulator's identifier-free
+// "operations" projection (its Rust MetricsSnapshot) the dashboard renders.
+// It is only present alongside AccumulatorStatus, and only once the bot has
+// run at least one `--dry-run-cycle` (the lightweight read-only `hype-status`
+// observer never attaches it) — see bot-strategy#908. SpentUSDC is the
+// durable ledger's cumulative authoritative USDC actually debited to
+// acquire HYPE (fills only), which the dashboard combines with
+// AccumulatorStatus's current mark to derive unrealized PnL: it is not
+// itself a PnL figure.
+type AccumulatorOperations struct {
+	SpentUSDC float64 `json:"spent_usdc"`
+}
+
 // HanBridgeStatus is the Engine B (bot-strategy#866/#872, codename "Han
 // Bridge") dashboard block: which symbols this instance trades and why
 // today's entry was or wasn't taken, so an operator does not have to grep
@@ -161,16 +174,17 @@ type StatusData struct {
 	// renders "-" instead of a misleading "$0.00". Post-#371
 	// binaries always emit the field (zero is a meaningful "no
 	// closed cycles today" measurement).
-	FundingCarryToday *float64            `json:"funding_carry_today,omitempty"`
-	Accumulator       *AccumulatorStatus  `json:"accumulator,omitempty"`
-	BullHolder        *BullHolderStatus   `json:"bull_holder,omitempty"`
-	Arcus             *arcusstatus.Status `json:"arcus,omitempty"`
-	HanBridge         *HanBridgeStatus    `json:"han_bridge,omitempty"`
-	TradeStats        *TradeStats         `json:"trade_stats,omitempty"`
-	Maintenance       *string             `json:"maintenance,omitempty"`
-	Shutdown          *ShutdownStatus     `json:"shutdown,omitempty"`
-	ErrorSummary      *ErrorSummary       `json:"error_summary,omitempty"`
-	EquityHistory     []EquityPoint       `json:"equity_history,omitempty"`
+	FundingCarryToday *float64               `json:"funding_carry_today,omitempty"`
+	Accumulator       *AccumulatorStatus     `json:"accumulator,omitempty"`
+	AccumulatorOps    *AccumulatorOperations `json:"operations,omitempty"`
+	BullHolder        *BullHolderStatus      `json:"bull_holder,omitempty"`
+	HanBridge         *HanBridgeStatus       `json:"han_bridge,omitempty"`
+	TradeStats        *TradeStats            `json:"trade_stats,omitempty"`
+	Maintenance       *string                `json:"maintenance,omitempty"`
+	Shutdown          *ShutdownStatus        `json:"shutdown,omitempty"`
+	ErrorSummary      *ErrorSummary          `json:"error_summary,omitempty"`
+	EquityHistory     []EquityPoint          `json:"equity_history,omitempty"`
+	Arcus             *arcusstatus.Status    `json:"arcus,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
