@@ -859,3 +859,10 @@ body::after {
 .bull-holder-view .row { gap: 12px; align-items: start; }
 .bull-holder-view .row strong { text-align: right; overflow-wrap: anywhere; }
 .bull-holder-view progress { width: 100%; height: 8px; accent-color: #e3a55c; }
+
+.arcus-view { margin-top: 16px; }
+.arcus-view h3 { font-size: 16px; }
+.arcus-view h4 { margin: 20px 0 10px; font-size: 14px; }
+.arcus-view .row { gap: 12px; align-items: start; }
+.arcus-view .row strong { text-align: right; overflow-wrap: anywhere; }
+.card.arcus .risk-panel { display: none; }

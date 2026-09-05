@@ -234,10 +234,11 @@ const updateFleetSummary = (targets) => {
   targets.forEach((target, index) => {
     const data = target.status;
     if (isBullHolderStatus(data) && data.bull_holder.halted === true) halts += 1;
+    if (isArcusStatus(data) && data.arcus.risk_halt) halts += 1;
     // Accumulator equity is an asset balance, not trading PnL. Keep the HYPE
     // target in fleet health/target counts while excluding it from every PnL,
     // return, drawdown, and open-position aggregate.
-    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data)) {
+    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
       if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
       if (typeof data.funding_carry_today === "number") {
@@ -437,6 +438,7 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status"></section>
       <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status"></section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
         <div class="accumulator-equity">
@@ -501,16 +503,18 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const data = target.status || {};
   const accumulator = isAccumulatorStatus(data) ? data.accumulator : null;
   const bullHolder = isBullHolderStatus(data) ? data.bull_holder : null;
+  const arcus = isArcusStatus(data) ? data.arcus : null;
+  const arcusDegraded = arcus !== null && (arcus.healthy !== true || Boolean(arcus.risk_halt));
   const holderDegraded = bullHolder !== null && isBullHolderDegraded(bullHolder);
   const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && holderDegraded ? "degraded" : status;
+    : status === "active" && (holderDegraded || arcusDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
-  const stale = isStale(updatedAt, pollSecs);
+  const stale = status === "stale" || isStale(updatedAt, target.stale_after_secs);
   const pnlTodayValue = parseNumber(data.pnl_today);
   const pnlTotalValue = parseNumber(data.pnl_total);
   const pnlToday = formatPnl(pnlTodayValue);
@@ -525,7 +529,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
 
   card.classList.toggle("stale", stale);
-  card.classList.toggle("degraded", accumulatorDegraded || holderDegraded);
+  card.classList.toggle("degraded", accumulatorDegraded || holderDegraded || arcusDegraded);
+  card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.style.animationDelay = `${index * 0.04}s`;
 
@@ -700,7 +705,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
-    isHanBridgeHalted(data) || holderDegraded;
+    isHanBridgeHalted(data) || holderDegraded || (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -769,9 +774,17 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
+  const arcusViewEl = card.querySelector('[data-field="arcus-view"]');
+  if (arcusViewEl) arcusViewEl.hidden = arcus === null;
   if (holderViewEl) holderViewEl.hidden = bullHolder === null;
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
-  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null;
+  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcus !== null;
+  if (arcus) {
+    renderArcusStatus(arcusViewEl, arcus);
+    errorEl.hidden = !target.error;
+    errorEl.textContent = target.error || "";
+    return;
+  }
   if (bullHolder) {
     renderBullHolderStatus(holderViewEl, bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
@@ -1002,6 +1015,74 @@ const renderBullHolderStatus = (container, b, dryRun) => {
     });
   });
 };
+const isArcusStatus = (data) => Boolean(data && data.arcus);
+
+const renderArcusStatus = (root, a) => {
+  if (!root) return;
+  root.replaceChildren();
+  const add = (tag, text, parent = root, className = "") => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (className) node.className = className;
+    parent.appendChild(node);
+    return node;
+  };
+  const row = (label, text, parent) => {
+    const r = add("div", "", parent, "row");
+    add("span", label, r);
+    add("strong", text, r);
+  };
+  const amount = (v, digits = 6) => {
+    const n = parseNumber(v);
+    return n === null ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: digits });
+  };
+  const usd = (v) => {
+    const n = parseNumber(v);
+    return n === null ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  };
+  const at = (v) => v ? formatDateWithAge(v) : "Unknown";
+  const yes = (v) => v === true ? "Yes" : v === false ? "No" : "Unknown";
+  add("h3", `Arcus spot · ${a.pair || "Unknown pair"}`);
+  row("Mode", a.mode || "Unknown");
+  row("Last tick", `${a.tick_outcome || "unknown"} · ${at(a.last_tick_at)}`);
+  if (a.tick_outcome === "failed") row("Execution result", `${a.service_result || "unknown"} · exit ${a.exit_code ?? "—"}`);
+  row("Timer active / enabled", `${yes(a.timer_active)} / ${yes(a.timer_enabled)}`);
+  row("Observation", at(a.last_observation_at));
+  row("Monitoring heartbeat", at(a.exported_at));
+  (a.health_reasons || []).forEach((reason) => add("p", reason, root, "holder-warning"));
+  add("h4", "Latest decision");
+  row("Action", `${a.decision || "Unknown"}${a.hold_code ? ` · ${a.hold_code}` : ""}${a.decision_pending ? " · pending event commit" : ""}`);
+  row("Decision observed", at(a.decision_at));
+  row("Signal z", amount(a.z_score, 3));
+  row("Plan quote observed", at(a.quote_received_at));
+  row("Regime", a.regime || "Unknown");
+  row("Rotation started", a.last_rotation_at ? at(a.last_rotation_at) : a.regime === "neutral" ? "No open rotation" : "Unknown");
+  if (a.rotated_quantity != null) row("Rotated quantity", amount(a.rotated_quantity));
+  add("h4", "Managed inventory");
+  (a.inventory || []).forEach((i) => {
+    row(i.symbol, `${amount(i.amount)} · ${usd(i.value_usd)}`);
+    row(`${i.symbol} reference mark`, usd(i.reference_price_usd));
+  });
+  row("Inventory equity", usd(a.equity_usd));
+  add("h4", "Strategy risk");
+  row(`Daily strategy loss · ${a.daily_baseline_day || "unknown day"} UTC`, `${usd(a.daily_loss_usd)} / ${usd(a.daily_loss_limit_usd)} limit`);
+  row("Cumulative strategy loss", `${usd(a.cumulative_loss_usd)} / ${usd(a.cumulative_loss_limit_usd)} limit`);
+  row("Starting basket drawdown", usd(a.inventory_drawdown_usd));
+  add("p", "Strategy loss compares managed inventory with the original basket at the same reference prices. Basket drawdown measures price movement separately. These are loss measures, not realized PnL; gas is separate.", root, "holder-note");
+  if (a.risk_halt) {
+    row("Risk halt", a.risk_halt.kind || "Engaged");
+    row("Halt engaged", at(a.risk_halt.engaged_at));
+    row("Loss at halt / limit", `${usd(a.risk_halt.loss_usd)} / ${usd(a.risk_halt.limit_usd)}`);
+  } else row("Risk halt", a.sequence > 0 ? "Not engaged" : "Unknown");
+  add("h4", "Execution & gas");
+  row(`Daily execution budget · ${a.budget_day || "unknown day"} UTC`, `${a.daily_budget_used ?? "—"} / ${a.max_swaps_per_day ?? "—"}`);
+  add("p", "Budget usage follows the executor's archived-attempt counter, including rejections. It is not a count of filled swaps.", root, "holder-note");
+  row("Latest execution phase", a.active_execution_phase || "None / unavailable");
+  row("Last reconciled swap", at(a.last_swap_at));
+  row("Gas · last reconciled snapshot", a.gas_balance_eth == null ? "Unknown" : `${amount(a.gas_balance_eth, 9)} ETH`);
+  row("Gas observed", at(a.gas_observed_at));
+};
+
 const isBullHolderStatus = (data) => Boolean(data && data.bull_holder);
 const isBullHolderDegraded = (b) => Boolean(b.halted || b.operator_error || b.hyperliquid?.error || b.lighter?.error);
 
@@ -1104,7 +1185,8 @@ const isTargetUnhealthy = (target) => {
     ? target.status.accumulator
     : null;
   return serviceUnhealthy || Boolean(target.error) || (accumulator !== null && accumulator.healthy !== true)
-    || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder));
+    || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
+    || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)));
 };
 
 const formatHype = (value) => {
@@ -1586,12 +1668,13 @@ const formatAge = (ms) => {
   return remMins === 0 ? `${hours}h` : `${hours}h${remMins}m`;
 };
 
-const isStale = (updatedAt, pollSecs) => {
+const isStale = (updatedAt, staleAfterSecs = 180) => {
   if (!updatedAt) {
     return true;
   }
   const diffSecs = (Date.now() - updatedAt.getTime()) / 1000;
-  return diffSecs > pollSecs * 3;
+  const limit = Number.isFinite(staleAfterSecs) && staleAfterSecs > 0 ? staleAfterSecs : 180;
+  return !Number.isFinite(diffSecs) || diffSecs < -30 || diffSecs > limit;
 };
 
 const formatPositionSize = (value) => {

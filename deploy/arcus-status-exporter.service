@@ -1,0 +1,21 @@
+[Unit]
+Description=Read-only Arcus spot dashboard exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=arcus
+Group=arcus
+EnvironmentFile=/etc/arcus-status-exporter.env
+ExecStart=/usr/local/bin/arcus-status-exporter
+TimeoutStartSec=35
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/var/lib/debot-arcus /etc/arcus-spot
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
