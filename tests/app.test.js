@@ -4,12 +4,75 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary };`;
+const fleetFields = new Map();
+const fleet = { querySelector(selector) {
+  if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
+  return fleetFields.get(selector);
+} };
 const context = {
-  document: { getElementById: () => null },
+  document: { getElementById: (id) => id === "fleet-summary" ? fleet : null },
   fetch: () => new Promise(() => {}),
   setInterval: () => 0,
 };
+
+test("fleet includes holder halt and kill switch without counting simulated capital", () => {
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 2 } },
+    { service_status: "active", kill_switch_active: true, status: { pnl_total: 9000, pnl_today: 1000, position_count: 4, bull_holder: { halted: true } } },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("fleet-halts"), "1");
+  assert.equal(value("fleet-kill-switches"), "1");
+  assert.equal(value("fleet-equity-total"), "100.0 USDC");
+  assert.equal(value("fleet-positions-total"), "1");
+});
+
+test("bull holder uses daily close, distinguishes unknown peaks and pending ADD", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));
+  const model = context.__test.bullHolderViewModel({ ...fixture, pending: { ARM: false, ADD: true }, pending_add: 2 });
+  assert.equal(model.legs[0].drop, 100 * (1 - 80000 / 100000));
+  assert.equal(model.legs[1].drop, null);
+  assert.equal(model.pending, "ADD × 2");
+  assert.equal(model.total, "—");
+  assert.equal(context.__test.holderMoney(0), "0.00 USDC");
+  for (const missing of [null, undefined, "", " ", false]) {
+    assert.equal(context.__test.holderMoney(missing), "—");
+  }
+  assert.equal(context.__test.bullHolderViewModel({ total_equity_usdc: null, legs: {} }).total, "—");
+  assert.equal(context.__test.holderMoney(0.003691), "0.003691 USDC");
+});
+
+test("bull holder render is read-only and separates simulation from actual holdings", () => {
+  const node = () => ({ children: [], textContent: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; }, setAttribute() {} });
+  const tags = [];
+  context.document.createElement = (tag) => { tags.push(tag); return node(); };
+  const root = node();
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));
+  fixture.hyperliquid = { equity_usdc: 100, usdc: 100, observed_at: 1788600000, holdings: [] };
+  fixture.lighter = { error: "Unavailable" };
+  fixture.total_equity_usdc = null;
+  context.__test.renderBullHolderStatus(root, fixture, true);
+  const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
+  assert.match(text(root), /Strategy holdings · simulated/);
+  assert.match(text(root), /Actual account assets/);
+  assert.match(text(root), /20.00%/);
+  assert.match(text(root), /Unavailable/);
+  assert.match(text(root), /Combined monitored equity\s+—/);
+  assert.equal(tags.includes("button"), false);
+  context.__test.renderBullHolderStatus(root, { pending: null, kill_switch: false }, false);
+  assert.match(text(root), /KILL_SWITCH\s+Unknown · monitoring unavailable/);
+  for (const known of [{ pending: { KILL_SWITCH: false } }, { mode: "Off", kill_switch: false }]) {
+    context.__test.renderBullHolderStatus(root, known, true);
+    assert.match(text(root), /KILL_SWITCH\s+Not engaged/);
+  }
+  context.__test.renderBullHolderStatus(root, { pending: { KILL_SWITCH: true } }, true);
+  assert.match(text(root), /KILL_SWITCH\s+Engaged/);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
+  fixture.lighter = {};
+  fixture.halted = true;
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
+});
 vm.runInNewContext(source, context);
 
 const accumulatorFixture = JSON.parse(

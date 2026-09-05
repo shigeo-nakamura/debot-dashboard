@@ -1,6 +1,6 @@
 region: eu-central-1
 poll_interval_secs: 20
-# Each target reads status.json from S3. The bot must have its
+# Standard targets read status.json from S3. The bot must have its
 # STATUS_S3_BUCKET / STATUS_S3_KEY_PREFIX env vars set so it mirrors
 # `status.json` to the same key — see bot-strategy#343.
 #
@@ -29,6 +29,19 @@ targets:
 #    s3_bucket: debot-dashboard
 #    s3_region: eu-central-1
 #    s3_key: debot/status/example/hype-accumulator.json
+# Bull-holder uses its existing same-host status file and public read-only
+# balance APIs. Do not set s3_bucket/s3_key for this target. See
+# deploy/bull-holder.md for data meanings and rollout instructions.
+#  - name: Bull-holder (Frankfurt)
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: debot-bull-holder
+#    region: eu-central-1
+#    bull_holder:
+#      status_path: /opt/debot-bull-holder/bull_holder/status.json
+#      hyperliquid_address: "0x0000000000000000000000000000000000000000"
+#      lighter_account_index: "0"
+# Use the dedicated funded account address/index, not an API signing wallet.
+# Empty identifiers show "not configured"; no signing keys are needed.
 # auth:
 #   username: admin
 #   password: change-me

@@ -1,0 +1,40 @@
+{
+  "bot": "bull_holder",
+  "ts": 1788600000,
+  "dry_run": true,
+  "mode": "On",
+  "armed_at": 1788400000,
+  "exited_at": null,
+  "exit_reason": null,
+  "halted": false,
+  "halt_reason": null,
+  "kill_switch": false,
+  "tranches_done": 2,
+  "tranches_remaining": 3,
+  "tranche_spot_usd": 90,
+  "tranche_perp_usd": 45,
+  "last_tranche_date": "2026-09-05",
+  "legs": {
+    "BTC": {
+      "spot_size": 1,
+      "perp_size": 0.5,
+      "peak_close": 100000,
+      "last_close": 80000,
+      "last_close_date": "2026-09-04",
+      "exit_level": 70000,
+      "stop_level": 65000,
+      "stop_size": 0.5,
+      "stop_order_id": "not-public"
+    },
+    "ETH": {
+      "spot_size": 10,
+      "perp_size": 5,
+      "peak_close": 4000,
+      "last_close": null,
+      "last_close_date": null,
+      "exit_level": 2800,
+      "stop_level": null,
+      "stop_size": null
+    }
+  }
+}

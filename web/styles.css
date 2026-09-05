@@ -847,3 +847,13 @@ body::after {
     gap: 8px;
   }
 }
+.bull-holder-view { margin-top: 16px; }
+.card.bull-holder .risk-panel { display: none; }
+.bull-holder-view h3 { margin: 18px 0 10px; font-size: 15px; }
+.bull-holder-view h4 { margin: 0 0 10px; font-size: 14px; }
+.holder-leg, .holder-account { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.holder-note { font-size: 12px; line-height: 1.5; opacity: .7; }
+.holder-warning { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.bull-holder-view .row { gap: 12px; align-items: start; }
+.bull-holder-view .row strong { text-align: right; overflow-wrap: anywhere; }
+.bull-holder-view progress { width: 100%; height: 8px; accent-color: #e3a55c; }
