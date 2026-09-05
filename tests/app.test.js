@@ -4,12 +4,44 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney };`;
 const context = {
   document: { getElementById: () => null },
   fetch: () => new Promise(() => {}),
   setInterval: () => 0,
 };
+
+test("bull holder uses daily close, distinguishes unknown peaks and pending ADD", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));
+  const model = context.__test.bullHolderViewModel({ ...fixture, pending: { ARM: false, ADD: true }, pending_add: 2 });
+  assert.equal(model.legs[0].drop, 100 * (1 - 80000 / 100000));
+  assert.equal(model.legs[1].drop, null);
+  assert.equal(model.pending, "ADD × 2");
+  assert.equal(model.total, "—");
+  assert.equal(context.__test.holderMoney(0), "0.00 USDC");
+  assert.equal(context.__test.holderMoney(0.003691), "0.003691 USDC");
+});
+
+test("bull holder render is read-only and separates simulation from actual holdings", () => {
+  const node = () => ({ children: [], textContent: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; }, setAttribute() {} });
+  const tags = [];
+  context.document.createElement = (tag) => { tags.push(tag); return node(); };
+  const root = node();
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));
+  fixture.hyperliquid = { equity_usdc: 100, usdc: 100, observed_at: 1788600000, holdings: [] };
+  fixture.lighter = { error: "Unavailable" };
+  context.__test.renderBullHolderStatus(root, fixture, true);
+  const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
+  assert.match(text(root), /Strategy holdings · simulated/);
+  assert.match(text(root), /Actual account assets/);
+  assert.match(text(root), /20.00%/);
+  assert.match(text(root), /Unavailable/);
+  assert.equal(tags.includes("button"), false);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
+  fixture.lighter = {};
+  fixture.halted = true;
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
+});
 vm.runInNewContext(source, context);
 
 const accumulatorFixture = JSON.parse(

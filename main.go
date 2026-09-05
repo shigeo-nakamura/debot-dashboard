@@ -44,10 +44,11 @@ type AuthConfig struct {
 }
 
 type TargetConfig struct {
-	Name       string `yaml:"name"`
-	InstanceID string `yaml:"instance_id"`
-	Service    string `yaml:"service"`
-	Region     string `yaml:"region"`
+	BullHolder *BullHolderConfig `yaml:"bull_holder"`
+	Name       string            `yaml:"name"`
+	InstanceID string            `yaml:"instance_id"`
+	Service    string            `yaml:"service"`
+	Region     string            `yaml:"region"`
 	// Bucket name and full key for the bot's `<id>.json` object.
 	// Sibling files (equity_history.jsonl) are derived by suffix-
 	// replacing the key. The bot mirrors `status.json` to this key
@@ -159,6 +160,7 @@ type StatusData struct {
 	// closed cycles today" measurement).
 	FundingCarryToday *float64           `json:"funding_carry_today,omitempty"`
 	Accumulator       *AccumulatorStatus `json:"accumulator,omitempty"`
+	BullHolder        *BullHolderStatus  `json:"bull_holder,omitempty"`
 	HanBridge         *HanBridgeStatus   `json:"han_bridge,omitempty"`
 	TradeStats        *TradeStats        `json:"trade_stats,omitempty"`
 	Maintenance       *string            `json:"maintenance,omitempty"`
@@ -478,8 +480,16 @@ func normalizeConfig(cfg *Config) error {
 		if target.Region == "" {
 			return fmt.Errorf("targets[%d] missing region", i)
 		}
-		// Bucket + key are required; the dashboard always reads from
-		// S3. instance_id is kept for FE labeling and disk-watch
+		if target.BullHolder != nil {
+			if target.S3Bucket != "" || target.S3Key != "" {
+				return fmt.Errorf("targets[%d]: choose bull_holder or S3", i)
+			}
+			if err := target.BullHolder.validate(); err != nil {
+				return fmt.Errorf("targets[%d]: %w", i, err)
+			}
+			continue
+		}
+		// Standard targets require bucket + key. instance_id is kept for FE labeling and disk-watch
 		// disambiguation but is no longer required to reach the bot.
 		if target.S3Bucket == "" {
 			return fmt.Errorf("targets[%d] missing s3_bucket", i)
@@ -575,6 +585,10 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if target.BullHolder != nil {
+				results[i] = fetchBullHolder(ctx, target, http.DefaultClient)
+				return
+			}
 			results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 		}()
 	}

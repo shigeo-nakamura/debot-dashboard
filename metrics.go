@@ -213,6 +213,10 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			continue
 		}
 		s := t.Status
+		// Holder account assets and simulated holdings are not trading PnL.
+		if s.BullHolder != nil {
+			continue
+		}
 
 		labels := prometheus.Labels{
 			"target":      t.Name,

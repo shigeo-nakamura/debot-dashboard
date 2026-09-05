@@ -236,7 +236,7 @@ const updateFleetSummary = (targets) => {
     // Accumulator equity is an asset balance, not trading PnL. Keep the HYPE
     // target in fleet health/target counts while excluding it from every PnL,
     // return, drawdown, and open-position aggregate.
-    if (data && !isAccumulatorStatus(data)) {
+    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data)) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
       if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
       if (typeof data.funding_carry_today === "number") {
@@ -436,6 +436,7 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status"></section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
         <div class="accumulator-equity">
           <span>Total equity</span>
@@ -498,10 +499,12 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const status = target.service_status || "unknown";
   const data = target.status || {};
   const accumulator = isAccumulatorStatus(data) ? data.accumulator : null;
+  const bullHolder = isBullHolderStatus(data) ? data.bull_holder : null;
+  const holderDegraded = bullHolder !== null && isBullHolderDegraded(bullHolder);
   const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status;
+    : status === "active" && holderDegraded ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
@@ -521,7 +524,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
 
   card.classList.toggle("stale", stale);
-  card.classList.toggle("degraded", accumulatorDegraded);
+  card.classList.toggle("degraded", accumulatorDegraded || holderDegraded);
+  card.classList.toggle("bull-holder", bullHolder !== null);
   card.style.animationDelay = `${index * 0.04}s`;
 
   const nameEl = card.querySelector('[data-field="name"]');
@@ -695,7 +699,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
-    isHanBridgeHalted(data);
+    isHanBridgeHalted(data) || holderDegraded;
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -763,8 +767,19 @@ const updateCard = (card, target, pollSecs, index, key) => {
   ageEl.textContent = ageText;
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
+  const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
+  if (holderViewEl) holderViewEl.hidden = bullHolder === null;
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
-  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null;
+  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null;
+  if (bullHolder) {
+    renderBullHolderStatus(holderViewEl, bullHolder, data.dry_run);
+    errorEl.hidden = !target.error;
+    errorEl.textContent = target.error || "";
+    if (target.kill_switch_active === true) {
+      killSwitchEl.title = "Bull-holder KILL_SWITCH: new entries and stop replacement blocked; protective exits remain enabled unless halted.";
+    }
+    return;
+  }
   if (accumulator) {
     renderAccumulatorStatus(card, accumulator);
     if (target.error || accumulatorDegraded) {
@@ -883,6 +898,97 @@ const updateCard = (card, target, pollSecs, index, key) => {
 
 const isAccumulatorStatus = (data) => Boolean(data && data.accumulator);
 
+const holderMoney = (value) => {
+  const n = parseNumber(value);
+  return n === null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + " USDC";
+};
+const holderAmount = (value) => {
+  const n = parseNumber(value);
+  return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 8 });
+};
+const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
+const bullHolderViewModel = (b) => ({
+  mode: ({ Off: "Off · awaiting ARM", On: "On · holding / scheduled entries", Exited: "Exited · manual ARM required" })[b.mode] || "State unavailable",
+  total: holderMoney(b.total_equity_usdc),
+  pending: b.pending == null ? "Unavailable" : Object.entries(b.pending)
+    .filter(([name, active]) => active && name !== "KILL_SWITCH")
+    .map(([name]) => name === "ADD" && b.pending_add != null ? `ADD × ${b.pending_add}` : name).join(" · ") || "None pending",
+  legs: Object.entries(b.legs || {}).sort(([a], [z]) => a.localeCompare(z)).map(([symbol, leg]) => {
+    const close = parseNumber(leg.last_close), peak = parseNumber(leg.peak_close);
+    const drop = close !== null && close > 0 && peak !== null && peak > 0 ? Math.max(0, 100 * (1 - close / peak)) : null;
+    const exit = parseNumber(leg.exit_level);
+    return { symbol, ...leg, drop, triggerPct: exit !== null && exit > 0 && peak > 0 ? 100 * (1 - exit / peak) : null };
+  }),
+});
+const renderBullHolderStatus = (container, b, dryRun) => {
+  if (!container) return;
+  container.replaceChildren();
+  const view = bullHolderViewModel(b);
+  const add = (tag, text, parent = container, className = "") => {
+    const el = document.createElement(tag);
+    el.textContent = text; el.className = className; parent.appendChild(el); return el;
+  };
+  const row = (label, value, parent = container) => {
+    const el = add("div", "", parent, "row"); add("span", label, el); add("strong", value, el); return el;
+  };
+  add("h3", "Bull-holder");
+  row("Mode", view.mode);
+  row("ARM accepted", holderTime(b.armed_at));
+  row("Last exit", holderTime(b.exited_at));
+  if (b.exit_reason) row("Exit reason", b.exit_reason);
+  row("Entries", b.mode ? `${b.tranches_done} done · ${b.tranches_remaining} scheduled` : "—");
+  row("Last tranche (UTC)", b.last_tranche_date || "—");
+  row("Tranche / symbol", b.armed_at ? `spot ${holderMoney(b.tranche_spot_usd)} · perp ${holderMoney(b.tranche_perp_usd)}` : "Set at ARM");
+  row("Operator requests", view.pending);
+  add("p", "Pending files are sampled requests, not execution confirmations. Consumed ADD requests are reflected in scheduled entries.", container, "holder-note");
+  row("KILL_SWITCH", b.pending?.KILL_SWITCH || b.kill_switch ? "Engaged · entries paused" : "Not engaged");
+  row("Risk", b.halted ? `HALTED · ${b.halt_reason || "RISK_ACK required"}` : b.mode ? "No bot halt reported" : "Unknown");
+  if (b.halted) add("p", "While halted, automatic exits and DISARM can also be blocked.", container, "holder-warning");
+  if (b.operator_error) add("p", b.operator_error, container, "holder-warning");
+  add("h3", dryRun ? "Strategy holdings · simulated" : "Strategy holdings · bot state");
+  add("p", "Daily-close drop from the highest close since ARM. Either BTC or ETH crossing its exit level closes the whole book. This is not an equity-loss cap.", container, "holder-note");
+  if (!view.legs.length) add("p", b.mode === "Off" ? "ARM has not been accepted; no peak or strategy holdings yet." : "No strategy legs reported.", container, "holder-note");
+  view.legs.forEach((leg) => {
+    const panel = add("div", "", container, "holder-leg");
+    add("h4", leg.symbol, panel);
+    row("Spot / perp quantity", `${holderAmount(leg.spot_size)} / ${holderAmount(leg.perp_size)}`, panel);
+    row("Peak close", holderMoney(leg.peak_close > 0 ? leg.peak_close : null), panel);
+    row("Last daily close", `${holderMoney(leg.last_close)} · ${leg.last_close_date || "—"} UTC`, panel);
+    row("Drop from peak", leg.drop === null ? "—" : `${leg.drop.toFixed(2)}% · exit > ${leg.triggerPct?.toFixed(2) ?? "—"}%`, panel);
+    if (leg.drop !== null && leg.triggerPct > 0) {
+      const meter = document.createElement("progress");
+      meter.max = leg.triggerPct; meter.value = leg.drop;
+      meter.setAttribute("aria-label", `${leg.symbol} daily-close drawdown toward exit`);
+      panel.appendChild(meter);
+    }
+    row("Daily exit price", holderMoney(leg.exit_level > 0 ? leg.exit_level : null), panel);
+    row(dryRun ? "Simulated perp stop" : "Perp stop (bot-reported)", `${holderMoney(leg.stop_level)} · qty ${holderAmount(leg.stop_size)}`, panel);
+  });
+  add("h3", "Actual account assets");
+  row("Combined monitored equity", view.total);
+  add("p", "Hyperliquid spot value + Lighter account equity. Perp notional is exposure, not an asset to add again. Actual balances remain separate from simulated strategy holdings.", container, "holder-note");
+  [["Hyperliquid · spot", b.hyperliquid || {}, false], ["Lighter · perpetuals", b.lighter || {}, true]].forEach(([name, account, perp]) => {
+    const panel = add("div", "", container, "holder-account");
+    add("h4", name, panel);
+    if (account.error) add("p", account.error, panel, "holder-warning");
+    row(perp ? "Account equity (incl. unrealized PnL)" : "Spot account value", holderMoney(account.equity_usdc), panel);
+    row(perp ? "USDC collateral" : "USDC balance", holderMoney(account.usdc), panel);
+    row("Available USDC", holderMoney(account.available_usdc), panel);
+    row("Balance observed", holderTime(account.observed_at), panel);
+    if (!(account.holdings || []).length) add("p", account.observed_at ? (perp ? "No open perp positions." : "No non-USDC spot holdings.") : "Holdings unavailable.", panel, "holder-note");
+    (account.holdings || []).forEach((h) => {
+      row(h.symbol, `${holderAmount(h.size)} · ${perp ? "notional" : "value"} ${holderMoney(h.value_usdc)}`, panel);
+      row("Mark", holderMoney(h.price_usdc), panel);
+      if (perp) {
+        row("Unrealized PnL", holderMoney(h.unrealized_pnl_usdc), panel);
+        row("Liquidation price", holderMoney(h.liquidation_price), panel);
+      }
+    });
+  });
+};
+const isBullHolderStatus = (data) => Boolean(data && data.bull_holder);
+const isBullHolderDegraded = (b) => Boolean(b.halted || b.operator_error || b.hyperliquid?.error || b.lighter?.error);
+
 const isHanBridgeStatus = (data) => Boolean(data && data.han_bridge);
 
 // Han Bridge's risk halt is a single string reason on its own nested
@@ -981,7 +1087,8 @@ const isTargetUnhealthy = (target) => {
   const accumulator = isAccumulatorStatus(target.status)
     ? target.status.accumulator
     : null;
-  return serviceUnhealthy || (accumulator !== null && accumulator.healthy !== true);
+  return serviceUnhealthy || Boolean(target.error) || (accumulator !== null && accumulator.healthy !== true)
+    || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder));
 };
 
 const formatHype = (value) => {
