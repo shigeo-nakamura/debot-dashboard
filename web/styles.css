@@ -848,8 +848,9 @@ body::after {
   }
 }
 .bull-holder-view { margin-top: 16px; }
-/* Keep the long holder panel on its own full-width row within its region. */
-.grid > .card.bull-holder { grid-column: 1 / -1; }
+/* Keep detailed holder and Arcus panels on their own full-width rows. */
+.grid > .card.bull-holder,
+.grid > .card.arcus { grid-column: 1 / -1; }
 .card.bull-holder .risk-panel { display: none; }
 .bull-holder-view h3 { margin: 18px 0 10px; font-size: 15px; }
 .bull-holder-view h4 { margin: 0 0 10px; font-size: 14px; }
