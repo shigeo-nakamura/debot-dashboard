@@ -4,12 +4,29 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney };`;
+globalThis.__test = { renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary };`;
+const fleetFields = new Map();
+const fleet = { querySelector(selector) {
+  if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
+  return fleetFields.get(selector);
+} };
 const context = {
-  document: { getElementById: () => null },
+  document: { getElementById: (id) => id === "fleet-summary" ? fleet : null },
   fetch: () => new Promise(() => {}),
   setInterval: () => 0,
 };
+
+test("fleet includes holder halt and kill switch without counting simulated capital", () => {
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 2 } },
+    { service_status: "active", kill_switch_active: true, status: { pnl_total: 9000, pnl_today: 1000, position_count: 4, bull_holder: { halted: true } } },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("fleet-halts"), "1");
+  assert.equal(value("fleet-kill-switches"), "1");
+  assert.equal(value("fleet-equity-total"), "100.0 USDC");
+  assert.equal(value("fleet-positions-total"), "1");
+});
 
 test("bull holder uses daily close, distinguishes unknown peaks and pending ADD", () => {
   const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/bull-holder-status.json`, "utf8"));

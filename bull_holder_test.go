@@ -154,6 +154,21 @@ func TestHolderEmptyAndInvalidADD(t *testing.T) {
 		}
 	}
 }
+
+func TestHolderSampledKillSwitchReachesHeaderWithoutProducer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+	writeHolder(t, filepath.Join(dir, "KILL_SWITCH"), "")
+	for _, payload := range []string{"", `{"bot":"bull_holder","ts":1,"dry_run":true,"mode":"Off","kill_switch":false}`} {
+		if payload != "" {
+			writeHolder(t, path, payload)
+		}
+		got := fetchBullHolder(context.Background(), TargetConfig{BullHolder: &BullHolderConfig{StatusPath: path}}, holderClient(t, holderBalances, holderLighter))
+		if got.KillSwitchActive == nil || !*got.KillSwitchActive || !got.Status.KillSwitchActive || !got.Status.BullHolder.Pending["KILL_SWITCH"] {
+			t.Fatal("sampled kill switch not promoted to all status consumers")
+		}
+	}
+}
 func TestHolderConfigSourceValidation(t *testing.T) {
 	for _, target := range []TargetConfig{
 		{BullHolder: &BullHolderConfig{StatusPath: "relative"}},

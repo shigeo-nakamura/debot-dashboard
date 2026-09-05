@@ -233,6 +233,7 @@ const updateFleetSummary = (targets) => {
   const monthStartMs = currentUtcMonthStartMs();
   targets.forEach((target, index) => {
     const data = target.status;
+    if (isBullHolderStatus(data) && data.bull_holder.halted === true) halts += 1;
     // Accumulator equity is an asset balance, not trading PnL. Keep the HYPE
     // target in fleet health/target counts while excluding it from every PnL,
     // return, drawdown, and open-position aggregate.

@@ -123,10 +123,16 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 			if age := time.Now().Unix() - s.TS; age > s3StatusStaleSecs || age < -60 {
 				r.ServiceStatus = "stale"
 			}
-			r.KillSwitchActive = &b.KillSwitch
 		}
 	}
 	readHolderIntents(filepath.Dir(target.BullHolder.StatusPath), b)
+	// Sentinel sampling can be newer than the last producer write, including
+	// when the bot has stopped. Keep all header/fleet/detail consumers aligned.
+	if b.Pending != nil || s.TS != 0 {
+		kill := b.KillSwitch || b.Pending["KILL_SWITCH"]
+		r.KillSwitchActive = &kill
+		s.KillSwitchActive = kill
+	}
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
