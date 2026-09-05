@@ -448,6 +448,7 @@ const createCard = (key) => {
           <div>HYPE amount <span data-field="accumulator-hype"></span></div>
           <div>HYPE mark <span data-field="accumulator-mark"></span></div>
         </div>
+        <div class="row" data-field="accumulator-pnl-row" hidden><span>Unrealized PnL</span><strong data-field="accumulator-pnl"></strong></div>
         <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
         <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
         <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
@@ -782,7 +783,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     return;
   }
   if (accumulator) {
-    renderAccumulatorStatus(card, accumulator);
+    renderAccumulatorStatus(card, accumulator, data.operations || null);
     if (target.error || accumulatorDegraded) {
       errorEl.hidden = false;
       errorEl.textContent = target.error || accumulator.health_reason || "Accumulator health check failed";
@@ -1121,18 +1122,37 @@ const formatDateWithAge = (value, nowMs = Date.now()) => {
   return `${new Date(timestamp).toLocaleString()} · ${formatAge(nowMs - timestamp)} ago`;
 };
 
-const accumulatorViewModel = (accumulator, nowMs = Date.now()) => ({
-  total: formatUsdc(parseNumber(accumulator.total_equity_usdc)),
-  usdc: formatUsdc(parseNumber(accumulator.usdc_balance)),
-  hype: formatHype(accumulator.hype_balance),
-  mark: formatUsdc(parseNumber(accumulator.hype_price_usdc)),
-  lastTrade: formatDateWithAge(accumulator.last_trade_at, nowMs),
-  cadence: accumulator.trade_cadence || "-",
-  observed: formatDateWithAge(accumulator.balance_observed_at, nowMs),
-});
+// `operations` is the bot's identifier-free MetricsSnapshot projection
+// (bot-strategy#908), a sibling of `accumulator` in the status document
+// and present only once the bot has completed at least one
+// `--dry-run-cycle` — the lightweight read-only `hype-status` observer
+// never attaches it. `spent_usdc` is the durable ledger's cumulative
+// authoritative USDC actually debited to acquire HYPE (fills only), so
+// unrealized PnL is simply the current mark value of held HYPE minus that
+// figure. `operations` may be null/undefined; the PnL row stays hidden
+// in that case rather than rendering a misleading "$0.00".
+const accumulatorViewModel = (accumulator, nowMs = Date.now(), operations = null) => {
+  const spentUsdc = operations ? parseNumber(operations.spent_usdc) : null;
+  const hypeBalance = parseNumber(accumulator.hype_balance);
+  const hypePriceUsdc = parseNumber(accumulator.hype_price_usdc);
+  const unrealizedPnlUsdc = spentUsdc !== null && hypeBalance !== null && hypePriceUsdc !== null
+    ? hypeBalance * hypePriceUsdc - spentUsdc
+    : null;
+  return {
+    total: formatUsdc(parseNumber(accumulator.total_equity_usdc)),
+    usdc: formatUsdc(parseNumber(accumulator.usdc_balance)),
+    hype: formatHype(accumulator.hype_balance),
+    mark: formatUsdc(hypePriceUsdc),
+    lastTrade: formatDateWithAge(accumulator.last_trade_at, nowMs),
+    cadence: accumulator.trade_cadence || "-",
+    observed: formatDateWithAge(accumulator.balance_observed_at, nowMs),
+    unrealizedPnlUsdc,
+    unrealizedPnl: unrealizedPnlUsdc === null ? null : formatPnl(unrealizedPnlUsdc),
+  };
+};
 
-const renderAccumulatorStatus = (card, accumulator) => {
-  const view = accumulatorViewModel(accumulator);
+const renderAccumulatorStatus = (card, accumulator, operations) => {
+  const view = accumulatorViewModel(accumulator, Date.now(), operations);
   const fields = {
     "accumulator-total": view.total,
     "accumulator-usdc": view.usdc,
@@ -1146,6 +1166,10 @@ const renderAccumulatorStatus = (card, accumulator) => {
     const element = card.querySelector(`[data-field="${field}"]`);
     if (element) element.textContent = value;
   });
+  const pnlRowEl = card.querySelector('[data-field="accumulator-pnl-row"]');
+  const pnlEl = card.querySelector('[data-field="accumulator-pnl"]');
+  if (pnlRowEl) pnlRowEl.hidden = view.unrealizedPnl === null;
+  if (pnlEl) pnlEl.textContent = view.unrealizedPnl || "";
 };
 
 const setupRangeToggle = () => {
