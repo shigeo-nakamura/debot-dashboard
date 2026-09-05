@@ -52,6 +52,8 @@ test("bull holder render is read-only and separates simulation from actual holdi
   fixture.hyperliquid = { equity_usdc: 100, usdc: 100, observed_at: 1788600000, holdings: [] };
   fixture.lighter = { error: "Unavailable" };
   fixture.total_equity_usdc = null;
+  fixture.investment = { config_fp: "4c67969bf10a", equity_usd: 1000, spot_fraction: 0.9, perp_fraction: 0.45 };
+  fixture.unrealized_pnl_usdc = -12;
   context.__test.renderBullHolderStatus(root, fixture, true);
   const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
   assert.match(text(root), /Strategy holdings · simulated/);
@@ -59,8 +61,14 @@ test("bull holder render is read-only and separates simulation from actual holdi
   assert.match(text(root), /20.00%/);
   assert.match(text(root), /Unavailable/);
   assert.match(text(root), /Combined monitored equity\s+—/);
+  assert.match(text(root), /Configured capital \(USD\)\s+1,000/);
+  assert.match(text(root), /Hyperliquid spot allocation \(USD\)\s+900/);
+  assert.match(text(root), /Lighter perp notional target \(USD\)\s+450/);
+  assert.match(text(root), /Combined unrealized PnL · estimate\s+-12.00 USDC/);
   assert.equal(tags.includes("button"), false);
   context.__test.renderBullHolderStatus(root, { pending: null, kill_switch: false }, false);
+  assert.match(text(root), /Configured capital \(USD\)\s+—/);
+  assert.match(text(root), /Combined unrealized PnL · estimate\s+—/);
   assert.match(text(root), /KILL_SWITCH\s+Unknown · monitoring unavailable/);
   for (const known of [{ pending: { KILL_SWITCH: false } }, { mode: "Off", kill_switch: false }]) {
     context.__test.renderBullHolderStatus(root, known, true);

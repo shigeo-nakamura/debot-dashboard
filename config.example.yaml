@@ -40,6 +40,13 @@ targets:
 #      status_path: /opt/debot-bull-holder/bull_holder/status.json
 #      hyperliquid_address: "0x0000000000000000000000000000000000000000"
 #      lighter_account_index: "0"
+#      # Optional display-only snapshot verified against the bot startup log.
+#      # Replace the example fingerprint with the matching status.config_fp.
+#      investment:
+#        config_fp: "000000000000"
+#        equity_usd: 1000
+#        spot_fraction: 0.90
+#        perp_fraction: 0.45
 # Use the dedicated funded account address/index, not an API signing wallet.
 # Empty identifiers show "not configured"; no signing keys are needed.
 # auth:

@@ -41,6 +41,55 @@ Removing just this target and restarting the dashboard rolls back the config.
 
 ## Display semantics
 
+### Investment settings (display-only)
+
+The existing bot emits `config_fp`, but not its full effective budget. The
+dashboard accepts an optional operator-verified startup snapshot under the
+target's `bull_holder.investment`:
+
+```yaml
+investment:
+  config_fp: "000000000000" # replace with the verified running fingerprint
+  equity_usd: 1000
+  spot_fraction: 0.90
+  perp_fraction: 0.45
+```
+
+Verify these three values against the running bot's `[CONFIG] bot=bull_holder`
+startup line, and verify its `fp` equals the producer status `config_fp` before
+populating this snapshot. Do not copy settings from an env file that may have
+changed since startup. Never print/source credential files to populate it.
+The fingerprint is a freshness binding, not an independent proof that manually
+entered amounts are correct. A missing/invalid producer or fingerprint mismatch
+hides all budget amounts. Producer staleness remains indicated by the card's
+normal freshness status; a matching snapshot describes its last reported config.
+Update the verified snapshot when a later authorized bot configuration rollout
+changes the fingerprint. This feature does not need a bot restart or any bot
+code/configuration change; only dashboard deployment and its config reload.
+
+Displayed capital is `equity_usd`; spot allocation is capital × spot fraction;
+perp notional target is capital × perp fraction. They are NOT account balances,
+required margin, remaining tranche amounts, or an enforced investment cap.
+ADD can extend the cycle beyond the initial allocation. These settings only
+control dashboard labels; changing them does not change the bot's investment.
+
+### Actual unrealized PnL
+
+Each actual account and the combined book now show unrealized PnL, separately
+from DRY_RUN strategy holdings. Lighter sums nonzero positions' venue-reported
+`unrealized_pnl`. Hyperliquid estimates spot PnL as marked token value minus
+`entryNtl` from `spotClearinghouseState`; this is the venue's entry-notional
+estimate, not a transfer/fee-aware accounting ledger. See the
+[official spot response schema](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/spot).
+Missing, invalid, or zero basis for a nonzero holding makes its PnL unknown.
+Missing price/PnL for any holding or a failed account snapshot suppresses the
+account and combined PnL, not the available equity. A successfully observed
+account with no non-USDC holdings / open positions has zero unrealized PnL.
+No producer simulation costs/positions are used for actual PnL. PnL is already
+reflected in equity and is never added to equity a second time.
+
+### Existing state and balance semantics
+
 - Off = waiting for ARM; On = holding/adding; Exited = manual ARM needed again.
 - ARM accepted/exited timestamps and completed/remaining tranches are bot state.
   Pending ARM/ADD/DISARM/RISK_ACK files are sampled requests, not proof an action

@@ -20,12 +20,18 @@ import (
 
 // Public identifiers only. Never source the bot's credential environment.
 type BullHolderConfig struct {
-	StatusPath   string `yaml:"status_path"`
-	HLAddress    string `yaml:"hyperliquid_address"`
-	LighterIndex string `yaml:"lighter_account_index"`
+	StatusPath   string            `yaml:"status_path"`
+	HLAddress    string            `yaml:"hyperliquid_address"`
+	LighterIndex string            `yaml:"lighter_account_index"`
+	Investment   *HolderInvestment `yaml:"investment"`
 }
 
 func (c BullHolderConfig) validate() error {
+	if c.Investment != nil {
+		if err := c.Investment.validate(); err != nil {
+			return err
+		}
+	}
 	if !filepath.IsAbs(c.StatusPath) {
 		return errors.New("bull_holder.status_path must be absolute")
 	}
@@ -42,6 +48,10 @@ func (c BullHolderConfig) validate() error {
 
 // Explicit producer allowlist: never forward account identity or signing data.
 type BullHolderStatus struct {
+	ConfigFP          string                   `json:"config_fp"`
+	Investment        *HolderInvestment        `json:"investment"`
+	InvestmentError   string                   `json:"investment_error,omitempty"`
+	UnrealizedPnL     *float64                 `json:"unrealized_pnl_usdc"`
 	Mode              string                   `json:"mode"`
 	ArmedAt           *int64                   `json:"armed_at"`
 	ExitedAt          *int64                   `json:"exited_at"`
@@ -73,8 +83,9 @@ type BullHolderLeg struct {
 	StopSize      *float64 `json:"stop_size"`
 }
 type HolderAccount struct {
-	ObservedAt *int64 `json:"observed_at"`
-	Error      string `json:"error,omitempty"`
+	UnrealizedPnL *float64 `json:"unrealized_pnl_usdc"`
+	ObservedAt    *int64   `json:"observed_at"`
+	Error         string   `json:"error,omitempty"`
 	// HL spot value; Lighter venue equity includes perp PnL, NOT perp notional.
 	Equity    *float64      `json:"equity_usdc"`
 	USDC      *float64      `json:"usdc"`
@@ -82,6 +93,7 @@ type HolderAccount struct {
 	Holdings  []HolderAsset `json:"holdings"`
 }
 type HolderAsset struct {
+	CostBasis        *float64 `json:"cost_basis_usdc"`
 	Symbol           string   `json:"symbol"`
 	Size             float64  `json:"size"`
 	Price            *float64 `json:"price_usdc"`
@@ -144,6 +156,9 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	go func() { defer wg.Done(); b.HL = fetchHLSpot(ctx, client, target.BullHolder.HLAddress) }()
 	go func() { defer wg.Done(); b.Lighter = fetchLighterHolder(ctx, client, target.BullHolder.LighterIndex) }()
 	wg.Wait()
+	// Never trust derived account/budget values supplied by the producer.
+	b.Investment, b.InvestmentError = verifiedHolderInvestment(target.BullHolder.Investment, b.ConfigFP, s.TS)
+	b.UnrealizedPnL = sumHolderPnL(b.HL, b.Lighter)
 	// Clear any value a future producer might supply before deriving the total.
 	b.TotalEquity = nil
 	if b.HL.Equity != nil && b.Lighter.Equity != nil {
@@ -235,10 +250,11 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 	}
 	var balances struct {
 		Balances *[]struct {
-			Coin  string `json:"coin"`
-			Token int    `json:"token"`
-			Total string `json:"total"`
-			Hold  string `json:"hold"`
+			Coin     string `json:"coin"`
+			Token    int    `json:"token"`
+			Total    string `json:"total"`
+			Hold     string `json:"hold"`
+			EntryNtl string `json:"entryNtl"`
 		} `json:"balances"`
 	}
 	if err := holderJSON(ctx, client, hlInfoURL, map[string]string{"type": "spotClearinghouseState", "user": address}, &balances); err != nil {
@@ -327,6 +343,12 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 			value := size * mark
 			h.Price = &mark
 			h.Value = &value
+			// Venue entry notional is an estimate of basis, not an audited
+			// transfer/fee-aware ledger. Zero for a held token is unknown.
+			if basis, err := number(balance.EntryNtl); err == nil && basis > 0 {
+				h.CostBasis = &basis
+				h.UnrealizedPnL = finiteHolderValue(value - basis)
+			}
 			equity += value
 		} else {
 			complete = false
@@ -342,6 +364,7 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 	}
 	now := time.Now().Unix()
 	a.ObservedAt = &now
+	setHolderAccountPnL(&a)
 	return a
 }
 func fetchLighterHolder(ctx context.Context, client *http.Client, index string) HolderAccount {
@@ -418,5 +441,6 @@ func fetchLighterHolder(ctx context.Context, client *http.Client, index string) 
 	a.Equity = &equity
 	now := time.Now().Unix()
 	a.ObservedAt = &now
+	setHolderAccountPnL(&a)
 	return a
 }
