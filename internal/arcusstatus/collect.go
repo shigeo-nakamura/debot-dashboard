@@ -259,6 +259,10 @@ func (s *Status) readCheckpoint(c checkpoint) {
 	s.Inventory = []Inventory{{c.Config.Pair.A, number(x.Inventory.A), pa, mul(number(x.Inventory.A), pa)}, {c.Config.Pair.B, number(x.Inventory.B), pb, mul(number(x.Inventory.B), pb)}}
 	s.EquityUSD = value(x.Inventory, pa, pb)
 	s.DailyBaselineDay = x.DailyDay
+	if day, err := time.Parse("2006-01-02", x.DailyDay); err != nil || day.Format("2006-01-02") != x.DailyDay {
+		s.DailyBaselineDay = ""
+		s.problem("Daily risk baseline date unavailable or invalid")
+	}
 	s.DailyLossUSD = loss(value(x.DailyBasket, pa, pb), s.EquityUSD)
 	cumulativeBenchmark := value(x.InitialBasket, pa, pb)
 	s.CumulativeLossUSD = loss(cumulativeBenchmark, s.EquityUSD)
@@ -349,6 +353,10 @@ func (s *Status) readLedger(dir, configPath string, now time.Time) {
 	s.ActiveExecutionPhase = "none"
 	if l.Active != nil {
 		s.ActiveExecutionPhase = l.Active.Phase
+		if !validTime(l.Active.UpdatedAt) {
+			s.problem("Active execution ledger timestamp invalid")
+			return
+		}
 		s.readAttempt(*l.Active)
 		if l.Active.Phase != "reconciled" {
 			s.problem("Execution requires reconciliation: " + l.Active.Phase)

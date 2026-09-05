@@ -249,3 +249,33 @@ func TestMissingStartingEquityDegrades(t *testing.T) {
 		})
 	}
 }
+
+func TestRiskWindowAndActiveExecutionTimestamps(t *testing.T) {
+	for _, kind := range []string{"missing_baseline", "malformed_baseline", "missing_active_time", "malformed_active_time"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := fixture(t)
+			if strings.Contains(kind, "baseline") {
+				path := filepath.Join(dir, "runtime_state.json")
+				b, _ := os.ReadFile(path)
+				replacement := `"daily_baseline_day":"not-a-date"`
+				if kind == "missing_baseline" {
+					replacement = `"unused_day":"2026-09-05"`
+				}
+				put(t, dir, "runtime_state.json", strings.Replace(string(b), `"daily_baseline_day":"2026-09-05"`, replacement, 1))
+			} else {
+				updated := `"updated_at":"invalid"`
+				if kind == "missing_active_time" {
+					updated = `"unused_at":"2026-09-05T15:00:00Z"`
+				}
+				put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"reconciled",`+updated+`}}`)
+			}
+			s := collect(t, dir, testUnits()).Arcus
+			if s.Healthy || s.ServiceStatus(testNow, 1920) == "active" {
+				t.Fatal("incomplete risk/execution timestamp reported healthy")
+			}
+			if strings.Contains(kind, "baseline") && s.DailyBaselineDay != "" {
+				t.Fatal("invalid baseline date must remain unknown")
+			}
+		})
+	}
+}
