@@ -151,6 +151,19 @@ jobs:
           # (Codex P1 follow-up, debot-dashboard#17).
           findings=""
           kinds=""
+          # The two recorders are oneshot units that deliberately exit
+          # non-zero whenever their snapshot captured router/venue errors
+          # (e.g. the arcus venue answering 422 NO_QUOTES on some pairs)
+          # even though they still wrote a complete sample. That exit code
+          # is the upstream venue's health, not the collector's, and paged
+          # for days during the 2026-09-03..06 router degradation after the
+          # actual recorder fault was fixed (bot-strategy#865). For those
+          # units the Result is therefore judged together with their output
+          # file: page only if the file is also stale or missing. Every
+          # other timer, and every other Result value (signal, timeout,
+          # watchdog, ...), keeps the plain "last run did not succeed" rule.
+          deferred_results=""
+          unhealthy_paths=""
           while IFS= read -r line; do
             case "$line" in
               TIMER*)
@@ -167,8 +180,19 @@ jobs:
                   kinds="${kinds}timer:${name}:disabled "
                 fi
                 if [ -n "$result" ] && [ "$result" != "success" ]; then
-                  findings="${findings}${name}.service last run did not succeed (Result=${result}); "
-                  kinds="${kinds}timer:${name}:result_failed "
+                  # Only the deliberate non-zero exit (Result=exit-code) is
+                  # deferred; signal/timeout/watchdog/core-dump etc. are
+                  # real service failures and page immediately even while
+                  # the previous file is still fresh (Codex P2, #30).
+                  case "${name}:${result}" in
+                    arcus-spot-rust-recorder:exit-code|arcus-spot-quote-collector:exit-code)
+                      deferred_results="${deferred_results}${name}=${result} "
+                      ;;
+                    *)
+                      findings="${findings}${name}.service last run did not succeed (Result=${result}); "
+                      kinds="${kinds}timer:${name}:result_failed "
+                      ;;
+                  esac
                 fi
                 ;;
               FILE*)
@@ -176,6 +200,7 @@ jobs:
                   path=$(echo "$line" | awk '{print $2}')
                   findings="${findings}${path} is missing; "
                   kinds="${kinds}file:${path}:missing "
+                  unhealthy_paths="${unhealthy_paths}${path} "
                 else
                   path=$(echo "$line" | awk '{print $2}')
                   mtime=$(echo "$line" | sed -n 's/.*mtime=\([0-9]*\).*/\1/p')
@@ -183,11 +208,27 @@ jobs:
                   if [ "$age" -gt "$STALE_SECS" ]; then
                     findings="${findings}${path} is ${age}s stale (threshold ${STALE_SECS}s); "
                     kinds="${kinds}file:${path}:stale "
+                    unhealthy_paths="${unhealthy_paths}${path} "
                   fi
                 fi
                 ;;
             esac
           done < out.txt
+
+          for entry in $deferred_results; do
+            name=${entry%%=*}
+            result=${entry#*=}
+            case "$name" in
+              arcus-spot-rust-recorder) path=/var/lib/debot-arcus/spot-rust/latest.json ;;
+              arcus-spot-quote-collector) path=/var/lib/debot-arcus/spot-quote/latest.json ;;
+            esac
+            if echo " $unhealthy_paths " | grep -q " $path "; then
+              findings="${findings}${name}.service last run did not succeed (Result=${result}) and its output is stale or missing; "
+              kinds="${kinds}timer:${name}:result_failed "
+            else
+              echo "info: ${name}.service last run Result=${result} but ${path} is fresh -- captured venue errors, not a collector fault; not paging (bot-strategy#865)"
+            fi
+          done
 
           {
             echo 'findings<<HEALTHWATCH_EOF'
