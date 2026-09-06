@@ -821,14 +821,14 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
   if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcus !== null;
   if (arcus) {
-    renderArcusSummary(card, arcus, filterHistoryByRange(history));
+    renderArcusSummary(card, arcus, filterHistoryByRange(history), status);
     renderArcusStatus(card.querySelector('[data-field="arcus-details-body"]'), arcus);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
     return;
   }
   if (bullHolder) {
-    renderHolderSummary(card, bullHolder, filterHistoryByRange(history));
+    renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
     renderBullHolderStatus(card.querySelector('[data-field="holder-details-body"]'), bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
@@ -1013,7 +1013,7 @@ const holderLastTradeText = (b) => {
 // unlike renderBullHolderStatus which is also driven directly by tests
 // with a minimal mock container — keep DOM APIs beyond
 // textContent/className/appendChild out of that function.
-const renderHolderSummary = (card, b, chartHistory) => {
+const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
   const equityEl = card.querySelector('[data-field="holder-equity"]');
   const modeEl = card.querySelector('[data-field="holder-mode-pill"]');
   const lastTradeEl = card.querySelector('[data-field="holder-last-trade"]');
@@ -1029,7 +1029,13 @@ const renderHolderSummary = (card, b, chartHistory) => {
   }
   if (lastTradeEl) lastTradeEl.textContent = holderLastTradeText(b);
   renderEquityChart(chartEl, chartEmptyEl, chartHistory);
-  if (detailsEl && isBullHolderDegraded(b)) detailsEl.open = true;
+  // isBullHolderDegraded alone misses a stale/hung producer (fetchBullHolder
+  // only sets ServiceStatus="stale" from the local status-file age; it
+  // doesn't touch halted/operator_error/*.error) — same class of gap Codex
+  // flagged for Arcus on PR #32, fixed here too for consistency so a stale
+  // bull-holder doesn't hide its own diagnostic rows behind a collapsed
+  // <details>.
+  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active")) detailsEl.open = true;
 };
 
 const renderBullHolderStatus = (container, b, dryRun) => {
@@ -1166,14 +1172,21 @@ const arcusLastTradeText = (a) => {
 // renderHolderSummary — see its comment for why DOM APIs beyond
 // textContent/className/appendChild stay out of renderArcusStatus
 // itself. `card` is always real DOM here (called only from updateCard).
-const renderArcusSummary = (card, a, chartHistory) => {
+const renderArcusSummary = (card, a, chartHistory, serviceStatus) => {
   const equityEl = card.querySelector('[data-field="arcus-equity"]');
   const modeEl = card.querySelector('[data-field="arcus-mode-pill"]');
   const lastTradeEl = card.querySelector('[data-field="arcus-last-trade"]');
   const chartEl = card.querySelector('[data-field="arcus-chart"]');
   const chartEmptyEl = card.querySelector('[data-field="arcus-chart-empty"]');
   const detailsEl = card.querySelector('[data-field="arcus-details"]');
-  const degraded = a.healthy !== true || Boolean(a.risk_halt);
+  // healthy/risk_halt alone miss a stale/hung exporter: Status.ServiceStatus
+  // (arcusstatus/status.go) ages the tick/observation/heartbeat clocks
+  // independently of `healthy`, so a target can go "stale" while its last
+  // self-reported healthy=true payload sits frozen. Without also checking
+  // serviceStatus, details (which carry Last tick/Observation/heartbeat —
+  // exactly what's needed to diagnose staleness) would stay collapsed on
+  // an otherwise-invisible hang (Codex review, PR #32).
+  const degraded = a.healthy !== true || Boolean(a.risk_halt) || serviceStatus !== "active";
   if (equityEl) equityEl.textContent = usdCurrency(a.equity_usd);
   if (modeEl) {
     modeEl.textContent = a.mode || "Unknown";

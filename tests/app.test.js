@@ -512,12 +512,13 @@ const makeSummaryCard = () => {
   } };
 };
 
-test("renderHolderSummary shows the equity/mode/last-trade headline and opens details when degraded", () => {
+test("renderHolderSummary shows the equity/mode/last-trade headline and opens details when degraded or stale", () => {
   const card = makeSummaryCard();
   context.__test.renderHolderSummary(
     card,
     { mode: "On", total_equity_usdc: 1234.5, last_tranche_date: "2026-09-05", tranches_done: 2, tranches_remaining: 3 },
     [],
+    "active",
   );
   assert.equal(card.querySelector('[data-field="holder-equity"]').textContent, "1,234.50 USDC");
   assert.equal(card.querySelector('[data-field="holder-mode-pill"]').textContent, "On");
@@ -525,22 +526,42 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
   assert.match(card.querySelector('[data-field="holder-last-trade"]').textContent, /Last tranche 2026-09-05 UTC/);
   assert.equal(card.querySelector('[data-field="holder-details"]').open, false);
 
-  context.__test.renderHolderSummary(card, { mode: "On", halted: true, halt_reason: "RISK_ACK required" }, []);
+  context.__test.renderHolderSummary(card, { mode: "On", halted: true, halt_reason: "RISK_ACK required" }, [], "active");
   assert.equal(card.querySelector('[data-field="holder-details"]').open, true);
+
+  // Regression for Codex review on PR #32 (raised for Arcus, applies
+  // equally to bull-holder): fetchBullHolder's ServiceStatus goes "stale"
+  // purely from local status-file age, independent of halted/*.error, so
+  // a hung producer must still force details open even when nothing else
+  // reports degraded.
+  const staleCard = makeSummaryCard();
+  context.__test.renderHolderSummary(staleCard, { mode: "On", total_equity_usdc: 1000 }, [], "stale");
+  assert.equal(staleCard.querySelector('[data-field="holder-details"]').open, true);
 });
 
-test("renderArcusSummary shows the inventory-equity headline and opens details on risk halt", () => {
+test("renderArcusSummary shows the inventory-equity headline and opens details on risk halt or staleness", () => {
   const card = makeSummaryCard();
   context.__test.renderArcusSummary(
     card,
     { mode: "live", equity_usd: 500, healthy: true, last_swap_at: new Date(Date.now() - 60000).toISOString() },
     [],
+    "active",
   );
   assert.equal(card.querySelector('[data-field="arcus-equity"]').textContent, "$500.00");
   assert.equal(card.querySelector('[data-field="arcus-mode-pill"]').className, "status-pill active");
   assert.match(card.querySelector('[data-field="arcus-last-trade"]').textContent, /^Last swap 1m ago$/);
   assert.equal(card.querySelector('[data-field="arcus-details"]').open, false);
 
-  context.__test.renderArcusSummary(card, { mode: "live", healthy: false, risk_halt: { kind: "daily_loss" } }, []);
+  context.__test.renderArcusSummary(card, { mode: "live", healthy: false, risk_halt: { kind: "daily_loss" } }, [], "active");
   assert.equal(card.querySelector('[data-field="arcus-details"]').open, true);
+
+  // Regression for Codex review on PR #32: Status.ServiceStatus
+  // (arcusstatus/status.go) ages the tick/observation/heartbeat clocks
+  // independently of `healthy` -- a stale exporter can still carry a
+  // frozen healthy=true payload, so `healthy`/`risk_halt` alone would
+  // never open details on a hang. Must also check the target's own
+  // service_status.
+  const staleCard = makeSummaryCard();
+  context.__test.renderArcusSummary(staleCard, { mode: "live", healthy: true, risk_halt: null }, [], "stale");
+  assert.equal(staleCard.querySelector('[data-field="arcus-details"]').open, true);
 });
