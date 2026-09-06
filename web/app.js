@@ -1489,23 +1489,23 @@ const updateHistoryCache = (key, data) => {
 
 // bull_holder / arcus have their own equity fields nested under their
 // sub-object rather than the top-level pnl_total pairtrade-style bots
-// report (they're asset-value bots, not PnL-cycle bots). Checked in
-// this order so a target reporting more than one shape (shouldn't
-// happen — decodeStatusPayload rejects ambiguous schemas) still prefers
-// pnl_total. This is what lets bull-holder/arcus panels build an
-// equity-trend sparkline client-side from repeated polls even though
-// neither gets a server-side equity_history.jsonl today (main.go skips
-// the S3 fetch for Arcus entirely, and bull-holder isn't guaranteed to
-// have one either).
+// report (they're asset-value bots, not PnL-cycle bots). Dispatch on
+// the sub-object FIRST: StatusData.PnlTotal (main.go) has no `omitempty`
+// and is a plain float64, so it always serializes as `pnl_total: 0` —
+// including for bull_holder/arcus payloads that never set it — and
+// checking it first would silently win with that zero instead of ever
+// reaching the real fallback (Codex review, PR #32). Once a target is
+// known to be bull_holder/arcus-shaped, its own field is authoritative
+// even when unavailable (null rather than falling through to the
+// meaningless pnl_total zero for that shape).
 const snapshotEquityValue = (data) => {
-  if (Number.isFinite(data.pnl_total)) return Number(data.pnl_total);
-  if (data.bull_holder && Number.isFinite(data.bull_holder.total_equity_usdc)) {
-    return Number(data.bull_holder.total_equity_usdc);
+  if (data.bull_holder) {
+    return Number.isFinite(data.bull_holder.total_equity_usdc) ? Number(data.bull_holder.total_equity_usdc) : null;
   }
-  if (data.arcus && Number.isFinite(data.arcus.equity_usd)) {
-    return Number(data.arcus.equity_usd);
+  if (data.arcus) {
+    return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
   }
-  return null;
+  return Number.isFinite(data.pnl_total) ? Number(data.pnl_total) : null;
 };
 
 const snapshotToPoint = (data) => {
@@ -1513,6 +1513,21 @@ const snapshotToPoint = (data) => {
   const equity = snapshotEquityValue(data);
   if (equity === null) {
     return null;
+  }
+  // bull_holder's total_equity_usdc is recomputed by the dashboard
+  // server from live Hyperliquid/Lighter account queries on every poll
+  // (fetchBullHolder in bull_holder.go), decoupled from `data.ts` —
+  // which is just the bot's own local status-file heartbeat and can
+  // stay unchanged across many dashboard polls. Stamping each poll's
+  // fresh equity reading with that same unchanged ts would make
+  // appendHistoryPoint's same-ts dedup silently overwrite every sample
+  // with the latest one, so the chart would never accumulate a trend
+  // (Codex review, PR #32). Use this poll's own wall-clock instant
+  // instead. Arcus's equity_usd, by contrast, is computed and
+  // timestamped atomically by the Arcus bot itself in one write, so its
+  // own ts/updated_at stay trustworthy for it.
+  if (data.bull_holder) {
+    return { ts: Date.now(), equity };
   }
   const tsSeconds = Number.isFinite(data.ts) ? Number(data.ts) * 1000 : null;
   const ts =

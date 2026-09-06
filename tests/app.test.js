@@ -440,16 +440,44 @@ test("snapshotToPoint extracts equity from bull_holder/arcus when pnl_total is a
     context.__test.snapshotToPoint({ arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
     999,
   );
-  // pnl_total wins if somehow present alongside a sub-object (shouldn't
-  // happen — decodeStatusPayload on the server rejects ambiguous
-  // schemas — but the client-side extractor still has a defined order).
+  // main.go's StatusData.PnlTotal has no `omitempty` and is a plain
+  // float64, so bull_holder/arcus payloads always carry a spurious
+  // `pnl_total: 0` too. Regression for Codex review on PR #32: the
+  // sub-object must win over that zero, never the other way around.
   assert.equal(
-    context.__test.snapshotToPoint({ pnl_total: 1, arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
-    1,
+    context.__test.snapshotToPoint({ pnl_total: 0, bull_holder: { total_equity_usdc: 555 }, updated_at: isoNow }).equity,
+    555,
   );
+  assert.equal(
+    context.__test.snapshotToPoint({ pnl_total: 0, arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
+    999,
+  );
+  // A bull_holder/arcus-shaped target with its own field unavailable
+  // reports "no sample" rather than falling through to that meaningless
+  // pnl_total zero for its shape.
+  assert.equal(context.__test.snapshotToPoint({ pnl_total: 0, bull_holder: { total_equity_usdc: null } }), null);
   assert.equal(context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: null } }), null);
   assert.equal(context.__test.snapshotToPoint({}), null);
   assert.equal(context.__test.snapshotToPoint(null), null);
+});
+
+test("snapshotToPoint stamps bull_holder samples with poll time, not the bot's stale local ts", () => {
+  // Regression for Codex review on PR #32: bull_holder's total_equity_usdc
+  // is recomputed by the dashboard server from live account queries on
+  // every poll (fetchBullHolder), independent of `ts` (the bot's own
+  // local status-file heartbeat, which can stay unchanged across many
+  // dashboard polls). Using `ts` here would make every distinct equity
+  // reading collapse into the same history point via appendHistoryPoint's
+  // same-ts overwrite, so the chart would never show a trend.
+  const before = Date.now();
+  const point = context.__test.snapshotToPoint({ ts: 1700000000, bull_holder: { total_equity_usdc: 100 } });
+  const after = Date.now();
+  assert.ok(point.ts >= before && point.ts <= after, `expected ts ~now, got ${point.ts}`);
+
+  // Arcus, by contrast, writes equity_usd and ts atomically in one bot
+  // write, so its own ts stays trustworthy and must NOT be overridden.
+  const arcusPoint = context.__test.snapshotToPoint({ ts: 1700000000, arcus: { equity_usd: 100 } });
+  assert.equal(arcusPoint.ts, 1700000000 * 1000);
 });
 
 test("holderLastTradeText and arcusLastTradeText answer how/when the bot last traded", () => {
