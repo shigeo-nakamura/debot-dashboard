@@ -746,7 +746,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
-    isHanBridgeHalted(data) || holderDegraded || (arcus && (arcusDegraded || status !== "active"));
+    isHanBridgeHalted(data) ||
+    (bullHolder && (holderDegraded || status !== "active")) ||
+    (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
