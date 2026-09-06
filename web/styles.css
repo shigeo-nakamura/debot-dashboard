@@ -433,6 +433,15 @@ body::after {
   border-radius: inherit;
   border: 1px solid rgba(255, 255, 255, 0.4);
   mix-blend-mode: soft-light;
+  /* Purely decorative (a soft inner-border highlight), but being
+     `position: absolute` it paints above .card's in-flow children
+     regardless of DOM order and so intercepts pointer events over the
+     whole card unless explicitly opted out — same reasoning already
+     applied to body::before/body::after above. Without this, nothing
+     inside .card is clickable: not the pre-existing collapse toggle,
+     and not the new .panel-details <summary> disclosures (Codex
+     review, PR #32). */
+  pointer-events: none;
 }
 
 .card.stale {
