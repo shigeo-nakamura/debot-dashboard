@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -399,4 +399,120 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
     assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
     assert.equal(rowValue("Cumulative strategy loss"), "$0.00 / — limit");
   }
+});
+
+test("Arcus render draws loss/limit gauges when both value and limit are known", () => {
+  const node = () => ({ children: [], textContent: "", className: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; } });
+  context.document.createElement = (tag) => node();
+  const root = node();
+  context.__test.renderArcusStatus(root, {
+    daily_loss_usd: 15,
+    daily_loss_limit_usd: 20,
+    cumulative_loss_usd: 90,
+    cumulative_loss_limit_usd: 100,
+  });
+  const bars = root.children.filter((n) => n.className === "risk-bar");
+  assert.equal(bars.length, 2);
+  const barText = (bar) => bar.children.map((n) => n.children.map((c) => c.textContent).join(" ")).join(" ");
+  assert.match(barText(bars[0]), /Daily loss/);
+  assert.match(barText(bars[0]), /75%/);
+  assert.match(barText(bars[1]), /Cumulative loss/);
+  assert.match(barText(bars[1]), /90%/);
+  const fillClass = (bar) => bar.children[1].children[0].className;
+  assert.match(fillClass(bars[0]), /severity-warn/);
+  assert.match(fillClass(bars[1]), /severity-danger/);
+
+  // No bar at all when the limit is missing/zero — mirrors the
+  // existing risk-panel bars, which hide rather than divide by zero.
+  const root2 = node();
+  context.__test.renderArcusStatus(root2, { daily_loss_usd: 15, cumulative_loss_usd: 5, cumulative_loss_limit_usd: 0 });
+  assert.equal(root2.children.filter((n) => n.className === "risk-bar").length, 0);
+});
+
+test("snapshotToPoint extracts equity from bull_holder/arcus when pnl_total is absent", () => {
+  const isoNow = new Date().toISOString();
+  assert.equal(context.__test.snapshotToPoint({ pnl_total: 42, updated_at: isoNow }).equity, 42);
+  assert.equal(
+    context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: 555 }, updated_at: isoNow }).equity,
+    555,
+  );
+  assert.equal(
+    context.__test.snapshotToPoint({ arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
+    999,
+  );
+  // pnl_total wins if somehow present alongside a sub-object (shouldn't
+  // happen — decodeStatusPayload on the server rejects ambiguous
+  // schemas — but the client-side extractor still has a defined order).
+  assert.equal(
+    context.__test.snapshotToPoint({ pnl_total: 1, arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
+    1,
+  );
+  assert.equal(context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: null } }), null);
+  assert.equal(context.__test.snapshotToPoint({}), null);
+  assert.equal(context.__test.snapshotToPoint(null), null);
+});
+
+test("holderLastTradeText and arcusLastTradeText answer how/when the bot last traded", () => {
+  assert.equal(context.__test.holderLastTradeText({}), "No tranches yet");
+  assert.match(
+    context.__test.holderLastTradeText({ armed_at: Math.floor(Date.now() / 1000) - 3600 }),
+    /^Armed 1h ago/,
+  );
+  assert.equal(
+    context.__test.holderLastTradeText({ last_tranche_date: "2026-09-05", tranches_done: 2, tranches_remaining: 3 }),
+    "Last tranche 2026-09-05 UTC · 2 done, 3 left",
+  );
+  assert.match(
+    context.__test.holderLastTradeText({ exited_at: Math.floor(Date.now() / 1000) - 60 }),
+    /^Exited /,
+  );
+
+  assert.equal(context.__test.arcusLastTradeText({}), "Awaiting first tick");
+  assert.equal(context.__test.arcusLastTradeText({ sequence: 5 }), "No swap observed yet");
+  assert.match(
+    context.__test.arcusLastTradeText({ last_swap_at: new Date(Date.now() - 5000).toISOString() }),
+    /^Last swap 5s ago$/,
+  );
+});
+
+const makeSummaryCard = () => {
+  const fields = new Map();
+  const field = () => ({ textContent: "", className: "", open: false, hidden: false, innerHTML: "", setAttribute() {} });
+  return { querySelector(selector) {
+    if (!fields.has(selector)) fields.set(selector, field());
+    return fields.get(selector);
+  } };
+};
+
+test("renderHolderSummary shows the equity/mode/last-trade headline and opens details when degraded", () => {
+  const card = makeSummaryCard();
+  context.__test.renderHolderSummary(
+    card,
+    { mode: "On", total_equity_usdc: 1234.5, last_tranche_date: "2026-09-05", tranches_done: 2, tranches_remaining: 3 },
+    [],
+  );
+  assert.equal(card.querySelector('[data-field="holder-equity"]').textContent, "1,234.50 USDC");
+  assert.equal(card.querySelector('[data-field="holder-mode-pill"]').textContent, "On");
+  assert.equal(card.querySelector('[data-field="holder-mode-pill"]').className, "status-pill active");
+  assert.match(card.querySelector('[data-field="holder-last-trade"]').textContent, /Last tranche 2026-09-05 UTC/);
+  assert.equal(card.querySelector('[data-field="holder-details"]').open, false);
+
+  context.__test.renderHolderSummary(card, { mode: "On", halted: true, halt_reason: "RISK_ACK required" }, []);
+  assert.equal(card.querySelector('[data-field="holder-details"]').open, true);
+});
+
+test("renderArcusSummary shows the inventory-equity headline and opens details on risk halt", () => {
+  const card = makeSummaryCard();
+  context.__test.renderArcusSummary(
+    card,
+    { mode: "live", equity_usd: 500, healthy: true, last_swap_at: new Date(Date.now() - 60000).toISOString() },
+    [],
+  );
+  assert.equal(card.querySelector('[data-field="arcus-equity"]').textContent, "$500.00");
+  assert.equal(card.querySelector('[data-field="arcus-mode-pill"]').className, "status-pill active");
+  assert.match(card.querySelector('[data-field="arcus-last-trade"]').textContent, /^Last swap 1m ago$/);
+  assert.equal(card.querySelector('[data-field="arcus-details"]').open, false);
+
+  context.__test.renderArcusSummary(card, { mode: "live", healthy: false, risk_halt: { kind: "daily_loss" } }, []);
+  assert.equal(card.querySelector('[data-field="arcus-details"]').open, true);
 });
