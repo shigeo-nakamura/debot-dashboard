@@ -14,12 +14,16 @@ poll_interval_secs: 20
 # older than stale_after_secs (default 180 s) flips the target to "stale". No probe traffic
 # touches the bot host.
 targets:
-  - name: Pair-A (Frankfurt)
+  # Example S3-backed target (a pairtrade instance mirroring status.json).
+  # The Frankfurt BTC/ETH pairtrade fleet was sunset on 2026-09-06; the
+  # Robinhood Chain Lighter pairtrade bot (Tokyo) is the remaining example.
+  - name: Robinhood Freq (Tokyo)
     instance_id: i-xxxxxxxxxxxxxxxxx
-    service: debot-pair-btceth
+    service: debot-pair-robinhood-lighter
+    region: ap-northeast-1
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
-    s3_key: debot/status/frankfurt/debot-pair-btceth-a.json
+    s3_key: debot/status/robinhood-lighter/debot-pair-robinhood-lighter-freq.json
 # HYPE accumulator targets use the same freshness/health path but render the
 # nested accumulator balance/activity view instead of PnL statistics — it
 # also shows an "Unrealized PnL" row when the S3 object was written by the
