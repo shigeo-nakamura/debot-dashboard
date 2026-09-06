@@ -433,6 +433,15 @@ body::after {
   border-radius: inherit;
   border: 1px solid rgba(255, 255, 255, 0.4);
   mix-blend-mode: soft-light;
+  /* Purely decorative (a soft inner-border highlight), but being
+     `position: absolute` it paints above .card's in-flow children
+     regardless of DOM order and so intercepts pointer events over the
+     whole card unless explicitly opted out — same reasoning already
+     applied to body::before/body::after above. Without this, nothing
+     inside .card is clickable: not the pre-existing collapse toggle,
+     and not the new .panel-details <summary> disclosures (Codex
+     review, PR #32). */
+  pointer-events: none;
 }
 
 .card.stale {
@@ -861,9 +870,53 @@ body::after {
 .bull-holder-view .row strong { text-align: right; overflow-wrap: anywhere; }
 .bull-holder-view progress { width: 100%; height: 8px; accent-color: #e3a55c; }
 
+/* Always-visible headline for the bull-holder/Arcus panels: equity,
+   mode, and last-trade timing, plus the equity-trend sparkline
+   (reusing .chart/.sparkline from the generic trading view). The
+   exhaustive per-leg/per-account dump sits below in .panel-details,
+   collapsed by default so the headline isn't buried in ~30 rows of
+   text on open. See bull_holder-view/.arcus-view markup in app.js. */
+.panel-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.panel-summary-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.panel-summary-equity {
+  font-family: "Space Grotesk", monospace;
+  font-size: 22px;
+}
+.panel-summary-meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+.panel-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+.panel-details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+}
+.panel-details > summary::-webkit-details-marker { display: none; }
+.panel-details > summary::before { content: "▸ "; }
+.panel-details[open] > summary::before { content: "▾ "; }
+
 .arcus-view { margin-top: 16px; }
 .arcus-view h3 { font-size: 16px; }
 .arcus-view h4 { margin: 20px 0 10px; font-size: 14px; }
 .arcus-view .row { gap: 12px; align-items: start; }
 .arcus-view .row strong { text-align: right; overflow-wrap: anywhere; }
+.arcus-view .risk-bar { margin: 6px 0 14px; }
 .card.arcus .risk-panel { display: none; }

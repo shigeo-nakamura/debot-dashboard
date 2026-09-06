@@ -438,8 +438,42 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
-      <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status"></section>
-      <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status"></section>
+      <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
+        <div class="panel-summary">
+          <div class="panel-summary-top">
+            <strong class="panel-summary-equity" data-field="arcus-equity"></strong>
+            <span class="status-pill" data-field="arcus-mode-pill"></span>
+          </div>
+          <div class="panel-summary-meta" data-field="arcus-last-trade"></div>
+        </div>
+        <div class="chart">
+          <div class="chart-title">Inventory equity trend</div>
+          <svg class="sparkline" data-field="arcus-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
+          <div class="chart-empty" data-field="arcus-chart-empty" hidden>No history yet</div>
+        </div>
+        <details class="panel-details" data-field="arcus-details">
+          <summary>Details</summary>
+          <div data-field="arcus-details-body"></div>
+        </details>
+      </section>
+      <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status">
+        <div class="panel-summary">
+          <div class="panel-summary-top">
+            <strong class="panel-summary-equity" data-field="holder-equity"></strong>
+            <span class="status-pill" data-field="holder-mode-pill"></span>
+          </div>
+          <div class="panel-summary-meta" data-field="holder-last-trade"></div>
+        </div>
+        <div class="chart">
+          <div class="chart-title">Equity trend</div>
+          <svg class="sparkline" data-field="holder-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
+          <div class="chart-empty" data-field="holder-chart-empty" hidden>No history yet</div>
+        </div>
+        <details class="panel-details" data-field="holder-details">
+          <summary>Details</summary>
+          <div data-field="holder-details-body"></div>
+        </details>
+      </section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
         <div class="accumulator-equity">
           <span>Total equity</span>
@@ -528,6 +562,12 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const fundingToday = fundingTodayValue === null ? "-" : formatPnl(fundingTodayValue);
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
+  // Hoisted above the accumulator/bull-holder/arcus branches (which
+  // `return` early) so their equity-trend sparklines get the same
+  // history cache the generic trading view already builds from
+  // repeated snapshots. See snapshotToPoint's bull_holder/arcus
+  // fallback below.
+  const history = updateHistoryCache(key, data);
 
   card.classList.toggle("stale", stale);
   card.classList.toggle("degraded", accumulatorDegraded || holderDegraded || arcusDegraded);
@@ -706,7 +746,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.session_risk && data.session_risk.session_halted === true) ||
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
-    isHanBridgeHalted(data) || holderDegraded || (arcus && (arcusDegraded || status !== "active"));
+    isHanBridgeHalted(data) ||
+    (bullHolder && (holderDegraded || status !== "active")) ||
+    (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -781,13 +823,15 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
   if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcus !== null;
   if (arcus) {
-    renderArcusStatus(arcusViewEl, arcus);
+    renderArcusSummary(card, arcus, filterHistoryByRange(history), status);
+    renderArcusStatus(card.querySelector('[data-field="arcus-details-body"]'), arcus);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
     return;
   }
   if (bullHolder) {
-    renderBullHolderStatus(holderViewEl, bullHolder, data.dry_run);
+    renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
+    renderBullHolderStatus(card.querySelector('[data-field="holder-details-body"]'), bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
     if (target.kill_switch_active === true) {
@@ -815,7 +859,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
     applySignedClass(fundingTodayEl, fundingTodayValue);
   }
 
-  const history = updateHistoryCache(key, data);
   // Chart honours the range toggle; stats (CAGR / fallback Win Rate
   // etc.) intentionally use the full history so they don't disappear
   // when the user is viewing 1D. bot-strategy#333.
@@ -939,6 +982,70 @@ const bullHolderViewModel = (b) => ({
     return { symbol, ...leg, drop, triggerPct: exit !== null && exit > 0 && peak > 0 ? 100 * (1 - exit / peak) : null };
   }),
 });
+
+// Short "Xh ago" form for the summary meta line, as opposed to
+// holderTime's full "date · age ago" (too long for a one-line
+// headline). `value` is epoch seconds, matching armed_at/exited_at.
+const holderAgo = (value) => {
+  const n = holderNumber(value);
+  return n === null ? null : `${formatAge(Date.now() - n * 1000)} ago`;
+};
+
+// "How and when did this bot last actually trade" — the one question
+// buried deepest in the old all-text dump. bull_holder has no per-fill
+// timestamp, only a daily tranche counter/date and ARM/exit epochs, so
+// this is the most specific answer the payload supports.
+const holderLastTradeText = (b) => {
+  if (b.exited_at) return `Exited ${holderAgo(b.exited_at) || "recently"}`;
+  if (b.last_tranche_date) {
+    const done = Number.isFinite(b.tranches_done) ? b.tranches_done : "?";
+    const remaining = Number.isFinite(b.tranches_remaining) ? b.tranches_remaining : "?";
+    return `Last tranche ${b.last_tranche_date} UTC · ${done} done, ${remaining} left`;
+  }
+  if (b.armed_at) return `Armed ${holderAgo(b.armed_at) || "recently"} · no tranche yet`;
+  return "No tranches yet";
+};
+
+// Always-visible headline for the bull-holder panel: equity, mode, and
+// last-trade timing up top, plus the equity-trend sparkline (reusing
+// the same history cache / chart renderer the generic trading view
+// uses). The exhaustive per-leg/per-account dump stays in
+// renderBullHolderStatus, now tucked behind the <details> this feeds.
+// `card` is always a real DOM node here (called only from updateCard),
+// unlike renderBullHolderStatus which is also driven directly by tests
+// with a minimal mock container — keep DOM APIs beyond
+// textContent/className/appendChild out of that function.
+const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
+  const equityEl = card.querySelector('[data-field="holder-equity"]');
+  const modeEl = card.querySelector('[data-field="holder-mode-pill"]');
+  const lastTradeEl = card.querySelector('[data-field="holder-last-trade"]');
+  const chartEl = card.querySelector('[data-field="holder-chart"]');
+  const chartEmptyEl = card.querySelector('[data-field="holder-chart-empty"]');
+  const detailsEl = card.querySelector('[data-field="holder-details"]');
+  if (equityEl) equityEl.textContent = holderMoney(b.total_equity_usdc);
+  if (modeEl) {
+    const label = { Off: "Off", On: "On", Exited: "Exited" }[b.mode] || "Unknown";
+    const tone = b.mode === "On" ? "active" : b.mode === "Exited" ? "degraded" : "unknown";
+    modeEl.textContent = label;
+    modeEl.className = `status-pill ${tone}`;
+  }
+  if (lastTradeEl) lastTradeEl.textContent = holderLastTradeText(b);
+  renderEquityChart(chartEl, chartEmptyEl, chartHistory);
+  // isBullHolderDegraded alone misses a stale/hung producer (fetchBullHolder
+  // only sets ServiceStatus="stale" from the local status-file age; it
+  // doesn't touch halted/operator_error/*.error) — same class of gap Codex
+  // flagged for Arcus on PR #32, fixed here too for consistency so a stale
+  // bull-holder doesn't hide its own diagnostic rows behind a collapsed
+  // <details>. An engaged (or pending) KILL_SWITCH is also "trouble" the
+  // outer card already auto-expands for (updateCard's inTrouble checks
+  // target.kill_switch_active) — b.kill_switch mirrors that same flag, so
+  // check it here too rather than leaving the inner KILL_SWITCH/operator-
+  // request rows collapsed while the card itself pops open (Codex review,
+  // PR #32).
+  const killSwitchEngaged = Boolean(b.kill_switch) || Boolean(b.pending?.KILL_SWITCH);
+  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active" || killSwitchEngaged)) detailsEl.open = true;
+};
+
 const renderBullHolderStatus = (container, b, dryRun) => {
   if (!container) return;
   container.replaceChildren();
@@ -1018,6 +1125,86 @@ const renderBullHolderStatus = (container, b, dryRun) => {
 };
 const isArcusStatus = (data) => Boolean(data && data.arcus);
 
+const usdCurrency = (v) => {
+  const n = holderNumber(v);
+  return n === null ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+};
+
+// Compact loss/limit gauge reusing the same risk-bar visual pattern
+// (and CSS classes) already used for pairtrade's daily/session DD
+// bars, so Arcus's "loss vs limit" figures read as a proximity-to-halt
+// gauge instead of a bare "$X / $Y" fraction to compare by eye.
+// Deliberately built from createElement/className/appendChild only —
+// no classList/setAttribute, and `.style` is feature-detected — so it
+// keeps working unchanged inside renderArcusStatus, which unit tests
+// also drive directly against a minimal mock container.
+const miniBar = (parent, name, valueText, pct) => {
+  const wrap = document.createElement("div");
+  wrap.className = "risk-bar";
+  const label = document.createElement("div");
+  label.className = "risk-bar-label";
+  const nameEl = document.createElement("span");
+  nameEl.className = "risk-bar-name";
+  nameEl.textContent = name;
+  const valueEl = document.createElement("span");
+  valueEl.className = "risk-bar-value";
+  valueEl.textContent = valueText;
+  label.appendChild(nameEl);
+  label.appendChild(valueEl);
+  const track = document.createElement("div");
+  track.className = "risk-bar-track";
+  const fill = document.createElement("div");
+  const clamped = clampPct(pct);
+  fill.className = `risk-bar-fill ${clamped >= 80 ? "severity-danger" : clamped >= 50 ? "severity-warn" : "severity-ok"}`;
+  if (fill.style) fill.style.width = `${clamped}%`;
+  track.appendChild(fill);
+  wrap.appendChild(label);
+  wrap.appendChild(track);
+  parent.appendChild(wrap);
+  return wrap;
+};
+
+// "How and when did this bot last actually trade" — last_swap_at is
+// the one field in the payload that answers it directly; everything
+// else in the panel is inventory/mode state as of the last poll.
+const arcusLastTradeText = (a) => {
+  if (a.last_swap_at) {
+    const ts = Date.parse(a.last_swap_at);
+    if (Number.isFinite(ts)) return `Last swap ${formatAge(Date.now() - ts)} ago`;
+  }
+  return a.sequence > 0 ? "No swap observed yet" : "Awaiting first tick";
+};
+
+// Always-visible headline for the Arcus panel: inventory equity, mode,
+// and last-swap timing up top, plus the equity-trend sparkline. Mirrors
+// renderHolderSummary — see its comment for why DOM APIs beyond
+// textContent/className/appendChild stay out of renderArcusStatus
+// itself. `card` is always real DOM here (called only from updateCard).
+const renderArcusSummary = (card, a, chartHistory, serviceStatus) => {
+  const equityEl = card.querySelector('[data-field="arcus-equity"]');
+  const modeEl = card.querySelector('[data-field="arcus-mode-pill"]');
+  const lastTradeEl = card.querySelector('[data-field="arcus-last-trade"]');
+  const chartEl = card.querySelector('[data-field="arcus-chart"]');
+  const chartEmptyEl = card.querySelector('[data-field="arcus-chart-empty"]');
+  const detailsEl = card.querySelector('[data-field="arcus-details"]');
+  // healthy/risk_halt alone miss a stale/hung exporter: Status.ServiceStatus
+  // (arcusstatus/status.go) ages the tick/observation/heartbeat clocks
+  // independently of `healthy`, so a target can go "stale" while its last
+  // self-reported healthy=true payload sits frozen. Without also checking
+  // serviceStatus, details (which carry Last tick/Observation/heartbeat —
+  // exactly what's needed to diagnose staleness) would stay collapsed on
+  // an otherwise-invisible hang (Codex review, PR #32).
+  const degraded = a.healthy !== true || Boolean(a.risk_halt) || serviceStatus !== "active";
+  if (equityEl) equityEl.textContent = usdCurrency(a.equity_usd);
+  if (modeEl) {
+    modeEl.textContent = a.mode || "Unknown";
+    modeEl.className = `status-pill ${degraded ? "degraded" : a.mode ? "active" : "unknown"}`;
+  }
+  if (lastTradeEl) lastTradeEl.textContent = arcusLastTradeText(a);
+  renderEquityChart(chartEl, chartEmptyEl, chartHistory);
+  if (detailsEl && degraded) detailsEl.open = true;
+};
+
 const renderArcusStatus = (root, a) => {
   if (!root) return;
   root.replaceChildren();
@@ -1037,10 +1224,7 @@ const renderArcusStatus = (root, a) => {
     const n = holderNumber(v);
     return n === null ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: digits });
   };
-  const usd = (v) => {
-    const n = holderNumber(v);
-    return n === null ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  };
+  const usd = usdCurrency;
   const at = (v) => v ? formatDateWithAge(v) : "Unknown";
   const yes = (v) => v === true ? "Yes" : v === false ? "No" : "Unknown";
   add("h3", `Arcus spot · ${a.pair || "Unknown pair"}`);
@@ -1067,7 +1251,21 @@ const renderArcusStatus = (root, a) => {
   row("Inventory equity", usd(a.equity_usd));
   add("h4", "Strategy risk");
   row(`Daily strategy loss · ${a.daily_baseline_day || "unknown day"} UTC`, `${usd(a.daily_loss_usd)} / ${usd(a.daily_loss_limit_usd)} limit`);
+  {
+    const loss = holderNumber(a.daily_loss_usd);
+    const limit = holderNumber(a.daily_loss_limit_usd);
+    if (loss !== null && limit !== null && limit > 0) {
+      miniBar(root, "Daily loss", `${clampPct((loss / limit) * 100).toFixed(0)}%`, (loss / limit) * 100);
+    }
+  }
   row("Cumulative strategy loss", `${usd(a.cumulative_loss_usd)} / ${usd(a.cumulative_loss_limit_usd)} limit`);
+  {
+    const loss = holderNumber(a.cumulative_loss_usd);
+    const limit = holderNumber(a.cumulative_loss_limit_usd);
+    if (loss !== null && limit !== null && limit > 0) {
+      miniBar(root, "Cumulative loss", `${clampPct((loss / limit) * 100).toFixed(0)}%`, (loss / limit) * 100);
+    }
+  }
   row("Starting basket drawdown", usd(a.inventory_drawdown_usd));
   add("p", "Strategy loss compares managed inventory with the original basket at the same reference prices. Basket drawdown measures price movement separately. These are loss measures, not realized PnL; gas is separate.", root, "holder-note");
   if (a.risk_halt) {
@@ -1310,9 +1508,70 @@ const updateHistoryCache = (key, data) => {
   return history;
 };
 
+// bull_holder / arcus have their own equity fields nested under their
+// sub-object rather than the top-level pnl_total pairtrade-style bots
+// report (they're asset-value bots, not PnL-cycle bots). Dispatch on
+// the sub-object FIRST: StatusData.PnlTotal (main.go) has no `omitempty`
+// and is a plain float64, so it always serializes as `pnl_total: 0` —
+// including for bull_holder/arcus payloads that never set it — and
+// checking it first would silently win with that zero instead of ever
+// reaching the real fallback (Codex review, PR #32). Once a target is
+// known to be bull_holder/arcus-shaped, its own field is authoritative
+// even when unavailable (null rather than falling through to the
+// meaningless pnl_total zero for that shape).
+const snapshotEquityValue = (data) => {
+  if (data.bull_holder) {
+    return Number.isFinite(data.bull_holder.total_equity_usdc) ? Number(data.bull_holder.total_equity_usdc) : null;
+  }
+  if (data.arcus) {
+    return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
+  }
+  return Number.isFinite(data.pnl_total) ? Number(data.pnl_total) : null;
+};
+
 const snapshotToPoint = (data) => {
-  if (!data || !Number.isFinite(data.pnl_total)) {
+  if (!data) return null;
+  const equity = snapshotEquityValue(data);
+  if (equity === null) {
     return null;
+  }
+  // bull_holder's total_equity_usdc is recomputed by the dashboard
+  // server from live Hyperliquid/Lighter account queries every server
+  // poll cycle (fetchBullHolder in bull_holder.go), decoupled from
+  // `data.ts` — the bot's own local status-file heartbeat, which can
+  // stay unchanged across many server poll cycles.
+  //
+  // Using `Date.now()` here (an earlier revision of this fix) is also
+  // wrong: the frontend's own 5s poll and the server's `/api/status`
+  // handler serve `StatusCache.Get()` for ordinary (no `range`) requests
+  // — the same cached snapshot answers several client polls between
+  // server poll cycles (main.go's pollLoop runs on PollIntervalSecs,
+  // independent of client request rate). Stamping every one of those
+  // repeated *identical* snapshots with a fresh wall-clock reading would
+  // fabricate distinct-looking history points for equity that never
+  // actually changed (Codex review, PR #32, round 2).
+  //
+  // hyperliquid.observed_at / lighter.observed_at are set fresh only
+  // when fetchHLSpot/fetchLighterHolder actually run — i.e. once per
+  // real server poll cycle, exactly matching how often total_equity_usdc
+  // can actually change. Using the later of the two (equity sums both
+  // accounts) means: a genuinely new server-side observation always gets
+  // a new ts (so the chart accumulates a real trend), while repeated
+  // deliveries of the same cached snapshot get the same ts every time
+  // (so appendHistoryPoint's same-ts dedup correctly updates in place
+  // instead of fabricating a fake new point). Arcus's equity_usd, by
+  // contrast, is computed and timestamped atomically by the Arcus bot
+  // itself in one write, so its own ts/updated_at stay trustworthy.
+  if (data.bull_holder) {
+    const hlObserved = holderNumber(data.bull_holder.hyperliquid?.observed_at);
+    const ltObserved = holderNumber(data.bull_holder.lighter?.observed_at);
+    const observedSec =
+      hlObserved !== null && ltObserved !== null
+        ? Math.max(hlObserved, ltObserved)
+        : hlObserved !== null
+          ? hlObserved
+          : ltObserved;
+    return { ts: observedSec !== null ? observedSec * 1000 : Date.now(), equity };
   }
   const tsSeconds = Number.isFinite(data.ts) ? Number(data.ts) * 1000 : null;
   const ts =
@@ -1322,7 +1581,7 @@ const snapshotToPoint = (data) => {
   if (!Number.isFinite(ts)) {
     return null;
   }
-  return { ts, equity: Number(data.pnl_total) };
+  return { ts, equity };
 };
 
 const appendHistoryPoint = (history, point) => {
