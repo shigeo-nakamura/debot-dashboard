@@ -1528,19 +1528,42 @@ const snapshotToPoint = (data) => {
     return null;
   }
   // bull_holder's total_equity_usdc is recomputed by the dashboard
-  // server from live Hyperliquid/Lighter account queries on every poll
-  // (fetchBullHolder in bull_holder.go), decoupled from `data.ts` —
-  // which is just the bot's own local status-file heartbeat and can
-  // stay unchanged across many dashboard polls. Stamping each poll's
-  // fresh equity reading with that same unchanged ts would make
-  // appendHistoryPoint's same-ts dedup silently overwrite every sample
-  // with the latest one, so the chart would never accumulate a trend
-  // (Codex review, PR #32). Use this poll's own wall-clock instant
-  // instead. Arcus's equity_usd, by contrast, is computed and
-  // timestamped atomically by the Arcus bot itself in one write, so its
-  // own ts/updated_at stay trustworthy for it.
+  // server from live Hyperliquid/Lighter account queries every server
+  // poll cycle (fetchBullHolder in bull_holder.go), decoupled from
+  // `data.ts` — the bot's own local status-file heartbeat, which can
+  // stay unchanged across many server poll cycles.
+  //
+  // Using `Date.now()` here (an earlier revision of this fix) is also
+  // wrong: the frontend's own 5s poll and the server's `/api/status`
+  // handler serve `StatusCache.Get()` for ordinary (no `range`) requests
+  // — the same cached snapshot answers several client polls between
+  // server poll cycles (main.go's pollLoop runs on PollIntervalSecs,
+  // independent of client request rate). Stamping every one of those
+  // repeated *identical* snapshots with a fresh wall-clock reading would
+  // fabricate distinct-looking history points for equity that never
+  // actually changed (Codex review, PR #32, round 2).
+  //
+  // hyperliquid.observed_at / lighter.observed_at are set fresh only
+  // when fetchHLSpot/fetchLighterHolder actually run — i.e. once per
+  // real server poll cycle, exactly matching how often total_equity_usdc
+  // can actually change. Using the later of the two (equity sums both
+  // accounts) means: a genuinely new server-side observation always gets
+  // a new ts (so the chart accumulates a real trend), while repeated
+  // deliveries of the same cached snapshot get the same ts every time
+  // (so appendHistoryPoint's same-ts dedup correctly updates in place
+  // instead of fabricating a fake new point). Arcus's equity_usd, by
+  // contrast, is computed and timestamped atomically by the Arcus bot
+  // itself in one write, so its own ts/updated_at stay trustworthy.
   if (data.bull_holder) {
-    return { ts: Date.now(), equity };
+    const hlObserved = holderNumber(data.bull_holder.hyperliquid?.observed_at);
+    const ltObserved = holderNumber(data.bull_holder.lighter?.observed_at);
+    const observedSec =
+      hlObserved !== null && ltObserved !== null
+        ? Math.max(hlObserved, ltObserved)
+        : hlObserved !== null
+          ? hlObserved
+          : ltObserved;
+    return { ts: observedSec !== null ? observedSec * 1000 : Date.now(), equity };
   }
   const tsSeconds = Number.isFinite(data.ts) ? Number(data.ts) * 1000 : null;
   const ts =

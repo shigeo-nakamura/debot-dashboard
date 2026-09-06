@@ -461,18 +461,46 @@ test("snapshotToPoint extracts equity from bull_holder/arcus when pnl_total is a
   assert.equal(context.__test.snapshotToPoint(null), null);
 });
 
-test("snapshotToPoint stamps bull_holder samples with poll time, not the bot's stale local ts", () => {
-  // Regression for Codex review on PR #32: bull_holder's total_equity_usdc
-  // is recomputed by the dashboard server from live account queries on
-  // every poll (fetchBullHolder), independent of `ts` (the bot's own
-  // local status-file heartbeat, which can stay unchanged across many
-  // dashboard polls). Using `ts` here would make every distinct equity
-  // reading collapse into the same history point via appendHistoryPoint's
-  // same-ts overwrite, so the chart would never show a trend.
+test("snapshotToPoint stamps bull_holder samples with account observation time, not the bot's stale local ts or a fabricated Date.now()", () => {
+  // Regression for Codex review on PR #32 (round 1): bull_holder's
+  // total_equity_usdc is recomputed by the dashboard server from live
+  // account queries on every server poll cycle (fetchBullHolder),
+  // independent of `ts` (the bot's own local status-file heartbeat,
+  // which can stay unchanged across many poll cycles). Using `ts` here
+  // would make every distinct equity reading collapse into the same
+  // history point via appendHistoryPoint's same-ts overwrite.
+  const point = context.__test.snapshotToPoint({
+    ts: 1700000000,
+    bull_holder: { total_equity_usdc: 100, hyperliquid: { observed_at: 1800000000 }, lighter: { observed_at: 1800000060 } },
+  });
+  // Later of the two account observations (equity sums both accounts).
+  assert.equal(point.ts, 1800000060 * 1000);
+
+  // Round 2: Date.now() (an earlier revision of this fix) is also wrong
+  // -- /api/status without `range` serves StatusCache.Get() (main.go),
+  // so several client polls between server poll cycles receive the
+  // exact same cached snapshot. Stamping each with a fresh wall-clock
+  // reading would fabricate distinct-looking points for equity that
+  // never changed. Feeding the same cached observed_at twice must
+  // produce the same ts both times, not two different Date.now() calls.
+  const cachedPayload = { bull_holder: { total_equity_usdc: 100, hyperliquid: { observed_at: 1800000000 }, lighter: { observed_at: 1800000000 } } };
+  const first = context.__test.snapshotToPoint(cachedPayload);
+  const second = context.__test.snapshotToPoint(cachedPayload);
+  assert.equal(first.ts, second.ts);
+  assert.equal(first.ts, 1800000000 * 1000);
+
+  // Only one account observed (the other errored/unavailable) -- use it.
+  assert.equal(
+    context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: 100, lighter: { observed_at: 1800000000 } } }).ts,
+    1800000000 * 1000,
+  );
+
+  // Neither account has an observation yet -- fall back to now rather
+  // than crashing or dropping the sample.
   const before = Date.now();
-  const point = context.__test.snapshotToPoint({ ts: 1700000000, bull_holder: { total_equity_usdc: 100 } });
+  const fallback = context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: 100 } });
   const after = Date.now();
-  assert.ok(point.ts >= before && point.ts <= after, `expected ts ~now, got ${point.ts}`);
+  assert.ok(fallback.ts >= before && fallback.ts <= after, `expected ts ~now, got ${fallback.ts}`);
 
   // Arcus, by contrast, writes equity_usd and ts atomically in one bot
   // write, so its own ts stays trustworthy and must NOT be overridden.
