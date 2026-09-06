@@ -565,6 +565,25 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
   const staleCard = makeSummaryCard();
   context.__test.renderHolderSummary(staleCard, { mode: "On", total_equity_usdc: 1000 }, [], "stale");
   assert.equal(staleCard.querySelector('[data-field="holder-details"]').open, true);
+
+  // Regression for Codex review on PR #32: an engaged (or pending)
+  // KILL_SWITCH is "trouble" the outer card already auto-expands for
+  // (updateCard's inTrouble reads target.kill_switch_active, which
+  // b.kill_switch mirrors) -- the inner details must open too, or the
+  // KILL_SWITCH/operator-request rows stay hidden while the card pops
+  // open around them.
+  const engagedCard = makeSummaryCard();
+  context.__test.renderHolderSummary(engagedCard, { mode: "On", total_equity_usdc: 1000, kill_switch: true }, [], "active");
+  assert.equal(engagedCard.querySelector('[data-field="holder-details"]').open, true);
+
+  const pendingCard = makeSummaryCard();
+  context.__test.renderHolderSummary(
+    pendingCard,
+    { mode: "On", total_equity_usdc: 1000, pending: { KILL_SWITCH: true } },
+    [],
+    "active",
+  );
+  assert.equal(pendingCard.querySelector('[data-field="holder-details"]').open, true);
 });
 
 test("renderArcusSummary shows the inventory-equity headline and opens details on risk halt or staleness", () => {

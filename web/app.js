@@ -1034,8 +1034,14 @@ const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
   // doesn't touch halted/operator_error/*.error) — same class of gap Codex
   // flagged for Arcus on PR #32, fixed here too for consistency so a stale
   // bull-holder doesn't hide its own diagnostic rows behind a collapsed
-  // <details>.
-  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active")) detailsEl.open = true;
+  // <details>. An engaged (or pending) KILL_SWITCH is also "trouble" the
+  // outer card already auto-expands for (updateCard's inTrouble checks
+  // target.kill_switch_active) — b.kill_switch mirrors that same flag, so
+  // check it here too rather than leaving the inner KILL_SWITCH/operator-
+  // request rows collapsed while the card itself pops open (Codex review,
+  // PR #32).
+  const killSwitchEngaged = Boolean(b.kill_switch) || Boolean(b.pending?.KILL_SWITCH);
+  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active" || killSwitchEngaged)) detailsEl.open = true;
 };
 
 const renderBullHolderStatus = (container, b, dryRun) => {
