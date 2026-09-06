@@ -160,7 +160,8 @@ jobs:
           # actual recorder fault was fixed (bot-strategy#865). For those
           # units the Result is therefore judged together with their output
           # file: page only if the file is also stale or missing. Every
-          # other timer keeps the plain "last run did not succeed" rule.
+          # other timer, and every other Result value (signal, timeout,
+          # watchdog, ...), keeps the plain "last run did not succeed" rule.
           deferred_results=""
           unhealthy_paths=""
           while IFS= read -r line; do
@@ -179,8 +180,12 @@ jobs:
                   kinds="${kinds}timer:${name}:disabled "
                 fi
                 if [ -n "$result" ] && [ "$result" != "success" ]; then
-                  case "$name" in
-                    arcus-spot-rust-recorder|arcus-spot-quote-collector)
+                  # Only the deliberate non-zero exit (Result=exit-code) is
+                  # deferred; signal/timeout/watchdog/core-dump etc. are
+                  # real service failures and page immediately even while
+                  # the previous file is still fresh (Codex P2, #30).
+                  case "${name}:${result}" in
+                    arcus-spot-rust-recorder:exit-code|arcus-spot-quote-collector:exit-code)
                       deferred_results="${deferred_results}${name}=${result} "
                       ;;
                     *)
