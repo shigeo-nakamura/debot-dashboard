@@ -250,12 +250,16 @@ const updateFleetSummary = (targets) => {
         fundingToday += data.funding_carry_today;
         fundingTodayAvail = true;
       }
-      if (typeof data.pnl_total === "number") {
+      if (equityValue !== null) {
+        // Both sides of the delta must be the same measure: the cached
+        // baseline is whatever snapshotEquityValue stored, so the current
+        // side has to come from it too. Reading pnl_total here would give
+        // a book target a ~-$1000 month (its PnL minus its equity).
         const key = keyForTarget(target, index);
         const history = historyByKey.get(key);
         const baseline = baselineEquityAt(history, monthStartMs);
         if (baseline !== null) {
-          pnlMonth += data.pnl_total - baseline;
+          pnlMonth += equityValue - baseline;
           monthStartEquityTotal += baseline;
           pnlMonthAvail = true;
         }
@@ -578,7 +582,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
   const stale = status === "stale" || isStale(updatedAt, target.stale_after_secs);
   const pnlTodayValue = parseNumber(data.pnl_today);
-  const pnlTotalValue = parseNumber(data.pnl_total);
+  // "Equity total" is capital, so it goes through the same book-aware
+  // helper the fleet total and the sparkline use: a book's capital lives
+  // in book.equity_usd, while its pnl_total is PnL against the reference.
+  const pnlTotalValue = snapshotEquityValue(data);
   const pnlToday = formatPnl(pnlTodayValue);
   const pnlTotal = formatUsdc(pnlTotalValue);
   // funding_carry_today is omitted by pre-#371 binaries — distinguish

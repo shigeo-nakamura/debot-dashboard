@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -670,6 +670,22 @@ test("book equity comes from book.equity_usd, not the top-level pnl_total", () =
     context.__test.snapshotToPoint(bookFixture).equity,
     bookFixture.book.equity_usd,
   );
+});
+
+test("month-to-date uses the same measure on both sides for a book target", () => {
+  // Two samples of the same book: the baseline cached at month start and
+  // the current one are both book.equity_usd, so MTD is their difference
+  // (+$10), not pnl_total minus equity (~-$1000).
+  const earlier = JSON.parse(JSON.stringify(bookFixture));
+  earlier.book.equity_usd = bookFixture.book.equity_usd - 10;
+  assert.equal(
+    context.__test.snapshotEquityValue(bookFixture) -
+      context.__test.snapshotEquityValue(earlier),
+    10,
+  );
+  // The card's prominent "Equity total" is capital, not PnL.
+  assert.equal(context.__test.snapshotEquityValue(bookFixture), bookFixture.book.equity_usd);
+  assert.ok(bookFixture.pnl_total < 100);
 });
 
 test("a book's legs are counted whole while pairtrade's are still halved", () => {
