@@ -27,7 +27,7 @@ renders; the **Book runtime** section is added below it.
 
 | Row | Meaning |
 |---|---|
-| Decision | The last *completed* decision: its key, outcome (`applied` / `partial` / `rejected` / `skipped` / `halted`) and, when it took more than one, the attempt count. |
+| Decision | The last *completed* decision: its key, outcome (`applied` / `partial` / `rejected` / `skipped` / `halted`), the first 12 hex of the signal hash that produced it, and the attempt count when it took more than one. That hash is the decision's own and legitimately differs from the window in progress below. |
 | Signal | The window in progress, from the runtime's own `signal_status`: `waiting_for_file`, `applied:<sha12>`, `partial:<sha12>`, `rejected:<reason>`, `skipped:<reason>`, `waiting_flatten:<key>`. Green when applied, amber when partial or rejected. |
 | Book | Gross exposure, net exposure and equity. A dollar-neutral book should show net close to zero; a persistent non-zero net means legs are missing. |
 | Next decision | The key and UTC time of the next scheduled decision. |
@@ -48,6 +48,15 @@ count when any of these hold:
 
 A `pending_residual` is deliberately *not* a halt: the runtime is still
 working the window and will retry inside it.
+
+## Fleet aggregates
+
+- **Equity total** takes `book.equity_usd`, not the top-level `pnl_total`
+  (which is PnL against the equity reference, so it would understate the
+  fleet by the whole reference and build the equity chart from PnL).
+- **Open positions** counts a book's legs whole. The fleet figure halves
+  raw leg counts because a pairtrade position is two legs; a
+  cross-sectional book holds one position per symbol.
 
 Operational detail (config, signal contract, risk rails, runbook) lives in
 the pairtrade repo: `docs/book-runtime.md` and
