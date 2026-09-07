@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -92,6 +92,10 @@ const accumulatorFixture = JSON.parse(
 
 const hanBridgeFixture = JSON.parse(
   fs.readFileSync(`${__dirname}/fixtures/han-bridge-status-v1.json`, "utf8"),
+);
+
+const bookFixture = JSON.parse(
+  fs.readFileSync(`${__dirname}/fixtures/book-runtime-status-v1.json`, "utf8"),
 );
 
 const makeCard = () => {
@@ -611,4 +615,138 @@ test("renderArcusSummary shows the inventory-equity headline and opens details o
   const staleCard = makeSummaryCard();
   context.__test.renderArcusSummary(staleCard, { mode: "live", healthy: true, risk_halt: null }, [], "stale");
   assert.equal(staleCard.querySelector('[data-field="arcus-details"]').open, true);
+});
+
+test("book fixture renders the applied decision, its signal hash and the book's exposure", () => {
+  const book = bookFixture.book;
+  assert.equal(context.__test.isBookStatus(bookFixture), true);
+  assert.equal(context.__test.isBookStatus({}), false);
+  assert.equal(context.__test.isBookHalted(bookFixture), false);
+  const view = context.__test.bookViewModel(book);
+  assert.equal(view.decision, "2026-07-08 applied · d73e8b6f6beb");
+  assert.equal(view.signal, "applied d73e8b6f6beb");
+  assert.equal(view.signalTone, "ok");
+  assert.match(view.exposure, /^gross \$999\.\d+ · net \$9\.\d+ · equity \$1,009\.\d+$/);
+  // Book figures are USD, not the holder's USDC formatting.
+  assert.ok(!view.exposure.includes("USDC"));
+  assert.equal(view.next, "2026-07-13 @ 2026-07-13T00:30:00Z");
+  // Nothing wrong with this book, so no note row.
+  assert.equal(view.note, null);
+});
+
+test("book halts, a blocked-equity outage and a pending residual all surface", () => {
+  const halted = {
+    ...bookFixture.book,
+    session_halted: true,
+    session_halt_reason: "session loss $160.00 > limit $150.00",
+  };
+  assert.equal(context.__test.isBookHalted({ book: halted }), true);
+  assert.match(context.__test.bookViewModel(halted).note, /session loss/);
+
+  const daily = { ...bookFixture.book, daily_halted: true };
+  assert.equal(context.__test.isBookHalted({ book: daily }), true);
+  assert.equal(context.__test.bookViewModel(daily).note, "daily loss halt");
+
+  // A live equity outage blocks every opening intent, so it must count as
+  // trouble even though neither halt flag is set.
+  const noEquity = { ...bookFixture.book, equity_ready: false };
+  assert.equal(context.__test.isBookHalted({ book: noEquity }), true);
+  assert.match(context.__test.bookViewModel(noEquity).note, /equity unavailable/);
+
+  const residual = { ...bookFixture.book, pending_residual: true, signal_status: "partial:abc123def456" };
+  // A residual is not a halt: the runtime is still working the window.
+  assert.equal(context.__test.isBookHalted({ book: residual }), false);
+  const view = context.__test.bookViewModel(residual);
+  assert.equal(view.signalTone, "warn");
+  assert.equal(view.note, "residual pending");
+});
+
+test("book equity comes from book.equity_usd, not the top-level pnl_total", () => {
+  // pnl_total on this fixture is ~$9.93 (PnL against the reference) while
+  // the capital is ~$1009.93; the fleet total and the equity chart must
+  // use the latter.
+  assert.ok(bookFixture.pnl_total < 100);
+  assert.equal(
+    context.__test.snapshotToPoint(bookFixture).equity,
+    bookFixture.book.equity_usd,
+  );
+});
+
+test("month-to-date uses the same measure on both sides for a book target", () => {
+  // Two samples of the same book: the baseline cached at month start and
+  // the current one are both book.equity_usd, so MTD is their difference
+  // (+$10), not pnl_total minus equity (~-$1000).
+  const earlier = JSON.parse(JSON.stringify(bookFixture));
+  earlier.book.equity_usd = bookFixture.book.equity_usd - 10;
+  assert.equal(
+    context.__test.snapshotEquityValue(bookFixture) -
+      context.__test.snapshotEquityValue(earlier),
+    10,
+  );
+  // The card's prominent "Equity total" is capital, not PnL.
+  assert.equal(context.__test.snapshotEquityValue(bookFixture), bookFixture.book.equity_usd);
+  assert.ok(bookFixture.pnl_total < 100);
+});
+
+test("a book's legs are counted whole while pairtrade's are still halved", () => {
+  context.__test.updateFleetSummary([
+    // One pairtrade target: 2 legs = 1 pair.
+    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 2 } },
+    // One book target: 4 single-symbol legs, counted whole.
+    { service_status: "active", status: bookFixture },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(bookFixture.position_count, 4);
+  assert.equal(value("fleet-positions-total"), "5");
+  // Equity comes from book.equity_usd (~1009.93), not pnl_total (~9.93).
+  assert.equal(value("fleet-equity-total"), "1109.9 USDC");
+});
+
+test("a book with no decision yet and an unfinished flatten reads correctly", () => {
+  const fresh = { ...bookFixture.book, last_decision: null, signal_status: "waiting_for_file" };
+  const view = context.__test.bookViewModel(fresh);
+  assert.equal(view.decision, "None yet");
+  assert.equal(view.signal, "waiting_for_file");
+  assert.equal(view.signalTone, "neutral");
+
+  // A rejected decision keeps its reason visible even after the Signal
+  // row has moved on to the next window.
+  const rejected = {
+    ...bookFixture.book,
+    signal_status: "waiting_for_file",
+    last_decision: {
+      ...bookFixture.book.last_decision,
+      outcome: "rejected",
+      signal_sha256: null,
+      reject_reason: "unknown_symbol",
+    },
+  };
+  assert.equal(
+    context.__test.bookViewModel(rejected).decision,
+    "2026-07-08 rejected · unknown_symbol",
+  );
+
+  // A decision whose signal hash is absent still renders its key/outcome.
+  const noSha = { ...bookFixture.book, last_decision: { ...bookFixture.book.last_decision, signal_sha256: null } };
+  assert.equal(context.__test.bookViewModel(noSha).decision, "2026-07-08 applied");
+
+  const owed = {
+    ...bookFixture.book,
+    last_decision: { ...bookFixture.book.last_decision, flatten_at: 1783497600, flatten_done: false },
+  };
+  assert.match(context.__test.bookViewModel(owed).note, /flatten of 2026-07-08 pending/);
+});
+
+test("book target counts as unhealthy while halted", () => {
+  assert.equal(
+    context.__test.isTargetUnhealthy({ service_status: "active", status: bookFixture }),
+    false,
+  );
+  assert.equal(
+    context.__test.isTargetUnhealthy({
+      service_status: "active",
+      status: { book: { ...bookFixture.book, session_halted: true } },
+    }),
+    true,
+  );
 });

@@ -250,7 +250,16 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 		mc.trades.With(labels).Set(float64(trades))
 		mc.wins.With(labels).Set(float64(wins))
 		mc.winRate.With(labels).Set(winRate)
-		mc.pnlTotal.With(labels).Set(s.PnlTotal)
+		// `debot_pnl_total_usd` is documented as total equity. A book
+		// runtime's top-level pnl_total is PnL against its equity
+		// reference, so its capital has to come from book.equity_usd or
+		// every Grafana panel and alert on this gauge reads the wrong
+		// number (the same dispatch the UI's snapshotEquityValue makes).
+		if s.Book != nil {
+			mc.pnlTotal.With(labels).Set(s.Book.EquityUsd)
+		} else {
+			mc.pnlTotal.With(labels).Set(s.PnlTotal)
+		}
 		mc.pnlToday.With(labels).Set(s.PnlToday)
 		mc.positionCount.With(labels).Set(float64(s.PositionCount))
 		mc.hasPosition.With(labels).Set(boolToFloat(s.HasPosition))
@@ -292,6 +301,19 @@ func (mc *metricsCollector) Update(snapshot DashboardSnapshot) {
 			mc.dailyMaxLossBps.With(labels).Set(d.EffectiveMaxDailyLossBps)
 			mc.dailyRiskHalted.With(labels).Set(boolToFloat(d.RiskHalted))
 			mc.sessionStartTS.With(labels).Set(float64(d.SessionStartTS))
+		}
+		// A book runtime carries its halts on its own nested block, not
+		// the pairtrade session_risk / daily_risk shape, so without this
+		// its halts would never reach Prometheus even while the UI marks
+		// the target unhealthy. `equity_ready == false` is folded into
+		// the session gauge: it blocks every opening intent, which is
+		// what an alert on that gauge is asking about.
+		if s.Book != nil {
+			mc.sessionHalted.With(labels).Set(
+				boolToFloat(s.Book.SessionHalted || !s.Book.EquityReady),
+			)
+			mc.dailyRiskHalted.With(labels).Set(boolToFloat(s.Book.DailyHalted))
+			mc.currentEquity.With(labels).Set(s.Book.EquityUsd)
 		}
 		if s.SessionRisk != nil {
 			r := s.SessionRisk

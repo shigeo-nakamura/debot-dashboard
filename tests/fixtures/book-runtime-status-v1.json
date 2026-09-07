@@ -1,0 +1,84 @@
+{
+  "ts": 1783814399,
+  "updated_at": "2026-07-11T23:59:59Z",
+  "id": "xsmom-695",
+  "dex": "lighter",
+  "dry_run": true,
+  "has_position": true,
+  "position_count": 4,
+  "positions_ready": true,
+  "positions": [
+    {
+      "symbol": "BTC",
+      "side": "long",
+      "size": "0.00245",
+      "entry_price": "102051.000000"
+    },
+    {
+      "symbol": "DOT",
+      "side": "short",
+      "size": "63.4",
+      "entry_price": "3.938030"
+    },
+    {
+      "symbol": "ETH",
+      "side": "short",
+      "size": "0.0634",
+      "entry_price": "3938.030000"
+    },
+    {
+      "symbol": "SOL",
+      "side": "long",
+      "size": "1.22",
+      "entry_price": "204.102000"
+    }
+  ],
+  "pnl_total": 9.931690705744472,
+  "pnl_today": 0.0,
+  "pnl_source": "paper",
+  "kill_switch_active": false,
+  "trade_stats": {
+    "trades": 0,
+    "wins": 0,
+    "win_rate": 0.0,
+    "max_dd": 0.4991859999998951,
+    "pnl": 0.0
+  },
+  "book": {
+    "instance_id": "xsmom-695",
+    "config_fp": "fd9a9a369354",
+    "venue": "lighter",
+    "equity_usd": 1009.9316907057445,
+    "gross_usd": 999.6752,
+    "net_usd": 9.620800000000003,
+    "unrealized_usd": 9.933614000000079,
+    "cum_realized_usd": 0.0,
+    "cum_fees_usd": 0.0,
+    "cum_funding_est_usd": -0.0019232942555555549,
+    "session_halted": false,
+    "session_halt_reason": null,
+    "daily_halted": false,
+    "next_decision_key": "2026-07-13",
+    "next_decision_at": "2026-07-13T00:30:00Z",
+    "last_decision": {
+      "key": "2026-07-08",
+      "outcome": "applied",
+      "at": 1783470600,
+      "signal_sha256": "d73e8b6f6beb95589897dd62dfda493671c83d8027e090af5f72e060c1aee5a9",
+      "reject_reason": null,
+      "attempts": 1,
+      "flatten_at": null,
+      "flatten_done": false,
+      "target_qty": {
+        "BTC": 0.00245,
+        "DOT": -63.4,
+        "ETH": -0.0634,
+        "SOL": 1.22
+      }
+    },
+    "signal_status": "applied:d73e8b6f6beb",
+    "pending_residual": false,
+    "positions_source": "paper",
+    "equity_ready": true
+  }
+}

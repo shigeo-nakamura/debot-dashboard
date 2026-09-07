@@ -147,6 +147,58 @@ type HanBridgeStatus struct {
 	SessionHaltReason *string  `json:"session_halt_reason,omitempty"`
 }
 
+// BookDecision is one entry of the book runtime's decision history: the
+// key it acted on, what came of it, and the hash of the signal file that
+// produced it. `outcome` is applied | partial | rejected | skipped |
+// halted (bot-strategy#937, docs/book-runtime.md §8).
+type BookDecision struct {
+	Key          string  `json:"key"`
+	Outcome      string  `json:"outcome"`
+	At           int64   `json:"at"`
+	SignalSha256 *string `json:"signal_sha256,omitempty"`
+	RejectReason *string `json:"reject_reason,omitempty"`
+	Attempts     uint32  `json:"attempts"`
+	FlattenAt    *int64  `json:"flatten_at,omitempty"`
+	FlattenDone  bool    `json:"flatten_done"`
+}
+
+// BookStatus is the slow cross-sectional book runtime's dashboard block
+// (bot-strategy#937; hosts XSMOM #695 and, once its gate passes, Engine B
+// #866). Like han_bridge this renders as an *additional* section beside
+// the normal trading view: the runtime has real positions and PnL, but
+// the questions an operator actually has about it are book-shaped -- is
+// the book balanced (gross/net), did the last decision apply, and is the
+// producer's signal arriving.
+type BookStatus struct {
+	InstanceID        string        `json:"instance_id"`
+	ConfigFp          string        `json:"config_fp"`
+	Venue             string        `json:"venue"`
+	EquityUsd         float64       `json:"equity_usd"`
+	GrossUsd          float64       `json:"gross_usd"`
+	NetUsd            float64       `json:"net_usd"`
+	UnrealizedUsd     float64       `json:"unrealized_usd"`
+	CumRealizedUsd    float64       `json:"cum_realized_usd"`
+	CumFeesUsd        float64       `json:"cum_fees_usd"`
+	CumFundingEstUsd  float64       `json:"cum_funding_est_usd"`
+	SessionHalted     bool          `json:"session_halted"`
+	SessionHaltReason *string       `json:"session_halt_reason,omitempty"`
+	DailyHalted       bool          `json:"daily_halted"`
+	NextDecisionKey   *string       `json:"next_decision_key,omitempty"`
+	NextDecisionAt    *string       `json:"next_decision_at,omitempty"`
+	LastDecision      *BookDecision `json:"last_decision,omitempty"`
+	// SignalStatus is the runtime's own one-line account of the current
+	// decision window: waiting_for_file, applied:<sha12>, partial:<sha12>,
+	// rejected:<reason>, skipped:<reason>, waiting_flatten:<key>.
+	SignalStatus string `json:"signal_status"`
+	// PendingResidual is true while a decision was only partially applied
+	// and its remaining target is still being retried.
+	PendingResidual bool   `json:"pending_residual"`
+	PositionsSource string `json:"positions_source"`
+	// EquityReady is false while a live venue equity read is failing; the
+	// rails are not evaluated and every opening intent is blocked.
+	EquityReady bool `json:"equity_ready"`
+}
+
 type StatusData struct {
 	SchemaVersion uint8  `json:"schema_version,omitempty"`
 	TS            int64  `json:"ts"`
@@ -186,6 +238,7 @@ type StatusData struct {
 	AccumulatorOps    *AccumulatorOperations `json:"operations,omitempty"`
 	BullHolder        *BullHolderStatus      `json:"bull_holder,omitempty"`
 	HanBridge         *HanBridgeStatus       `json:"han_bridge,omitempty"`
+	Book              *BookStatus            `json:"book,omitempty"`
 	TradeStats        *TradeStats            `json:"trade_stats,omitempty"`
 	Maintenance       *string                `json:"maintenance,omitempty"`
 	Shutdown          *ShutdownStatus        `json:"shutdown,omitempty"`

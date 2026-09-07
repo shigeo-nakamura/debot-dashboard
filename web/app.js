@@ -213,6 +213,8 @@ const updateFleetSummary = (targets) => {
   let pnlMonthAvail = false;
   let monthStartEquityTotal = 0;
   let equityTotal = 0;
+  // Kept apart from positionsTotal because that one is halved below.
+  let bookPositionsTotal = 0;
   // Funding today is aggregated only when at least one target's status
   // payload carries the field; targets on pre-#371 binaries leave it
   // undefined and the fleet summary falls back to "-" rather than
@@ -240,28 +242,42 @@ const updateFleetSummary = (targets) => {
     // return, drawdown, and open-position aggregate.
     if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
-      if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
+      // snapshotEquityValue, not pnl_total: a book target's capital lives
+      // in book.equity_usd (pnl_total is PnL against the reference).
+      const equityValue = snapshotEquityValue(data);
+      if (equityValue !== null) equityTotal += equityValue;
       if (typeof data.funding_carry_today === "number") {
         fundingToday += data.funding_carry_today;
         fundingTodayAvail = true;
       }
-      if (typeof data.pnl_total === "number") {
+      if (equityValue !== null) {
+        // Both sides of the delta must be the same measure: the cached
+        // baseline is whatever snapshotEquityValue stored, so the current
+        // side has to come from it too. Reading pnl_total here would give
+        // a book target a ~-$1000 month (its PnL minus its equity).
         const key = keyForTarget(target, index);
         const history = historyByKey.get(key);
         const baseline = baselineEquityAt(history, monthStartMs);
         if (baseline !== null) {
-          pnlMonth += data.pnl_total - baseline;
+          pnlMonth += equityValue - baseline;
           monthStartEquityTotal += baseline;
           pnlMonthAvail = true;
         }
       }
       if (data.positions_ready !== false && typeof data.position_count === "number") {
-        positionsTotal += data.position_count;
+        // A cross-sectional book holds one position per symbol; only
+        // pairtrade's legs come in pairs (see the halving below).
+        if (isBookStatus(data)) {
+          bookPositionsTotal += data.position_count;
+        } else {
+          positionsTotal += data.position_count;
+        }
       }
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
       if (isHanBridgeHalted(data)) halts += 1;
+      if (isBookHalted(data)) halts += 1;
       if (Array.isArray(data.risk_history)) {
         for (const ev of data.risk_history) {
           if (ev.event_type === "activated" && ev.ts >= cutoff24hSec) {
@@ -333,8 +349,9 @@ const updateFleetSummary = (targets) => {
   }
   setField("fleet-equity-total", formatUsdc(equityTotal));
   // Each pairtrade position is two legs (e.g. BTC+ETH); halve the raw leg
-  // count so this reads as a pair count.
-  setField("fleet-positions-total", `${positionsTotal / 2}`);
+  // count so this reads as a pair count. A cross-sectional book's legs are
+  // single-symbol and are counted whole.
+  setField("fleet-positions-total", `${positionsTotal / 2 + bookPositionsTotal}`);
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
@@ -516,6 +533,14 @@ const createCard = (key) => {
         <div class="row" data-field="han-bridge-reasons-row" hidden><span>Reason</span><strong data-field="han-bridge-reasons"></strong></div>
         <div class="row" data-field="han-bridge-halt-row" hidden><span>Session halt</span><strong data-field="han-bridge-halt"></strong></div>
       </div>
+      <div class="han-bridge-view" data-field="book-view" hidden>
+        <div class="han-bridge-header" data-field="book-header">Book runtime</div>
+        <div class="row"><span>Decision</span><strong class="tone-neutral" data-field="book-decision"></strong></div>
+        <div class="row"><span>Signal</span><strong data-field="book-signal"></strong></div>
+        <div class="row"><span>Book</span><strong data-field="book-exposure"></strong></div>
+        <div class="row"><span>Next decision</span><strong data-field="book-next"></strong></div>
+        <div class="row" data-field="book-note-row" hidden><span>Note</span><strong class="tone-warn" data-field="book-note"></strong></div>
+      </div>
       </div>
       <div class="error" data-field="error" hidden></div>
       </div>
@@ -543,16 +568,24 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const arcusDegraded = arcus !== null && (arcus.healthy !== true || Boolean(arcus.risk_halt));
   const holderDegraded = bullHolder !== null && isBullHolderDegraded(bullHolder);
   const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
+  // A halted book (session/daily halt, or a venue-equity outage that
+  // blocks every opening intent) is degraded like any other stopped bot:
+  // without this the card stays green and "active" while the fleet
+  // summary already counts it under halts.
+  const bookDegraded = isBookHalted(data);
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || arcusDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || arcusDegraded || bookDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
   const stale = status === "stale" || isStale(updatedAt, target.stale_after_secs);
   const pnlTodayValue = parseNumber(data.pnl_today);
-  const pnlTotalValue = parseNumber(data.pnl_total);
+  // "Equity total" is capital, so it goes through the same book-aware
+  // helper the fleet total and the sparkline use: a book's capital lives
+  // in book.equity_usd, while its pnl_total is PnL against the reference.
+  const pnlTotalValue = snapshotEquityValue(data);
   const pnlToday = formatPnl(pnlTodayValue);
   const pnlTotal = formatUsdc(pnlTotalValue);
   // funding_carry_today is omitted by pre-#371 binaries — distinguish
@@ -571,7 +604,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const history = updateHistoryCache(key, data);
 
   card.classList.toggle("stale", stale);
-  card.classList.toggle("degraded", accumulatorDegraded || holderDegraded || arcusDegraded);
+  card.classList.toggle(
+    "degraded",
+    accumulatorDegraded || holderDegraded || arcusDegraded || bookDegraded,
+  );
   card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.style.animationDelay = `${index * 0.04}s`;
@@ -750,6 +786,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.daily_risk && data.daily_risk.risk_halted === true) ||
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
     isHanBridgeHalted(data) ||
+    isBookHalted(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
@@ -944,6 +981,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
         .join("")
     : `<div class="empty">No open positions</div>`;
   positionsListEl.innerHTML = positionsHtml;
+
+  const bookViewEl = card.querySelector('[data-field="book-view"]');
+  const book = isBookStatus(data) ? data.book : null;
+  if (bookViewEl) {
+    bookViewEl.hidden = book === null;
+    if (book) renderBookStatus(card, book);
+  }
 
   const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
   const hanBridge = isHanBridgeStatus(data) ? data.han_bridge : null;
@@ -1388,6 +1432,91 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
   }
 };
 
+const isBookStatus = (data) => Boolean(data && data.book);
+
+// The book runtime carries two independent halts on its own nested block
+// (session and daily), neither of which is the pairtrade session_risk
+// shape, plus an equity-read outage that blocks every opening intent.
+// Fleet halt counting and card auto-expand need all three or a stopped
+// book silently drops out of both.
+const isBookHalted = (data) =>
+  Boolean(
+    data &&
+      data.book &&
+      (data.book.session_halted || data.book.daily_halted || data.book.equity_ready === false),
+  );
+
+// `signal_status` is the runtime's own account of the current window, and
+// its prefix is the only reliable classifier: "applied:<sha>" and
+// "partial:<sha>" carry a hash, the rest carry a reason. `last_decision`
+// is the *previous* completed decision and can disagree with the window
+// in progress, so the two are shown separately rather than merged.
+const bookViewModel = (book) => {
+  const signal = String(book.signal_status || "");
+  const [kind, detail = ""] = signal.split(":");
+  let tone = "neutral";
+  if (kind === "applied") tone = "ok";
+  else if (kind === "partial" || kind === "rejected" || kind === "waiting_flatten") tone = "warn";
+  const last = book.last_decision || null;
+  // The completed decision carries its own hash, which legitimately
+  // differs from the window in progress shown in the Signal row (or is
+  // absent there entirely, e.g. waiting_for_file). Show it here so the
+  // panel can always answer "which signal produced this book".
+  const lastSha = last && typeof last.signal_sha256 === "string" ? last.signal_sha256.slice(0, 12) : null;
+  // A rejected or skipped decision carries its reason on the record. Once
+  // the Signal row has moved on to the next window that reason is only
+  // available here, so it belongs in this string rather than being
+  // implied by an outcome word.
+  const lastReason = last && typeof last.reject_reason === "string" && last.reject_reason
+    ? last.reject_reason
+    : null;
+  const decision = last
+    ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${lastReason ? ` · ${lastReason}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
+    : "None yet";
+  const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
+  const notes = [];
+  if (book.session_halted) notes.push(book.session_halt_reason || "session halt");
+  if (book.daily_halted) notes.push("daily loss halt");
+  if (book.equity_ready === false) notes.push("venue equity unavailable, opens blocked");
+  if (book.pending_residual) notes.push("residual pending");
+  if (last && last.flatten_at && !last.flatten_done) notes.push(`flatten of ${last.key} pending`);
+  return {
+    header: `Book runtime${book.instance_id ? ` · ${book.instance_id}` : ""}`,
+    decision,
+    signal: detail ? `${kind} ${detail}` : kind || "-",
+    signalTone: tone,
+    exposure: `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
+    next: book.next_decision_at
+      ? `${book.next_decision_key || "?"} @ ${book.next_decision_at}`
+      : "Not scheduled",
+    note: notes.length > 0 ? notes.join("; ") : null,
+  };
+};
+
+const renderBookStatus = (card, book) => {
+  const view = bookViewModel(book);
+  const set = (field, text) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (el) el.textContent = text;
+  };
+  set("book-header", view.header);
+  set("book-decision", view.decision);
+  set("book-exposure", view.exposure);
+  set("book-next", view.next);
+  const signalEl = card.querySelector('[data-field="book-signal"]');
+  if (signalEl) {
+    signalEl.textContent = view.signal;
+    signalEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+    signalEl.classList.add(`tone-${view.signalTone}`);
+  }
+  const noteRowEl = card.querySelector('[data-field="book-note-row"]');
+  const noteEl = card.querySelector('[data-field="book-note"]');
+  if (noteRowEl && noteEl) {
+    noteRowEl.hidden = view.note === null;
+    noteEl.textContent = view.note || "";
+  }
+};
+
 const isTargetUnhealthy = (target) => {
   const serviceUnhealthy = Boolean(
     target.service_status && target.service_status !== "active",
@@ -1397,7 +1526,8 @@ const isTargetUnhealthy = (target) => {
     : null;
   return serviceUnhealthy || Boolean(target.error) || (accumulator !== null && accumulator.healthy !== true)
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
-    || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)));
+    || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)))
+    || isBookHalted(target.status);
 };
 
 const formatHype = (value) => {
@@ -1537,6 +1667,13 @@ const snapshotEquityValue = (data) => {
   }
   if (data.arcus) {
     return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
+  }
+  // The book runtime reports the same shape: its top-level pnl_total is
+  // PnL against the equity reference, while book.equity_usd is the
+  // capital. Using pnl_total here would understate the fleet total by
+  // the whole reference and build the equity chart from PnL.
+  if (data.book) {
+    return Number.isFinite(data.book.equity_usd) ? Number(data.book.equity_usd) : null;
   }
   return Number.isFinite(data.pnl_total) ? Number(data.pnl_total) : null;
 };
