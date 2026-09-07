@@ -13,17 +13,26 @@ poll_interval_secs: 20
 # Service liveness is derived from object freshness — a status object
 # older than stale_after_secs (default 180 s) flips the target to "stale". No probe traffic
 # touches the bot host.
+#
+# Optional per-target `dex:` overrides the venue label shown on the
+# card. Leave unset to use whatever the bot self-reports in its
+# `status.json`'s `dex` field; set it when that value is bare/ambiguous
+# (e.g. a Lighter-connector bot reports "lighter" whether it's running
+# against zkLighter mainnet or a different chain's Lighter deployment)
+# or when the bot doesn't report `dex` at all. `name:` doesn't need a
+# region suffix — the FE already groups cards under a region header.
 targets:
   # Example S3-backed target (a pairtrade instance mirroring status.json).
   # The Frankfurt BTC/ETH pairtrade fleet was sunset on 2026-09-06; the
   # Robinhood Chain Lighter pairtrade bot (Tokyo) is the remaining example.
-  - name: Robinhood Freq (Tokyo)
+  - name: Robinhood Freq
     instance_id: i-xxxxxxxxxxxxxxxxx
     service: debot-pair-robinhood-lighter
     region: ap-northeast-1
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
     s3_key: debot/status/robinhood-lighter/debot-pair-robinhood-lighter-freq.json
+    dex: "Lighter (Robinhood Chain)"
 # HYPE accumulator targets use the same freshness/health path but render the
 # nested accumulator balance/activity view instead of PnL statistics — it
 # also shows an "Unrealized PnL" row when the S3 object was written by the
@@ -42,7 +51,7 @@ targets:
 # Bull-holder uses its existing same-host status file and public read-only
 # balance APIs. Do not set s3_bucket/s3_key for this target. See
 # deploy/bull-holder.md for data meanings and rollout instructions.
-#  - name: Bull-holder (Frankfurt)
+#  - name: Bull-holder
 #    instance_id: i-xxxxxxxxxxxxxxxxx
 #    service: debot-bull-holder
 #    region: eu-central-1
@@ -72,3 +81,4 @@ targets:
 #    s3_region: eu-central-1
 #    s3_key: arcus-archive/status/arcus-spot.json
 #    stale_after_secs: 1920
+#    dex: "Uniswap (via Arcus)"

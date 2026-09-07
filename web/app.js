@@ -432,6 +432,7 @@ const createCard = (key) => {
           <div class="risk-history-strip" data-field="risk-history-strip"></div>
         </div>
       </div>
+      <div class="row" data-field="dex-row" hidden><span>DEX</span><strong data-field="dex"></strong></div>
       <div class="row"><span>Instance</span><strong data-field="instance"></strong></div>
       <div class="row"><span>AWS Region</span><strong data-field="region"></strong></div>
       <div class="row"><span>Service</span><strong data-field="service"></strong></div>
@@ -577,6 +578,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
 
   const nameEl = card.querySelector('[data-field="name"]');
   const statusEl = card.querySelector('[data-field="status"]');
+  const dexRowEl = card.querySelector('[data-field="dex-row"]');
+  const dexEl = card.querySelector('[data-field="dex"]');
   const instanceEl = card.querySelector('[data-field="instance"]');
   const regionEl = card.querySelector('[data-field="region"]');
   const serviceEl = card.querySelector('[data-field="service"]');
@@ -806,6 +809,15 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
   }
 
+  if (dexRowEl && dexEl) {
+    if (data.dex) {
+      dexRowEl.hidden = false;
+      dexEl.textContent = formatDexLabel(data.dex);
+    } else {
+      dexRowEl.hidden = true;
+      dexEl.textContent = "";
+    }
+  }
   instanceEl.textContent = target.instance_id || "-";
   regionEl.textContent = target.region || "-";
   serviceEl.textContent = target.service || "-";
@@ -1879,6 +1891,14 @@ const reconcileOrderInGrid = (gridEl, orderedCards) => {
     }
   });
 };
+
+// Bots self-report a bare lowercase venue slug (e.g. "lighter",
+// "hyperliquid") — capitalize those for display. A config.yaml `dex`
+// override is already a display-ready label and may have intentional
+// casing (e.g. "zkLighter", "dYdX"), so leave anything that isn't fully
+// lowercase untouched rather than mangling it.
+const formatDexLabel = (dex) =>
+  dex === dex.toLowerCase() ? dex.charAt(0).toUpperCase() + dex.slice(1) : dex;
 
 const formatPnl = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
