@@ -623,7 +623,7 @@ test("book fixture renders the applied decision, its signal hash and the book's 
   assert.equal(context.__test.isBookStatus({}), false);
   assert.equal(context.__test.isBookHalted(bookFixture), false);
   const view = context.__test.bookViewModel(book);
-  assert.equal(view.decision, "2026-07-08 applied");
+  assert.equal(view.decision, "2026-07-08 applied · d73e8b6f6beb");
   assert.equal(view.signal, "applied d73e8b6f6beb");
   assert.equal(view.signalTone, "ok");
   assert.match(view.exposure, /^gross \$999\.\d+ · net \$9\.\d+ · equity \$1,009\.\d+$/);
@@ -661,12 +661,41 @@ test("book halts, a blocked-equity outage and a pending residual all surface", (
   assert.equal(view.note, "residual pending");
 });
 
+test("book equity comes from book.equity_usd, not the top-level pnl_total", () => {
+  // pnl_total on this fixture is ~$9.93 (PnL against the reference) while
+  // the capital is ~$1009.93; the fleet total and the equity chart must
+  // use the latter.
+  assert.ok(bookFixture.pnl_total < 100);
+  assert.equal(
+    context.__test.snapshotToPoint(bookFixture).equity,
+    bookFixture.book.equity_usd,
+  );
+});
+
+test("a book's legs are counted whole while pairtrade's are still halved", () => {
+  context.__test.updateFleetSummary([
+    // One pairtrade target: 2 legs = 1 pair.
+    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 2 } },
+    // One book target: 4 single-symbol legs, counted whole.
+    { service_status: "active", status: bookFixture },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(bookFixture.position_count, 4);
+  assert.equal(value("fleet-positions-total"), "5");
+  // Equity comes from book.equity_usd (~1009.93), not pnl_total (~9.93).
+  assert.equal(value("fleet-equity-total"), "1109.9 USDC");
+});
+
 test("a book with no decision yet and an unfinished flatten reads correctly", () => {
   const fresh = { ...bookFixture.book, last_decision: null, signal_status: "waiting_for_file" };
   const view = context.__test.bookViewModel(fresh);
   assert.equal(view.decision, "None yet");
   assert.equal(view.signal, "waiting_for_file");
   assert.equal(view.signalTone, "neutral");
+
+  // A decision whose signal hash is absent still renders its key/outcome.
+  const noSha = { ...bookFixture.book, last_decision: { ...bookFixture.book.last_decision, signal_sha256: null } };
+  assert.equal(context.__test.bookViewModel(noSha).decision, "2026-07-08 applied");
 
   const owed = {
     ...bookFixture.book,

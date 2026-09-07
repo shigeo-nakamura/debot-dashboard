@@ -213,6 +213,8 @@ const updateFleetSummary = (targets) => {
   let pnlMonthAvail = false;
   let monthStartEquityTotal = 0;
   let equityTotal = 0;
+  // Kept apart from positionsTotal because that one is halved below.
+  let bookPositionsTotal = 0;
   // Funding today is aggregated only when at least one target's status
   // payload carries the field; targets on pre-#371 binaries leave it
   // undefined and the fleet summary falls back to "-" rather than
@@ -240,7 +242,10 @@ const updateFleetSummary = (targets) => {
     // return, drawdown, and open-position aggregate.
     if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
       if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
-      if (typeof data.pnl_total === "number") equityTotal += data.pnl_total;
+      // snapshotEquityValue, not pnl_total: a book target's capital lives
+      // in book.equity_usd (pnl_total is PnL against the reference).
+      const equityValue = snapshotEquityValue(data);
+      if (equityValue !== null) equityTotal += equityValue;
       if (typeof data.funding_carry_today === "number") {
         fundingToday += data.funding_carry_today;
         fundingTodayAvail = true;
@@ -256,7 +261,13 @@ const updateFleetSummary = (targets) => {
         }
       }
       if (data.positions_ready !== false && typeof data.position_count === "number") {
-        positionsTotal += data.position_count;
+        // A cross-sectional book holds one position per symbol; only
+        // pairtrade's legs come in pairs (see the halving below).
+        if (isBookStatus(data)) {
+          bookPositionsTotal += data.position_count;
+        } else {
+          positionsTotal += data.position_count;
+        }
       }
       if (data.session_risk && data.session_risk.session_halted === true) halts += 1;
       if (data.daily_risk && data.daily_risk.risk_halted === true) halts += 1;
@@ -334,8 +345,9 @@ const updateFleetSummary = (targets) => {
   }
   setField("fleet-equity-total", formatUsdc(equityTotal));
   // Each pairtrade position is two legs (e.g. BTC+ETH); halve the raw leg
-  // count so this reads as a pair count.
-  setField("fleet-positions-total", `${positionsTotal / 2}`);
+  // count so this reads as a pair count. A cross-sectional book's legs are
+  // single-symbol and are counted whole.
+  setField("fleet-positions-total", `${positionsTotal / 2 + bookPositionsTotal}`);
   setField("fleet-halts", `${halts}`, halts > 0 ? "alert" : null);
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
@@ -552,9 +564,14 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const arcusDegraded = arcus !== null && (arcus.healthy !== true || Boolean(arcus.risk_halt));
   const holderDegraded = bullHolder !== null && isBullHolderDegraded(bullHolder);
   const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
+  // A halted book (session/daily halt, or a venue-equity outage that
+  // blocks every opening intent) is degraded like any other stopped bot:
+  // without this the card stays green and "active" while the fleet
+  // summary already counts it under halts.
+  const bookDegraded = isBookHalted(data);
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || arcusDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || arcusDegraded || bookDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
@@ -580,7 +597,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const history = updateHistoryCache(key, data);
 
   card.classList.toggle("stale", stale);
-  card.classList.toggle("degraded", accumulatorDegraded || holderDegraded || arcusDegraded);
+  card.classList.toggle(
+    "degraded",
+    accumulatorDegraded || holderDegraded || arcusDegraded || bookDegraded,
+  );
   card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.style.animationDelay = `${index * 0.04}s`;
@@ -1431,8 +1451,13 @@ const bookViewModel = (book) => {
   if (kind === "applied") tone = "ok";
   else if (kind === "partial" || kind === "rejected" || kind === "waiting_flatten") tone = "warn";
   const last = book.last_decision || null;
+  // The completed decision carries its own hash, which legitimately
+  // differs from the window in progress shown in the Signal row (or is
+  // absent there entirely, e.g. waiting_for_file). Show it here so the
+  // panel can always answer "which signal produced this book".
+  const lastSha = last && typeof last.signal_sha256 === "string" ? last.signal_sha256.slice(0, 12) : null;
   const decision = last
-    ? `${last.key} ${last.outcome}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
+    ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
   const notes = [];
@@ -1628,6 +1653,13 @@ const snapshotEquityValue = (data) => {
   }
   if (data.arcus) {
     return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
+  }
+  // The book runtime reports the same shape: its top-level pnl_total is
+  // PnL against the equity reference, while book.equity_usd is the
+  // capital. Using pnl_total here would understate the fleet total by
+  // the whole reference and build the equity chart from PnL.
+  if (data.book) {
+    return Number.isFinite(data.book.equity_usd) ? Number(data.book.equity_usd) : null;
   }
   return Number.isFinite(data.pnl_total) ? Number(data.pnl_total) : null;
 };
