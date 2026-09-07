@@ -72,6 +72,21 @@ targets:
 #   username: admin
 #   password: change-me
 
+# Book runtime targets (bot-strategy#937) mirror status.json the same way
+# pairtrade does, and render an extra "Book runtime" section beside the
+# normal trading view: last decision + its signal hash, the current
+# signal-window state, gross/net/equity, and the next decision time. The
+# instance writes to debot/status/book-<instance>/status.json; see
+# deploy/book-runtime.md.
+#  - name: XSMOM
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: book-runtime-xsmom-695
+#    region: ap-northeast-1
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: debot/status/book-xsmom-695/status.json
+#    dex: "Lighter (zkLighter mainnet)"
+
 # Arcus: independent read-only exporter; see deploy/arcus-status.md.
 #  - name: Arcus SPY/QQQ
 #    instance_id: i-xxxxxxxxxxxxxxxxx

@@ -125,6 +125,73 @@ func TestHanBridgeStatusFixtureMatchesDashboardContract(t *testing.T) {
 	assertNoForbiddenFields(t, hanBridgeRaw, "$.han_bridge")
 }
 
+const bookFixturePath = "tests/fixtures/book-runtime-status-v1.json"
+
+// The fixture is produced by the book runtime itself
+// (`book-runtime --replay`, bot-strategy#937), so this pins the real
+// wire shape rather than a hand-written approximation.
+func TestBookStatusFixtureMatchesDashboardContract(t *testing.T) {
+	payload, err := os.ReadFile(bookFixturePath)
+	if err != nil {
+		t.Fatalf("read book fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.Book == nil {
+		t.Fatal("book status missing")
+	}
+	if got := status.Book.InstanceID; got != "xsmom-695" {
+		t.Fatalf("instance_id = %q, want xsmom-695", got)
+	}
+	if got := status.Book.ConfigFp; len(got) != 12 {
+		t.Fatalf("config_fp = %q, want the 12-hex fingerprint", got)
+	}
+	if status.Book.LastDecision == nil {
+		t.Fatal("last_decision missing")
+	}
+	if got := status.Book.LastDecision.Outcome; got != "applied" {
+		t.Fatalf("last_decision.outcome = %q, want applied", got)
+	}
+	if status.Book.LastDecision.SignalSha256 == nil {
+		t.Fatal("last_decision.signal_sha256 missing: the decision cannot be traced to its signal")
+	}
+	if got := status.Book.SignalStatus; got == "" {
+		t.Fatal("signal_status empty")
+	}
+	// A halted-or-blocked book must be distinguishable from a running
+	// one; this fixture is the running case.
+	if status.Book.SessionHalted || status.Book.DailyHalted || !status.Book.EquityReady {
+		t.Fatal("fixture should be the healthy case")
+	}
+	if status.Book.GrossUsd <= 0 {
+		t.Fatalf("gross_usd = %v, want the open book's exposure", status.Book.GrossUsd)
+	}
+	// The runtime has real positions and PnL alongside the book block --
+	// unmarshal must not lose them.
+	if status.TradeStats == nil {
+		t.Fatal("trade_stats missing alongside book")
+	}
+	if status.PositionCount != len(status.Positions) {
+		t.Fatalf("position_count %d != len(positions) %d", status.PositionCount, len(status.Positions))
+	}
+}
+
+func TestTradingStatusWithoutBookStillDecodes(t *testing.T) {
+	payload, err := os.ReadFile(hanBridgeFixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.Book != nil {
+		t.Fatal("book decoded from a payload that has no book block")
+	}
+}
+
 func TestTradingStatusWithoutHanBridgeStillDecodes(t *testing.T) {
 	status, err := decodeStatusPayload([]byte(`{"ts":1,"pnl_total":12.5}`))
 	if err != nil {
