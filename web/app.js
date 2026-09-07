@@ -1893,10 +1893,12 @@ const reconcileOrderInGrid = (gridEl, orderedCards) => {
 };
 
 // Bots self-report a bare lowercase venue slug (e.g. "lighter",
-// "hyperliquid"); config.yaml's per-target `dex` override supplies its own
-// display casing (e.g. "Lighter (Robinhood Chain)"). Capitalizing only the
-// first character is a no-op on the latter, so one formatter covers both.
-const formatDexLabel = (dex) => dex.charAt(0).toUpperCase() + dex.slice(1);
+// "hyperliquid") — capitalize those for display. A config.yaml `dex`
+// override is already a display-ready label and may have intentional
+// casing (e.g. "zkLighter", "dYdX"), so leave anything that isn't fully
+// lowercase untouched rather than mangling it.
+const formatDexLabel = (dex) =>
+  dex === dex.toLowerCase() ? dex.charAt(0).toUpperCase() + dex.slice(1) : dex;
 
 const formatPnl = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
