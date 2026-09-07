@@ -709,6 +709,23 @@ test("a book with no decision yet and an unfinished flatten reads correctly", ()
   assert.equal(view.signal, "waiting_for_file");
   assert.equal(view.signalTone, "neutral");
 
+  // A rejected decision keeps its reason visible even after the Signal
+  // row has moved on to the next window.
+  const rejected = {
+    ...bookFixture.book,
+    signal_status: "waiting_for_file",
+    last_decision: {
+      ...bookFixture.book.last_decision,
+      outcome: "rejected",
+      signal_sha256: null,
+      reject_reason: "unknown_symbol",
+    },
+  };
+  assert.equal(
+    context.__test.bookViewModel(rejected).decision,
+    "2026-07-08 rejected · unknown_symbol",
+  );
+
   // A decision whose signal hash is absent still renders its key/outcome.
   const noSha = { ...bookFixture.book, last_decision: { ...bookFixture.book.last_decision, signal_sha256: null } };
   assert.equal(context.__test.bookViewModel(noSha).decision, "2026-07-08 applied");

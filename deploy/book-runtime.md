@@ -27,7 +27,7 @@ renders; the **Book runtime** section is added below it.
 
 | Row | Meaning |
 |---|---|
-| Decision | The last *completed* decision: its key, outcome (`applied` / `partial` / `rejected` / `skipped` / `halted`), the first 12 hex of the signal hash that produced it, and the attempt count when it took more than one. That hash is the decision's own and legitimately differs from the window in progress below. |
+| Decision | The last *completed* decision: its key, outcome (`applied` / `partial` / `rejected` / `skipped` / `halted`), the first 12 hex of the signal hash that produced it, the reject reason when it has one, and the attempt count when it took more than one. That hash is the decision's own and legitimately differs from the window in progress below; the reason stays visible after the Signal row moves to the next window. |
 | Signal | The window in progress, from the runtime's own `signal_status`: `waiting_for_file`, `applied:<sha12>`, `partial:<sha12>`, `rejected:<reason>`, `skipped:<reason>`, `waiting_flatten:<key>`. Green when applied, amber when partial or rejected. |
 | Book | Gross exposure, net exposure and equity. A dollar-neutral book should show net close to zero; a persistent non-zero net means legs are missing. |
 | Next decision | The key and UTC time of the next scheduled decision. |

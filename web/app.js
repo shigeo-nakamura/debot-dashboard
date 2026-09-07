@@ -1463,8 +1463,15 @@ const bookViewModel = (book) => {
   // absent there entirely, e.g. waiting_for_file). Show it here so the
   // panel can always answer "which signal produced this book".
   const lastSha = last && typeof last.signal_sha256 === "string" ? last.signal_sha256.slice(0, 12) : null;
+  // A rejected or skipped decision carries its reason on the record. Once
+  // the Signal row has moved on to the next window that reason is only
+  // available here, so it belongs in this string rather than being
+  // implied by an outcome word.
+  const lastReason = last && typeof last.reject_reason === "string" && last.reject_reason
+    ? last.reject_reason
+    : null;
   const decision = last
-    ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
+    ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${lastReason ? ` · ${lastReason}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
   const notes = [];
