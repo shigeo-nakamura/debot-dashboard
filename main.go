@@ -65,6 +65,13 @@ type TargetConfig struct {
 	// would have to advertise itself as Frankfurt and end up under the
 	// wrong region group on the FE.
 	S3Region string `yaml:"s3_region"`
+	// Dex overrides the venue label shown on the card, for targets
+	// whose bot either self-reports a bare/ambiguous `dex` value (e.g.
+	// pairtrade's Lighter connector reports "lighter" whether it's
+	// running against zkLighter mainnet or the Robinhood Chain
+	// deployment) or reports none at all. Empty leaves the bot's
+	// self-reported `status.dex` untouched.
+	Dex string `yaml:"dex"`
 }
 
 type StatusPosition struct {
@@ -612,9 +619,12 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			defer wg.Done()
 			if target.BullHolder != nil {
 				results[i] = fetchBullHolder(ctx, target, http.DefaultClient)
-				return
+			} else {
+				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 			}
-			results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
+			if target.Dex != "" && results[i].Status != nil {
+				results[i].Status.Dex = target.Dex
+			}
 		}()
 	}
 	wg.Wait()
