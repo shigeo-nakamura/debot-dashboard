@@ -171,7 +171,32 @@ type HolderBenchmarkAsset struct {
 // deploys a tranche (the same tranche_spot_usd into every leg). A book
 // whose legs are not equal-weight would need explicit weights here
 // rather than a silently wrong benchmark.
-func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64, legs map[string]BullHolderLeg) (*HolderBenchmark, string) {
+// holderBook is the set of legs the anchor has to cover. The producer
+// only fills `legs` once a tranche has, so before ARM the configured
+// universe is the only description of the book there is — and before ARM
+// is exactly when a misconfigured anchor sits unnoticed
+// (bot-strategy#963). Falls back to the open legs for a producer that
+// does not report the universe yet.
+func holderBook(b *BullHolderStatus) map[string]struct{} {
+	book := map[string]struct{}{}
+	if b == nil {
+		return book
+	}
+	for _, symbol := range b.ConfiguredSymbols {
+		if symbol != "" {
+			book[symbol] = struct{}{}
+		}
+	}
+	if len(book) > 0 {
+		return book
+	}
+	for symbol := range b.Legs {
+		book[symbol] = struct{}{}
+	}
+	return book
+}
+
+func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64, legs map[string]struct{}) (*HolderBenchmark, string) {
 	if investment == nil {
 		return nil, "Verified startup investment settings not configured"
 	}

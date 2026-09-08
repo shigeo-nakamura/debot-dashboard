@@ -165,7 +165,7 @@ func TestHolderBenchmarkNeverGuessesAMissingInput(t *testing.T) {
 
 func TestHolderBenchmarkRequiresTheAnchorToDescribeTheWholeBook(t *testing.T) {
 	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
-	legs := map[string]BullHolderLeg{"BTC": {}, "ETH": {}}
+	legs := map[string]struct{}{"BTC": {}, "ETH": {}}
 	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, legs); msg != "" {
 		t.Fatalf("matching book rejected: %q", msg)
 	}
@@ -182,13 +182,13 @@ func TestHolderBenchmarkRequiresTheAnchorToDescribeTheWholeBook(t *testing.T) {
 	}
 
 	// A leg the bot does not trade is the same problem mirrored.
-	if b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]BullHolderLeg{"BTC": {}, "SOL": {}}); b != nil || msg == "" {
+	if b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{"BTC": {}, "SOL": {}}); b != nil || msg == "" {
 		t.Fatalf("mismatched book accepted: %+v %q", b, msg)
 	}
 
 	// Before the bot arms it reports no legs, so there is nothing to
 	// check the anchor against and the benchmark still stands.
-	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]BullHolderLeg{}); msg != "" {
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{}); msg != "" {
 		t.Fatalf("benchmark suppressed for an unarmed bot: %q", msg)
 	}
 }
@@ -282,5 +282,45 @@ func TestHolderBenchmarkStartsFromTheFundedAccountNotTheDeclaredCapital(t *testi
 		if err := v.validate(); err == nil {
 			t.Fatalf("funded_usd %v accepted", bad)
 		}
+	}
+}
+
+func TestHolderBookPrefersTheConfiguredUniverseOverOpenLegs(t *testing.T) {
+	// Before ARM the producer reports its configured book but no legs.
+	// This is the window a misconfigured anchor sits unnoticed in, so it
+	// is exactly where the leg check has to work (bot-strategy#963).
+	preArm := &BullHolderStatus{ConfiguredSymbols: []string{"BTC", "ETH"}}
+	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, holderBook(preArm)); msg != "" {
+		t.Fatalf("matching pre-ARM book rejected: %q", msg)
+	}
+	short := anchoredInvestment()
+	short.Anchor.Assets = short.Anchor.Assets[:1]
+	if _, msg := holderBenchmarkFrom(short, marks, holderBook(preArm)); msg == "" {
+		t.Fatal("a one-leg anchor passed against a two-leg configured book")
+	}
+
+	// The configured universe wins over the legs that happen to be open,
+	// so a half-deployed book does not narrow what the anchor must cover.
+	half := &BullHolderStatus{
+		ConfiguredSymbols: []string{"BTC", "ETH"},
+		Legs:              map[string]BullHolderLeg{"BTC": {}},
+	}
+	if _, msg := holderBenchmarkFrom(short, marks, holderBook(half)); msg == "" {
+		t.Fatal("a one-leg anchor passed against a partially deployed two-leg book")
+	}
+
+	// A producer that does not report the universe yet keeps the old
+	// behaviour: check against whatever legs are open.
+	legacy := &BullHolderStatus{Legs: map[string]BullHolderLeg{"BTC": {}, "ETH": {}}}
+	if got := len(holderBook(legacy)); got != 2 {
+		t.Fatalf("legacy book size = %d, want 2", got)
+	}
+	if got := len(holderBook(&BullHolderStatus{})); got != 0 {
+		t.Fatalf("empty book size = %d, want 0", got)
+	}
+	// Blank entries are not a leg the anchor has to name.
+	if got := len(holderBook(&BullHolderStatus{ConfiguredSymbols: []string{"BTC", ""}})); got != 1 {
+		t.Fatalf("book size = %d, want 1", got)
 	}
 }

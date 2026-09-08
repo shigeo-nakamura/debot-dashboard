@@ -64,6 +64,11 @@ type BullHolderStatus struct {
 	TrancheSpotUSD    float64                  `json:"tranche_spot_usd"`
 	TranchePerpUSD    float64                  `json:"tranche_perp_usd"`
 	LastTrancheDate   *string                  `json:"last_tranche_date"`
+	// ConfiguredSymbols is the book the bot is configured to trade, which
+	// Legs only describes once a tranche has filled. The benchmark's leg
+	// check uses it so a misconfigured anchor is caught before ARM, the
+	// window where it is most likely to sit unnoticed (bot-strategy#963).
+	ConfiguredSymbols []string                 `json:"configured_symbols"`
 	Legs              map[string]BullHolderLeg `json:"legs"`
 	Pending           map[string]bool          `json:"pending"`
 	PendingAdd        *uint32                  `json:"pending_add"`
@@ -174,7 +179,7 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	// Same rule for the benchmark: clear anything the payload carried
 	// before deriving it here from the verified snapshot and public marks.
 	b.Benchmark, b.BenchmarkError = nil, ""
-	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, b.Legs)
+	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, holderBook(b))
 	b.UnrealizedPnL = sumHolderPnL(b.HL, b.Lighter)
 	// Clear any value a future producer might supply before deriving the total.
 	b.TotalEquity = nil
