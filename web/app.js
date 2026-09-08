@@ -325,18 +325,29 @@ const subsidyAggregateStats = (items) => {
       cost += targetCost;
       costCount += 1;
     }
-    if (!kpi || !data.subsidy || !Number.isFinite(data.subsidy.units_total)) return;
+    if (!kpi) return;
     const unit = kpi.unit || "unit";
+    // A same-unit target that priced its cost but cannot yet count its
+    // units would otherwise drop out of the unit row entirely, leaving a
+    // ratio that looks complete but divides one target's cost by the
+    // other's units (Codex, PR #38). It is counted, and it withholds the
+    // ratio instead.
+    const counted = data.subsidy && Number.isFinite(data.subsidy.units_total);
+    if (!data.subsidy) return;
     // Key on the same normalization the server matches units by
     // (case-insensitive, trimmed), or two targets configured "points"
     // and "Points" would be accepted as the same unit there and split
     // into two uncombinable rows here (Codex, PR #38). The first
     // spelling seen is kept as the label.
     const key = unit.trim().toLowerCase();
-    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, costKnown: true };
-    entry.units += Number(data.subsidy.units_total);
+    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, complete: true };
+    if (counted) {
+      entry.units += Number(data.subsidy.units_total);
+    } else {
+      entry.complete = false;
+    }
     if (targetCost === null) {
-      entry.costKnown = false;
+      entry.complete = false;
     } else {
       entry.cost += targetCost;
     }
@@ -351,10 +362,16 @@ const subsidyAggregateStats = (items) => {
     },
   ];
   for (const entry of byUnit.values()) {
-    stats.push({ label: `Units (${entry.unit})`, value: formatUnits(entry.units, entry.unit) });
+    stats.push({
+      label: `Units (${entry.unit})`,
+      value: entry.complete ? formatUnits(entry.units, entry.unit) : `${formatUnits(entry.units, entry.unit)} (partial)`,
+    });
     stats.push({
       label: `Cost / ${entry.unit}`,
-      value: entry.costKnown ? formatCostPerUnit(entry.cost, entry.units, entry.unit) : "-",
+      value: entry.complete ? formatCostPerUnit(entry.cost, entry.units, entry.unit) : "-",
+      title: entry.complete
+        ? undefined
+        : "Withheld: a target on this unit is reporting a cost without its units, so the denominator would not cover the numerator.",
     });
   }
   return stats;
