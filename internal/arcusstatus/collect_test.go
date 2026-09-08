@@ -279,3 +279,41 @@ func TestRiskWindowAndActiveExecutionTimestamps(t *testing.T) {
 		})
 	}
 }
+
+// The risk limits compare against a floored loss, so cumulative_loss_usd
+// is zero for a run that is ahead. A cost-per-unit KPI divides by that
+// figure, and reporting zero cost for a profitable run is not the same
+// statement as reporting a negative one (bot-strategy#957).
+func TestCumulativeCostKeepsItsSignWhileTheLossStaysFloored(t *testing.T) {
+	cp := checkpoint{}
+	cp.Config.Pair.A = "SPY"
+	cp.Config.Pair.B = "QQQ"
+	cp.Config.Mode = "live"
+	cp.State.Observation = "2026-09-05T12:00:00Z"
+	cp.State.DailyDay = "2026-09-05"
+	cp.State.PriceA = "10"
+	cp.State.PriceB = "10"
+	cp.State.InitialEquity = "100"
+	cp.State.InitialBasket = basket{A: "5", B: "5"}
+	cp.State.DailyBasket = basket{A: "5", B: "5"}
+
+	ahead := &Status{}
+	cp.State.Inventory = basket{A: "6", B: "5"} // 110 held against a 100 benchmark
+	ahead.readCheckpoint(cp)
+	if ahead.CumulativeLossUSD == nil || *ahead.CumulativeLossUSD != 0 {
+		t.Fatalf("loss = %v, want the floored 0", ahead.CumulativeLossUSD)
+	}
+	if ahead.CumulativeCostUSD == nil || *ahead.CumulativeCostUSD != -10 {
+		t.Fatalf("cost = %v, want -10", ahead.CumulativeCostUSD)
+	}
+
+	behind := &Status{}
+	cp.State.Inventory = basket{A: "4", B: "5"} // 90 held against a 100 benchmark
+	behind.readCheckpoint(cp)
+	if behind.CumulativeLossUSD == nil || *behind.CumulativeLossUSD != 10 {
+		t.Fatalf("loss = %v, want 10", behind.CumulativeLossUSD)
+	}
+	if behind.CumulativeCostUSD == nil || *behind.CumulativeCostUSD != 10 {
+		t.Fatalf("cost = %v, want 10", behind.CumulativeCostUSD)
+	}
+}

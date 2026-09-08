@@ -25,44 +25,51 @@ type Halt struct {
 }
 
 type Status struct {
-	ExportedAt             string      `json:"exported_at"`
-	Healthy                bool        `json:"healthy"`
-	HealthReasons          []string    `json:"health_reasons"`
-	Pair                   string      `json:"pair"`
-	Mode                   string      `json:"mode"`
-	Sequence               uint64      `json:"sequence"`
-	LastTickAt             string      `json:"last_tick_at"`
-	TickOutcome            string      `json:"tick_outcome"`
-	ServiceResult          string      `json:"service_result"`
-	ExitCode               *int        `json:"exit_code"`
-	TimerActive            *bool       `json:"timer_active"`
-	TimerEnabled           *bool       `json:"timer_enabled"`
-	LastObservationAt      string      `json:"last_observation_at"`
-	Decision               string      `json:"decision"`
-	DecisionAt             string      `json:"decision_at"`
-	DecisionPending        bool        `json:"decision_pending"`
-	HoldCode               string      `json:"hold_code"`
-	ZScore                 *float64    `json:"z_score"`
-	QuoteReceivedAt        string      `json:"quote_received_at"`
-	Regime                 string      `json:"regime"`
-	LastRotationAt         string      `json:"last_rotation_at"`
-	RotatedQuantity        *float64    `json:"rotated_quantity"`
-	Inventory              []Inventory `json:"inventory"`
-	EquityUSD              *float64    `json:"equity_usd"`
-	DailyBaselineDay       string      `json:"daily_baseline_day"`
-	DailyLossUSD           *float64    `json:"daily_loss_usd"`
-	CumulativeLossUSD      *float64    `json:"cumulative_loss_usd"`
-	InventoryDrawdownUSD   *float64    `json:"inventory_drawdown_usd"`
-	DailyLossLimitUSD      *float64    `json:"daily_loss_limit_usd"`
-	CumulativeLossLimitUSD *float64    `json:"cumulative_loss_limit_usd"`
-	RiskHalt               *Halt       `json:"risk_halt"`
-	BudgetDay              string      `json:"budget_day"`
-	DailyBudgetUsed        *int        `json:"daily_budget_used"`
-	MaxSwapsPerDay         *int        `json:"max_swaps_per_day"`
-	ActiveExecutionPhase   string      `json:"active_execution_phase"`
-	LastSwapAt             string      `json:"last_swap_at"`
-	GasBalanceETH          *float64    `json:"gas_balance_eth"`
-	GasObservedAt          string      `json:"gas_observed_at"`
+	ExportedAt        string      `json:"exported_at"`
+	Healthy           bool        `json:"healthy"`
+	HealthReasons     []string    `json:"health_reasons"`
+	Pair              string      `json:"pair"`
+	Mode              string      `json:"mode"`
+	Sequence          uint64      `json:"sequence"`
+	LastTickAt        string      `json:"last_tick_at"`
+	TickOutcome       string      `json:"tick_outcome"`
+	ServiceResult     string      `json:"service_result"`
+	ExitCode          *int        `json:"exit_code"`
+	TimerActive       *bool       `json:"timer_active"`
+	TimerEnabled      *bool       `json:"timer_enabled"`
+	LastObservationAt string      `json:"last_observation_at"`
+	Decision          string      `json:"decision"`
+	DecisionAt        string      `json:"decision_at"`
+	DecisionPending   bool        `json:"decision_pending"`
+	HoldCode          string      `json:"hold_code"`
+	ZScore            *float64    `json:"z_score"`
+	QuoteReceivedAt   string      `json:"quote_received_at"`
+	Regime            string      `json:"regime"`
+	LastRotationAt    string      `json:"last_rotation_at"`
+	RotatedQuantity   *float64    `json:"rotated_quantity"`
+	Inventory         []Inventory `json:"inventory"`
+	EquityUSD         *float64    `json:"equity_usd"`
+	DailyBaselineDay  string      `json:"daily_baseline_day"`
+	DailyLossUSD      *float64    `json:"daily_loss_usd"`
+	CumulativeLossUSD *float64    `json:"cumulative_loss_usd"`
+	// CumulativeCostUSD is the same comparison without the floor at zero:
+	// the price-neutral initial basket's current value minus current
+	// equity, so a run that came out ahead reports a negative cost. The
+	// floored CumulativeLossUSD is what the risk limits are evaluated
+	// against and is kept unchanged; this one is what a cost-per-unit KPI
+	// divides (bot-strategy#957).
+	CumulativeCostUSD      *float64 `json:"cumulative_cost_usd"`
+	InventoryDrawdownUSD   *float64 `json:"inventory_drawdown_usd"`
+	DailyLossLimitUSD      *float64 `json:"daily_loss_limit_usd"`
+	CumulativeLossLimitUSD *float64 `json:"cumulative_loss_limit_usd"`
+	RiskHalt               *Halt    `json:"risk_halt"`
+	BudgetDay              string   `json:"budget_day"`
+	DailyBudgetUsed        *int     `json:"daily_budget_used"`
+	MaxSwapsPerDay         *int     `json:"max_swaps_per_day"`
+	ActiveExecutionPhase   string   `json:"active_execution_phase"`
+	LastSwapAt             string   `json:"last_swap_at"`
+	GasBalanceETH          *float64 `json:"gas_balance_eth"`
+	GasObservedAt          string   `json:"gas_observed_at"`
 }
 
 type Payload struct {

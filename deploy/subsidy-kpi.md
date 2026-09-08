@@ -55,6 +55,11 @@ never as a cost per unit.
 }
 ```
 
+`as_of_ts` is when the ledger itself was written. The card ages it separately
+and says so past two days: the ledger is a daily artifact while the status
+object refreshes every minute, so without its own timestamp a ledger that
+stopped days ago reads as current under the card's fresh "Last update".
+
 Costs are **positive when money was given up**, so cost per unit reads as a
 price paid; a bot that came out ahead reports a negative cost. `unit` must
 match the target's configured `subsidy.unit` (case-insensitively) or the whole
@@ -64,8 +69,12 @@ wrong number presented as a measurement.
 Until a bot reports `cost_total_usd`, the cumulative cost falls back to the
 bot's own net result, in the right direction:
 
-- Arcus: `cumulative_loss_usd`, which values the initial basket at current
-  prices and is therefore already price-neutral.
+- Arcus: `cumulative_cost_usd`, which values the initial basket at current
+  prices and is therefore already price-neutral. The exporter emits it
+  alongside the existing `cumulative_loss_usd`, which is floored at zero
+  because the risk limits compare against it — dividing that floored figure
+  would report a cost of exactly zero for a run that came out ahead. An
+  exporter predating the signed field falls back to the floored one.
 - pairtrade-shaped bots (Robinhood): `-trade_stats.pnl`, the lifetime result
   net of the fees and slippage that make up the cost.
 

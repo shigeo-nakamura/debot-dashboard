@@ -589,6 +589,7 @@ const createCard = (key) => {
         <div class="row"><span data-field="subsidy-units-label">Units earned</span><strong data-field="subsidy-units"></strong></div>
         <div class="row"><span>Cumulative cost</span><strong data-field="subsidy-cost"></strong></div>
         <div class="row"><span>Imputed value</span><strong data-field="subsidy-value"></strong></div>
+        <div class="row"><span>Ledger written</span><strong data-field="subsidy-as-of"></strong></div>
         <div class="benchmark-note" data-field="subsidy-note" hidden></div>
       </section>
       <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
@@ -1421,6 +1422,14 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
 const subsidyCostFallback = (data) => {
   if (!data) return null;
   if (data.arcus) {
+    // cumulative_cost_usd keeps its sign; cumulative_loss_usd is floored
+    // at zero because the risk limits compare against it, so a run that
+    // came out ahead would report a cost of exactly zero rather than a
+    // negative one (Codex, PR #38). Fall back to the floored figure only
+    // for an exporter that predates the signed field.
+    if (Number.isFinite(data.arcus.cumulative_cost_usd)) {
+      return Number(data.arcus.cumulative_cost_usd);
+    }
     return Number.isFinite(data.arcus.cumulative_loss_usd) ? Number(data.arcus.cumulative_loss_usd) : null;
   }
   if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
@@ -1432,6 +1441,11 @@ const subsidyCostFallback = (data) => {
 // Cost per unit is a price, often a small one (fractions of a cent per
 // point), so it gets its own precision rather than the card's money
 // rounding, which would show every value as 0.0.
+// The ledger is a daily artifact, so two days without one is the first
+// unambiguous sign that it stopped rather than that today's has not
+// landed yet.
+const SUBSIDY_LEDGER_STALE_MS = 48 * 60 * 60 * 1000;
+
 const costPerUnit = (cost, units) => {
   if (!Number.isFinite(cost) || !Number.isFinite(units) || units === 0) return null;
   return cost / units;
@@ -1505,14 +1519,27 @@ const renderSubsidyPanel = (card, target, data) => {
     }
   }
 
+  // The ledger is written daily, independently of the status object the
+  // card's "Last update" age describes. Without its own timestamp a
+  // stalled ledger reads as current under a freshly-refreshed status
+  // (Codex, PR #38).
+  const asOf = units && Number.isFinite(units.as_of_ts) ? Number(units.as_of_ts) : null;
+  const asOfAgeMs = asOf === null ? null : Date.now() - asOf * 1000;
+  const ledgerStale = asOfAgeMs !== null && asOfAgeMs > SUBSIDY_LEDGER_STALE_MS;
+  setRow("subsidy-as-of", asOf === null ? "-" : formatDateWithAge(new Date(asOf * 1000).toISOString()));
+
   const noteEl = card.querySelector('[data-field="subsidy-note"]');
   if (noteEl) {
     const note =
       unitsTotal === null
         ? "Units are not reported yet — the daily subsidy ledger lands with bot-strategy#938. Cost is shown from the bot's own net result."
-        : units7d === null
-          ? "The rolling 7-day window comes from the bot's daily ledger and is not being reported yet."
-          : "";
+        : ledgerStale
+          ? `The subsidy ledger has not been written for ${formatAge(asOfAgeMs)}; the units and costs above describe that older window, not the status timestamp on this card.`
+          : asOf === null
+            ? "The bot's subsidy ledger does not report when it was written, so its age cannot be checked against the card's own freshness."
+            : units7d === null
+              ? "The rolling 7-day window comes from the bot's daily ledger and is not being reported yet."
+              : "";
     noteEl.textContent = note;
     noteEl.hidden = note === "";
   }

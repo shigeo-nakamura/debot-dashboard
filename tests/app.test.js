@@ -1121,7 +1121,14 @@ test("subsidy card leads with cost per unit and never manufactures a denominator
     bucket: "subsidy",
     subsidy_kpi: { unit: "points", imputed_unit_value_usd: 0.05, value_source_date: "2026-09-08", stale: false },
     status: {
-      subsidy: { unit: "points", units_total: 20000, units_7d: 1000, cost_total_usd: 210, cost_7d_usd: 14 },
+      subsidy: {
+        unit: "points",
+        units_total: 20000,
+        units_7d: 1000,
+        cost_total_usd: 210,
+        cost_7d_usd: 14,
+        as_of_ts: Math.floor(Date.now() / 1000) - 3600,
+      },
       trade_stats: { pnl: -180 },
     },
   };
@@ -1155,6 +1162,35 @@ test("subsidy card leads with cost per unit and never manufactures a denominator
   assert.equal(other.querySelector('[data-field="subsidy-panel"]').hidden, true);
 });
 
+test("subsidy card ages the ledger separately from the status object", () => {
+  const kpi = { unit: "points", stale: false };
+  const fresh = benchmarkCard();
+  const now = Math.floor(Date.now() / 1000);
+  context.__test.renderSubsidyPanel(fresh, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: now - 3600 },
+  });
+  assert.notEqual(fresh.text("subsidy-as-of"), "-");
+  assert.equal(fresh.querySelector('[data-field="subsidy-note"]').hidden, true);
+
+  // The status object refreshes every minute; the ledger is daily. A
+  // ledger that stopped three days ago still renders units and costs,
+  // and without its own age they read as current.
+  const stalled = benchmarkCard();
+  context.__test.renderSubsidyPanel(stalled, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: now - 3 * 86400 },
+  });
+  assert.match(stalled.text("subsidy-note"), /has not been written/);
+
+  // A ledger with no timestamp cannot be aged at all, which is its own
+  // thing to say rather than silently passing as fresh.
+  const undated = benchmarkCard();
+  context.__test.renderSubsidyPanel(undated, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1 },
+  });
+  assert.equal(undated.text("subsidy-as-of"), "-");
+  assert.match(undated.text("subsidy-note"), /does not report when it was written/);
+});
+
 test("a program change marks the KPI stale on the card until it is reviewed", () => {
   const card = benchmarkCard();
   context.__test.renderSubsidyPanel(
@@ -1179,6 +1215,13 @@ test("cost falls back to the bot's own net result, in the right direction", () =
   // Arcus values its initial basket at current prices, so this is
   // already the price paid rather than a price move.
   assert.equal(context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 42 } }), 42);
+  // cumulative_loss_usd is floored at zero for the risk limits, so an
+  // Arcus run that came out ahead would report a cost of exactly zero.
+  // The signed field wins wherever the exporter provides it.
+  assert.equal(
+    context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 0, cumulative_cost_usd: -12 } }),
+    -12,
+  );
   // A losing subsidy bot has a positive cost; a bot that came out ahead
   // has a negative one.
   assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: -180 } }), 180);
