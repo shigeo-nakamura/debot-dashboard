@@ -71,6 +71,18 @@ type BullHolderStatus struct {
 	HL                HolderAccount            `json:"hyperliquid"`
 	Lighter           HolderAccount            `json:"lighter"`
 	TotalEquity       *float64                 `json:"total_equity_usdc"`
+	// Cumulative funding paid/received and fees paid over the whole
+	// cycle, as reported by the producer. Pointers so a producer that
+	// does not emit them yet renders "-" instead of a misleading $0.00 —
+	// a β bot's carry cost is one of the four numbers its benchmark
+	// comparison needs (bot-strategy#954 §4.1), so an absent figure must
+	// not read as "no cost". bot-strategy#955.
+	CumFunding *float64 `json:"cum_funding_usdc"`
+	CumFees    *float64 `json:"cum_fees_usdc"`
+	// Benchmark is derived by the dashboard, never by the producer: see
+	// holderBenchmarkFrom. BenchmarkError explains why it is absent.
+	Benchmark      *HolderBenchmark `json:"benchmark"`
+	BenchmarkError string           `json:"benchmark_error,omitempty"`
 }
 type BullHolderLeg struct {
 	SpotSize      float64  `json:"spot_size"`
@@ -152,12 +164,17 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
+	var marks map[string]float64
 	wg.Add(2)
-	go func() { defer wg.Done(); b.HL = fetchHLSpot(ctx, client, target.BullHolder.HLAddress) }()
+	go func() { defer wg.Done(); b.HL, marks = fetchHLSpot(ctx, client, target.BullHolder.HLAddress) }()
 	go func() { defer wg.Done(); b.Lighter = fetchLighterHolder(ctx, client, target.BullHolder.LighterIndex) }()
 	wg.Wait()
 	// Never trust derived account/budget values supplied by the producer.
 	b.Investment, b.InvestmentError = verifiedHolderInvestment(target.BullHolder.Investment, b.ConfigFP, s.TS)
+	// Same rule for the benchmark: clear anything the payload carried
+	// before deriving it here from the verified snapshot and public marks.
+	b.Benchmark, b.BenchmarkError = nil, ""
+	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks)
 	b.UnrealizedPnL = sumHolderPnL(b.HL, b.Lighter)
 	// Clear any value a future producer might supply before deriving the total.
 	b.TotalEquity = nil
@@ -242,33 +259,17 @@ func holderJSON(ctx context.Context, client *http.Client, url string, body any, 
 
 const hlInfoURL = "https://api.hyperliquid.xyz/info"
 
-func fetchHLSpot(ctx context.Context, client *http.Client, address string) HolderAccount {
+// fetchHLSpot returns the account view plus every USDC-quoted spot mark
+// keyed by token name. The marks are read whether or not an account is
+// configured (and whether or not it holds the asset), because the buy &
+// hold benchmark has to be priced even when the bot is in DRY_RUN and
+// owns nothing — see holderBenchmarkFrom.
+func fetchHLSpot(ctx context.Context, client *http.Client, address string) (HolderAccount, map[string]float64) {
 	a := HolderAccount{}
-	if address == "" {
-		a.Error = "Hyperliquid account not configured"
-		return a
-	}
-	var balances struct {
-		Balances *[]struct {
-			Coin     string `json:"coin"`
-			Token    int    `json:"token"`
-			Total    string `json:"total"`
-			Hold     string `json:"hold"`
-			EntryNtl string `json:"entryNtl"`
-		} `json:"balances"`
-	}
-	if err := holderJSON(ctx, client, hlInfoURL, map[string]string{"type": "spotClearinghouseState", "user": address}, &balances); err != nil {
-		a.Error = err.Error()
-		return a
-	}
-	if balances.Balances == nil {
-		a.Error = "Missing spot balances"
-		return a
-	}
 	var raw []json.RawMessage
 	if err := holderJSON(ctx, client, hlInfoURL, map[string]string{"type": "spotMetaAndAssetCtxs"}, &raw); err != nil {
 		a.Error = err.Error()
-		return a
+		return a, nil
 	}
 	var meta struct {
 		Tokens []struct {
@@ -286,7 +287,7 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 	}
 	if len(raw) != 2 || json.Unmarshal(raw[0], &meta) != nil || json.Unmarshal(raw[1], &prices) != nil {
 		a.Error = "Invalid spot price metadata"
-		return a
+		return a, nil
 	}
 	usdcID := -1
 	names := map[int]string{}
@@ -298,9 +299,10 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 	}
 	if usdcID < 0 {
 		a.Error = "USDC metadata unavailable"
-		return a
+		return a, nil
 	}
 	marks := map[int]float64{usdcID: 1}
+	bySymbol := map[string]float64{"USDC": 1}
 	// Asset contexts may include delisted/sparse markets and need not have
 	// the same length/order as universe. Join by canonical pair name.
 	marketPrices := map[string]string{}
@@ -313,8 +315,30 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 		if len(pair.Tokens) == 2 && pair.Tokens[1] == usdcID {
 			if mark, err := number(marketPrices[pair.Name]); err == nil && mark > 0 {
 				marks[pair.Tokens[0]] = mark
+				bySymbol[names[pair.Tokens[0]]] = mark
 			}
 		}
+	}
+	if address == "" {
+		a.Error = "Hyperliquid account not configured"
+		return a, bySymbol
+	}
+	var balances struct {
+		Balances *[]struct {
+			Coin     string `json:"coin"`
+			Token    int    `json:"token"`
+			Total    string `json:"total"`
+			Hold     string `json:"hold"`
+			EntryNtl string `json:"entryNtl"`
+		} `json:"balances"`
+	}
+	if err := holderJSON(ctx, client, hlInfoURL, map[string]string{"type": "spotClearinghouseState", "user": address}, &balances); err != nil {
+		a.Error = err.Error()
+		return a, bySymbol
+	}
+	if balances.Balances == nil {
+		a.Error = "Missing spot balances"
+		return a, bySymbol
 	}
 	usdc, available, equity := 0.0, 0.0, 0.0
 	complete := true
@@ -322,13 +346,13 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 		size, err := number(balance.Total)
 		if err != nil || names[balance.Token] != balance.Coin {
 			a.Error = "Invalid spot balance"
-			return a
+			return a, bySymbol
 		}
 		if balance.Token == usdcID {
 			hold, err := number(balance.Hold)
 			if err != nil {
 				a.Error = "Invalid USDC hold"
-				return a
+				return a, bySymbol
 			}
 			usdc = size
 			available = size - hold
@@ -365,7 +389,7 @@ func fetchHLSpot(ctx context.Context, client *http.Client, address string) Holde
 	now := time.Now().Unix()
 	a.ObservedAt = &now
 	setHolderAccountPnL(&a)
-	return a
+	return a, bySymbol
 }
 func fetchLighterHolder(ctx context.Context, client *http.Client, index string) HolderAccount {
 	a := HolderAccount{}
