@@ -67,6 +67,68 @@ Update the verified snapshot when a later authorized bot configuration rollout
 changes the fingerprint. This feature does not need a bot restart or any bot
 code/configuration change; only dashboard deployment and its config reload.
 
+### Buy & hold benchmark (bot-strategy#955)
+
+A β bot is judged against buying the same exposure as spot and holding it, not
+against zero (`docs/return-source-taxonomy.md` §4.1 in bot-strategy). The card
+renders that comparison from an optional anchor inside the same verified
+snapshot:
+
+```yaml
+investment:
+  config_fp: "000000000000"
+  equity_usd: 1000
+  spot_fraction: 0.90
+  perp_fraction: 0.45
+  anchor:
+    ts: 1757203200 # when the capital was deployed (epoch seconds)
+    assets:
+      - symbol: BTC
+        spot_symbol: UBTC # Hyperliquid spot token used for the current price
+        price_usd: 111000 # BTC price at `ts`
+      - symbol: ETH
+        spot_symbol: UETH
+        price_usd: 4300
+```
+
+The anchor must list every leg the bot trades. The whole spot allocation is
+split across the legs it does list, so an anchor missing one spends that leg's
+budget on the others — not a partial benchmark but a different portfolio,
+beating or losing to the bot by the spread between the legs. The dashboard
+compares the anchor's symbols against the producer's reported `legs` and
+suppresses the benchmark on a mismatch; before the bot arms it reports no legs,
+and the benchmark stands.
+
+Verify `ts` and each `price_usd` the same way as the rest of the snapshot, and
+against the same `config_fp`: a fingerprint mismatch hides the benchmark along
+with the budget amounts. `spot_symbol` defaults to `symbol` and is only needed
+where the venue's spot token differs (BTC → `UBTC`, ETH → `UETH`).
+
+The benchmark spends `equity_usd × spot_fraction` at the anchor, split equally
+by USD across the legs (matching how the bot deploys the same
+`tranche_spot_usd` into each leg), and leaves the remainder in cash. Both sides
+of the comparison therefore start at `equity_usd`; the bot's leverage and hedge
+are what the comparison is about, so the benchmark takes none of them. It is
+priced from the same public `spotMetaAndAssetCtxs` marks the card already reads,
+which are now fetched whether or not an account is configured — a DRY_RUN bot
+owns nothing, and its benchmark still has to be priced. A leg the marks cannot
+price suppresses the whole benchmark rather than dropping that leg, since a
+partial benchmark reads as the bot beating buy & hold.
+
+Four rows are shown. **Excess vs b&h** is current combined equity minus the
+benchmark, in USDC and percent. **Max DD** and **Calmar** are computed for both
+series over the same window, and that window is only as long as this page has
+been open: the bull-holder producer writes no equity history file, so a freshly
+loaded dashboard has no past to compare and both rows read "-" until enough
+samples accumulate (Calmar additionally needs ≥ 7 days, like the card's CAGR).
+**Funding + fees paid** comes from the producer's `cum_funding_usdc` /
+`cum_fees_usdc`; a producer that does not emit them yet renders "-", never
+`$0.00` — an absent carry cost must not read as no carry cost.
+
+The benchmark is derived by the dashboard and any `benchmark` field in the
+producer payload is discarded before it is computed, in the same way as the
+investment snapshot and the combined equity total.
+
 Displayed capital is `equity_usd`; spot allocation is capital × spot fraction;
 perp notional target is capital × perp fraction. They are NOT account balances,
 required margin, remaining tranche amounts, or an enforced investment cap.

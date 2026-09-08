@@ -202,6 +202,33 @@ body::after {
   color: var(--danger);
 }
 
+/* Buy & hold benchmark block on the β cards (bot-strategy#955). Framed
+   like a panel rather than folded into the plain row list, because it is
+   the comparison the bot is judged on, not one more attribute. */
+.benchmark-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.benchmark-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.benchmark-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
 /* Bucket badge on the card header. Muted by design: it is a label, not
    a state, so it must not compete with the status / halt pills. */
 .status-pill.bucket {

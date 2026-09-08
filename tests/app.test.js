@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -874,5 +874,238 @@ test("accumulator equity is the held balance, not its constant-zero pnl_total", 
   assert.equal(
     context.__test.snapshotEquityValue({ pnl_total: 0, accumulator: { total_equity_usdc: null } }),
     null,
+  );
+});
+
+// A card stub good enough for the benchmark renderer: it only ever
+// touches [data-field] leaves, and each must report what it was given.
+const benchmarkCard = () => {
+  const fields = new Map();
+  return {
+    fields,
+    querySelector(selector) {
+      if (!fields.has(selector)) {
+        fields.set(selector, {
+          textContent: "",
+          hidden: false,
+          title: "",
+          classList: { toggle() {}, add() {}, remove() {} },
+        });
+      }
+      return fields.get(selector);
+    },
+    text(name) {
+      return this.querySelector(`[data-field="${name}"]`).textContent;
+    },
+  };
+};
+
+// 1h apart so both series clear the 7-day CAGR gate used by Calmar.
+const series = (values, startMs = Date.UTC(2026, 0, 1)) =>
+  values.map((equity, i) => ({ ts: startMs + i * 24 * 60 * 60 * 1000, equity }));
+
+test("benchmark rows compare bot and buy & hold, and say nothing when the anchor is missing", () => {
+  const card = benchmarkCard();
+  const holder = {
+    total_equity_usdc: 1100,
+    benchmark: { anchor_ts: 1788000000, cost_usd: 900, cash_usd: 100, equity_usd: 1000 },
+    cum_funding_usdc: -12.5,
+    cum_fees_usdc: -2.5,
+  };
+  // Bot 1000 → 1100 with a dip to 950 (5% DD); benchmark 1000 → 1000
+  // with a dip to 800 (20% DD): the shallower-drawdown claim, visible.
+  const botHistory = series([1000, 950, 1100]);
+  const benchHistory = series([1000, 800, 1000]);
+  context.__test.renderHolderBenchmark(card, holder, 1100, botHistory, benchHistory);
+  assert.equal(card.text("holder-bench-excess"), "+100.0 USDC (10.0%)");
+  assert.equal(card.text("holder-bench-dd"), "5.0% / 20.0%");
+  assert.equal(card.text("holder-bench-costs"), "-15.0 USDC");
+  assert.equal(card.querySelector('[data-field="holder-bench-note"]').hidden, true);
+
+  // No anchor configured: every derived row goes to "-" and the card
+  // says why instead of quietly comparing against nothing.
+  const bare = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    bare,
+    { total_equity_usdc: 1100, benchmark: null, benchmark_error: "Buy & hold anchor not configured" },
+    1100,
+    botHistory,
+    [],
+  );
+  assert.equal(bare.text("holder-bench-excess"), "-");
+  assert.equal(bare.text("holder-bench-calmar"), "-");
+  assert.equal(bare.text("holder-bench-costs"), "-");
+  assert.equal(bare.text("holder-bench-note"), "Buy & hold anchor not configured");
+
+  // A target that had a benchmark and lost it (a producer config_fp
+  // change makes the snapshot unverifiable) keeps a cached benchmark
+  // series while its own equity keeps growing. Comparing them would put
+  // two windows with different ends side by side and show stale
+  // benchmark statistics next to the "unavailable" note.
+  const lost = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    lost,
+    { total_equity_usdc: 1100, benchmark: null, benchmark_error: "Startup investment snapshot does not match producer configuration" },
+    1100,
+    botHistory,
+    benchHistory,
+  );
+  assert.equal(lost.text("holder-bench-dd"), "5.0% / -");
+  assert.equal(lost.text("holder-bench-excess"), "-");
+  assert.equal(lost.text("holder-bench-note"), "Startup investment snapshot does not match producer configuration");
+  assert.equal(bare.querySelector('[data-field="holder-bench-note"]').hidden, false);
+});
+
+test("drawdown and Calmar are windowed ratios, not currency, and refuse to divide by nothing", () => {
+  assert.equal(context.__test.maxDrawdownPct(series([100, 80, 90])), 20);
+  // Monotonic series never drew down, so Calmar is undefined rather than
+  // infinitely good.
+  assert.equal(context.__test.maxDrawdownPct(series([100, 110])), 0);
+  assert.equal(context.__test.calmarRatio(series([100, 110])), null);
+  assert.equal(context.__test.maxDrawdownPct([]), null);
+  assert.equal(context.__test.maxDrawdownPct(series([100])), null);
+  // Under 7 days of history computeStats withholds CAGR, so Calmar
+  // cannot be computed even though the drawdown is known.
+  const short = [
+    { ts: Date.UTC(2026, 0, 1), equity: 100 },
+    { ts: Date.UTC(2026, 0, 2), equity: 80 },
+  ];
+  assert.equal(context.__test.maxDrawdownPct(short), 20);
+  assert.equal(context.__test.calmarRatio(short), null);
+
+  // Past the 7-day gate the ratio is real, and a deeper drawdown for the
+  // same end-to-end return scores worse — the whole point of ranking a β
+  // bot against buy & hold on Calmar rather than on return alone.
+  const shallow = series([100, 95, 100, 105, 105, 105, 105, 110, 121]);
+  const deep = series([100, 70, 100, 105, 105, 105, 105, 110, 121]);
+  const shallowCalmar = context.__test.calmarRatio(shallow);
+  const deepCalmar = context.__test.calmarRatio(deep);
+  assert.ok(Number.isFinite(shallowCalmar) && shallowCalmar > 0);
+  assert.ok(shallowCalmar > deepCalmar);
+});
+
+test("benchmark series is cached on the same timestamps as the equity series", () => {
+  const data = {
+    ts: 1788600000,
+    bull_holder: {
+      total_equity_usdc: 1100,
+      benchmark: { equity_usd: 1000 },
+      hyperliquid: { observed_at: 1788600060 },
+      lighter: { observed_at: 1788600120 },
+    },
+  };
+  const equityPoint = context.__test.snapshotToPoint(data);
+  const benchmarkPoint = context.__test.snapshotToBenchmarkPoint(data);
+  assert.equal(equityPoint.ts, 1788600120 * 1000);
+  assert.equal(benchmarkPoint.ts, equityPoint.ts);
+  assert.equal(benchmarkPoint.equity, 1000);
+  // No benchmark on the payload → no point, so the two series never
+  // drift onto different timestamps.
+  assert.equal(context.__test.snapshotToBenchmarkPoint({ bull_holder: { total_equity_usdc: 1100 } }), null);
+  assert.equal(context.__test.benchmarkEquityValue({ bull_holder: { benchmark: { equity_usd: null } } }), null);
+});
+
+test("a changed benchmark anchor restarts both series instead of splicing books", () => {
+  const key = "anchor-test";
+  const book = (anchorTs, equity, observedAt) => ({
+    ts: observedAt,
+    bull_holder: {
+      total_equity_usdc: 1000,
+      benchmark: { anchor_ts: anchorTs, cost_usd: 900, cash_usd: 100, equity_usd: equity },
+      hyperliquid: { observed_at: observedAt },
+      lighter: { observed_at: observedAt },
+    },
+  });
+  context.__test.updateBenchmarkCache(key, book(1000, 1000, 1_700_000_000));
+  context.__test.updateBenchmarkCache(key, book(1000, 1100, 1_700_000_060));
+  assert.equal(context.__test.benchmarkByKey.get(key).length, 2);
+  context.__test.historyByKey.set(key, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
+
+  // The first benchmark a page sees also restarts the equity series:
+  // points cached while the anchor was unconfigured reach back before
+  // the benchmark series starts, and comparing a long bot window against
+  // a short benchmark one overstates the bot's drawdown.
+  const firstKey = "first-benchmark";
+  context.__test.historyByKey.set(firstKey, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
+  context.__test.updateBenchmarkCache(firstKey, book(1000, 1000, 1_700_000_000));
+  assert.equal(context.__test.historyByKey.get(firstKey), undefined);
+
+  // A later rollout re-anchors the book under the same target key.
+  // Appending its values to the old book's series would show a jump that
+  // never happened, so both series restart together.
+  // Correcting an anchor price without touching its timestamp or the
+  // allocation is also a different book, and the old series must not
+  // carry into it.
+  const priced = context.__test.updateBenchmarkCache(key, {
+    ts: 1_700_000_090,
+    bull_holder: {
+      total_equity_usdc: 1000,
+      benchmark: {
+        anchor_ts: 1000,
+        cost_usd: 900,
+        cash_usd: 100,
+        equity_usd: 1050,
+        assets: [{ symbol: "BTC", anchor_price_usd: 51000 }],
+      },
+      hyperliquid: { observed_at: 1_700_000_090 },
+      lighter: { observed_at: 1_700_000_090 },
+    },
+  });
+  assert.equal(priced.length, 1);
+
+  const after = context.__test.updateBenchmarkCache(key, book(2000, 400, 1_700_000_120));
+  assert.equal(after.length, 1);
+  assert.equal(after[0].equity, 400);
+  assert.equal(context.__test.historyByKey.get(key), undefined);
+});
+
+test("drawdowns are compared only over observations both series share", () => {
+  const botHistory = series([1000, 950, 1100]);
+  // The benchmark kept being priced through an outage that stalled the
+  // bot's own equity: it carries a fourth sample the bot never recorded,
+  // and a 50% collapse inside it. Counting that tick on one side only
+  // would attribute an outage-period move to the benchmark alone.
+  const benchHistory = [
+    ...series([1000, 800, 1000]),
+    { ts: Date.UTC(2026, 0, 1) + 3 * 24 * 60 * 60 * 1000, equity: 500 },
+  ];
+  const card = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    card,
+    { total_equity_usdc: 1100, benchmark: { anchor_ts: 1, cost_usd: 900, cash_usd: 100, equity_usd: 1000 } },
+    1100,
+    botHistory,
+    benchHistory,
+  );
+  assert.equal(card.text("holder-bench-dd"), "5.0% / 20.0%");
+
+  // The current excess still needs both current values; the historical
+  // comparison over shared points stays valid without them.
+  const noEquity = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    noEquity,
+    { total_equity_usdc: null, benchmark: { anchor_ts: 1, cost_usd: 900, cash_usd: 100, equity_usd: 1000 } },
+    null,
+    botHistory,
+    benchHistory,
+  );
+  assert.equal(noEquity.text("holder-bench-excess"), "-");
+  assert.equal(noEquity.text("holder-bench-dd"), "5.0% / 20.0%");
+});
+
+test("beta aggregate sums excess only over targets that actually have a benchmark", () => {
+  const items = [
+    { target: { bucket: "beta", status: { bull_holder: { total_equity_usdc: 1100, benchmark: { equity_usd: 1000 } } } }, index: 0 },
+    // Anchor not configured: contributes its equity but no excess.
+    { target: { bucket: "beta", status: { accumulator: { total_equity_usdc: 500 } } }, index: 1 },
+  ];
+  const stats = context.__test.bucketAggregateStats("beta", items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Equity held").value, "1,600.0 USDC");
+  assert.equal(stat("vs buy & hold").value, "+100.0 USDC");
+  assert.match(stat("vs buy & hold").title, /1 of 2 targets/);
+  assert.equal(
+    context.__test.bucketAggregateStats("beta", [items[1]]).find((s) => s.label === "vs buy & hold").value,
+    "-",
   );
 });

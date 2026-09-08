@@ -78,6 +78,23 @@ targets:
 #        equity_usd: 1000
 #        spot_fraction: 0.90
 #        perp_fraction: 0.45
+#        # Buy & hold benchmark anchor (bot-strategy#955): when the
+#        # capital was deployed and what each leg cost then, both
+#        # verified against the same startup log as the rest of this
+#        # snapshot. Without it the benchmark rows render "-".
+#        # `price_usd` is the leg's price at `ts`; `spot_symbol` is the
+#        # Hyperliquid spot token the current price is read from and is
+#        # needed for wrapped assets (BTC → UBTC, ETH → UETH). Legs are
+#        # equal-weight by USD, matching how a tranche is deployed.
+#        anchor:
+#          ts: 1757203200
+#          assets:
+#            - symbol: BTC
+#              spot_symbol: UBTC
+#              price_usd: 111000
+#            - symbol: ETH
+#              spot_symbol: UETH
+#              price_usd: 4300
 # Use the dedicated funded account address/index, not an API signing wallet.
 # Empty identifiers show "not configured"; no signing keys are needed.
 # auth:

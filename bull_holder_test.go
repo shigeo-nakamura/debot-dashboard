@@ -125,12 +125,12 @@ func TestHolderPartialAccountsDontProduceMisleadingTotal(t *testing.T) {
 		t.Fatal("partial/mismatched account data treated as complete")
 	}
 	for _, balances := range []string{`{}`, `{"balances":[{"coin":"USDC","token":0,"total":"NaN","hold":"0"}]}`} {
-		if got := fetchHLSpot(context.Background(), holderClient(t, balances, holderLighter), "x"); got.Equity != nil || got.Error == "" {
+		if got, _ := fetchHLSpot(context.Background(), holderClient(t, balances, holderLighter), "x"); got.Equity != nil || got.Error == "" {
 			t.Fatal("invalid balance became zero")
 		}
 	}
 	unknown := `{"balances":[{"coin":"OTHER","token":222,"total":"2","hold":"0"}]}`
-	gotHL := fetchHLSpot(context.Background(), holderClient(t, unknown, holderLighter), "x")
+	gotHL, _ := fetchHLSpot(context.Background(), holderClient(t, unknown, holderLighter), "x")
 	if gotHL.Equity != nil || gotHL.Error == "" || len(gotHL.Holdings) != 1 {
 		t.Fatal("unpriced asset omitted from total without warning")
 	}
