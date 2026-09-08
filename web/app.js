@@ -231,11 +231,11 @@ const reconcileBucketOrder = () => {
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
 //
-// β is the only bucket with an aggregate today. The subsidy bucket's cost
-// per unit arrives with bot-strategy#957 and the α candidates' gate
-// progress with #958 — until then those buckets show their card count and
-// their benchmark line only, rather than a placeholder number.
+// The α candidates' gate progress arrives with bot-strategy#958; until
+// then that bucket shows its card count and its benchmark line only,
+// rather than a placeholder number.
 const bucketAggregateStats = (bucket, items) => {
+  if (bucket === "subsidy") return subsidyAggregateStats(items);
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
@@ -302,6 +302,103 @@ const bucketAggregateStats = (bucket, items) => {
           : "Excess over holding the same exposure as spot, from each target's verified startup anchor (bot-strategy#955).",
     },
   ];
+};
+
+// Costs sum across the bucket, but units do not: points and qualifying
+// activity notional are different things, so each unit gets its own
+// total and its own cost per unit. Only the targets reporting that unit
+// contribute to its cost, or the price per point would be inflated by
+// another bot's spending.
+const subsidyAggregateStats = (items) => {
+  let cost = 0;
+  let costCount = 0;
+  const byUnit = new Map();
+  items.forEach(({ target }) => {
+    const data = target.status;
+    const kpi = target.subsidy_kpi;
+    // A target that cannot be read, and one whose KPI the venue
+    // invalidated by changing the program, both still belong to the
+    // bucket. Skipping them outright leaves a ratio over the remaining
+    // targets presented as the bucket's own (Codex, PR #38/#40) — the
+    // same rule the β bucket already applies to its month-to-date
+    // figure. Register the unit as incomplete and move on.
+    if (!data || (kpi && kpi.stale)) {
+      if (kpi) {
+        const key = (kpi.unit || "unit").trim().toLowerCase();
+        const entry = byUnit.get(key) || { unit: kpi.unit || "unit", units: 0, cost: 0, counted: 0, complete: true };
+        entry.complete = false;
+        byUnit.set(key, entry);
+      }
+      return;
+    }
+    const reported = data.subsidy && Number.isFinite(data.subsidy.cost_total_usd)
+      ? Number(data.subsidy.cost_total_usd)
+      : null;
+    const targetCost = reported === null ? subsidyCostFallback(data) : reported;
+    if (targetCost !== null) {
+      cost += targetCost;
+      costCount += 1;
+    }
+    if (!kpi) return;
+    const unit = kpi.unit || "unit";
+    // A same-unit target that priced its cost but cannot yet count its
+    // units would otherwise drop out of the unit row entirely, leaving a
+    // ratio that looks complete but divides one target's cost by the
+    // other's units (Codex, PR #38). It is counted, and it withholds the
+    // ratio instead.
+    const counted = data.subsidy && Number.isFinite(data.subsidy.units_total);
+    // Key on the same normalization the server matches units by
+    // (case-insensitive, trimmed), or two targets configured "points"
+    // and "Points" would be accepted as the same unit there and split
+    // into two uncombinable rows here (Codex, PR #38). The first
+    // spelling seen is kept as the label.
+    // A configured target with no ledger at all is the same partial
+    // denominator as one with a ledger that cannot count units: its cost
+    // is in "Cost paid" either way, so it has to mark the unit's ratio
+    // incomplete rather than disappear from it (Codex, PR #38). This is
+    // the state every subsidy target is in until #938 ships, and the
+    // state one arm will be in while the other already has a ledger.
+    const key = unit.trim().toLowerCase();
+    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, counted: 0, complete: true };
+    if (counted) {
+      entry.units += Number(data.subsidy.units_total);
+      entry.counted += 1;
+    } else {
+      entry.complete = false;
+    }
+    if (targetCost === null) {
+      entry.complete = false;
+    } else {
+      entry.cost += targetCost;
+    }
+    byUnit.set(key, entry);
+  });
+  const stats = [
+    {
+      label: "Cost paid",
+      value: costCount > 0 ? formatUsdc(cost) : "-",
+      title:
+        "What this bucket has spent in fees, slippage and adverse selection to earn its subsidy. Negative PnL here is the price, not a loss to fix.",
+    },
+  ];
+  for (const entry of byUnit.values()) {
+    // No target on this unit is counting it yet, which is every subsidy
+    // target's state until bot-strategy#938 ships. A row of zeros would
+    // be noise; the unit reappears with the first ledger.
+    if (entry.counted === 0) continue;
+    stats.push({
+      label: `Units (${entry.unit})`,
+      value: entry.complete ? formatUnits(entry.units, entry.unit) : `${formatUnits(entry.units, entry.unit)} (partial)`,
+    });
+    stats.push({
+      label: `Cost / ${entry.unit}`,
+      value: entry.complete ? formatCostPerUnit(entry.cost, entry.units, entry.unit) : "-",
+      title: entry.complete
+        ? undefined
+        : "Withheld: a target on this unit is reporting a cost without its units, so the denominator would not cover the numerator.",
+    });
+  }
+  return stats;
 };
 
 const updateBucketAggregate = (group, bucket, items) => {
@@ -472,6 +569,7 @@ const createCard = (key) => {
         <span class="status-pill bucket" data-field="bucket"></span>
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
+        <span class="status-pill kpi-stale" data-field="kpi-stale" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
@@ -525,6 +623,16 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="benchmark-panel" data-field="subsidy-panel" hidden aria-label="Subsidy KPI">
+        <div class="benchmark-title" title="A subsidy bot buys points or qualifying activity with fees, slippage and adverse selection. Its PnL is the price paid, so it is judged on the price per unit, not on the PnL (bot-strategy#938, taxonomy §4.2).">Cost per unit of subsidy</div>
+        <div class="row"><span data-field="subsidy-cpu-7d-label">Cost / unit (7d)</span><strong data-field="subsidy-cpu-7d"></strong></div>
+        <div class="row"><span data-field="subsidy-cpu-total-label">Cost / unit (since start)</span><strong data-field="subsidy-cpu-total"></strong></div>
+        <div class="row"><span data-field="subsidy-units-label">Units earned</span><strong data-field="subsidy-units"></strong></div>
+        <div class="row"><span>Cumulative cost</span><strong data-field="subsidy-cost"></strong></div>
+        <div class="row"><span>Imputed value</span><strong data-field="subsidy-value"></strong></div>
+        <div class="row"><span>Ledger written</span><strong data-field="subsidy-as-of"></strong></div>
+        <div class="benchmark-note" data-field="subsidy-note" hidden></div>
+      </section>
       <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
         <div class="equity-headline">
           <div class="equity-headline-label">
@@ -592,7 +700,7 @@ const createCard = (key) => {
         <strong data-field="pnl-total"></strong>
       </div>
       <div class="kv">
-        <div>PnL today <span data-field="pnl-today"></span></div>
+        <div><span data-field="pnl-today-label">PnL today</span> <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
       </div>
       <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
@@ -956,6 +1064,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
     startedEl.textContent = formatStarted(target.service_started_at);
   }
   ageEl.textContent = ageText;
+  // Rendered before the per-shape branches below, which return early:
+  // the KPI panel is the headline for a subsidy bot whatever shape its
+  // status payload has (pairtrade-like for Robinhood, Arcus for Arcus).
+  renderSubsidyPanel(card, target, data);
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
@@ -992,6 +1104,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
       errorEl.textContent = "";
     }
     return;
+  }
+  // On a subsidy bot the daily PnL is the day's price paid, not a
+  // result to improve; the KPI panel above is what the bot is judged on
+  // (bot-strategy#957).
+  const pnlTodayLabelEl = card.querySelector('[data-field="pnl-today-label"]');
+  if (pnlTodayLabelEl) {
+    pnlTodayLabelEl.textContent = bucketOf(target) === "subsidy" ? "Cost today (PnL)" : "PnL today";
   }
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
@@ -1333,6 +1452,179 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
       : (b && b.benchmark_error) || "Buy & hold benchmark unavailable";
     noteEl.textContent = note;
     noteEl.hidden = note === "";
+  }
+};
+
+// Cumulative cost when the bot does not (yet) report one. Both fallbacks
+// are the bot's own net result read as a price: Arcus values its initial
+// basket at current prices, so cumulative_loss_usd is already
+// price-neutral, and a pairtrade-shaped bot's lifetime trade_stats.pnl
+// is net of the fees and slippage that make up the cost.
+const subsidyCostFallback = (data) => {
+  if (!data) return null;
+  if (data.arcus) {
+    // cumulative_cost_usd keeps its sign; cumulative_loss_usd is floored
+    // at zero because the risk limits compare against it, so a run that
+    // came out ahead would report a cost of exactly zero rather than a
+    // negative one (Codex, PR #38). Fall back to the floored figure only
+    // for an exporter that predates the signed field.
+    if (Number.isFinite(data.arcus.cumulative_cost_usd)) {
+      return Number(data.arcus.cumulative_cost_usd);
+    }
+    return Number.isFinite(data.arcus.cumulative_loss_usd) ? Number(data.arcus.cumulative_loss_usd) : null;
+  }
+  if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
+    return -Number(data.trade_stats.pnl);
+  }
+  return null;
+};
+
+// Cost per unit is a price, often a small one (fractions of a cent per
+// point), so it gets its own precision rather than the card's money
+// rounding, which would show every value as 0.0.
+// The ledger is a daily artifact, so two days without one is the first
+// unambiguous sign that it stopped rather than that today's has not
+// landed yet.
+const SUBSIDY_LEDGER_STALE_MS = 48 * 60 * 60 * 1000;
+
+// Epoch seconds a running bot could have written: no earlier than this
+// project's first bot, no later than a day ahead of the reader's clock.
+const SUBSIDY_LEDGER_TS_MIN = Date.UTC(2024, 0, 1) / 1000;
+
+const subsidyLedgerTimestamp = (units) => {
+  if (!units || !Number.isFinite(units.as_of_ts)) return null;
+  const ts = Number(units.as_of_ts);
+  const max = Date.now() / 1000 + 86400;
+  return ts >= SUBSIDY_LEDGER_TS_MIN && ts <= max ? ts : null;
+};
+
+const costPerUnit = (cost, units) => {
+  if (!Number.isFinite(cost) || !Number.isFinite(units) || units === 0) return null;
+  return cost / units;
+};
+
+const formatCostPerUnit = (cost, units, unit) => {
+  const value = costPerUnit(cost, units);
+  if (value === null) return "-";
+  return `${groupedFixed(value, 4)} USDC / ${unit}`;
+};
+
+const formatUnits = (value, unit) =>
+  Number.isFinite(value) ? `${groupedFixed(value, 2)} ${unit}` : "-";
+
+// The subsidy KPI panel (bot-strategy#957). The denominator comes from
+// the bot's daily ledger (bot-strategy#938) and is absent until that
+// lands; the numerator can already be sourced today. Nothing here is
+// filled in from the other half: a cost with no units earned renders as
+// a cost, never as a cost per unit.
+const renderSubsidyPanel = (card, target, data) => {
+  const panel = card.querySelector('[data-field="subsidy-panel"]');
+  const staleEl = card.querySelector('[data-field="kpi-stale"]');
+  const kpi = target ? target.subsidy_kpi : null;
+  if (!panel) return;
+  if (!kpi) {
+    panel.hidden = true;
+    if (staleEl) {
+      staleEl.hidden = true;
+      staleEl.textContent = "";
+      staleEl.removeAttribute("title");
+    }
+    return;
+  }
+  panel.hidden = false;
+
+  const unit = kpi.unit || "unit";
+  const units = data && data.subsidy ? data.subsidy : null;
+  const unitsTotal = units && Number.isFinite(units.units_total) ? Number(units.units_total) : null;
+  const units7d = units && Number.isFinite(units.units_7d) ? Number(units.units_7d) : null;
+  const reportedCost = units && Number.isFinite(units.cost_total_usd) ? Number(units.cost_total_usd) : null;
+  const cost7d = units && Number.isFinite(units.cost_7d_usd) ? Number(units.cost_7d_usd) : null;
+  const costTotal = reportedCost === null ? subsidyCostFallback(data) : reportedCost;
+
+  const setRow = (field, text, signed) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    el.textContent = text;
+    if (signed !== undefined) applySignedClass(el, signed);
+  };
+
+  // The ratio needs both sides from the same window. The fallback cost is
+  // the bot's result as of now, while units come from the ledger's own
+  // as_of_ts, so dividing one by the other spreads fees accrued after the
+  // daily write over yesterday's units (Codex, PR #39). Only the ledger's
+  // own cost can be a numerator; the fallback still stands on its own as
+  // the cumulative cost below.
+  setRow("subsidy-cpu-7d", formatCostPerUnit(cost7d, units7d, unit));
+  setRow("subsidy-cpu-total", formatCostPerUnit(reportedCost, unitsTotal, unit));
+  setRow("subsidy-units", formatUnits(unitsTotal, unit));
+  // Cost is money given up, so it is not tinted green when it grows.
+  setRow("subsidy-cost", costTotal === null ? "-" : formatUsdc(costTotal));
+  const labelEl = card.querySelector('[data-field="subsidy-units-label"]');
+  if (labelEl) labelEl.textContent = `Units earned (${unit})`;
+
+  const valueEl = card.querySelector('[data-field="subsidy-value"]');
+  if (valueEl) {
+    const rate = Number.isFinite(kpi.imputed_unit_value_usd) ? Number(kpi.imputed_unit_value_usd) : null;
+    if (rate === null) {
+      valueEl.textContent = "-";
+      valueEl.title = "No payout assumption is configured. An unpriced subsidy is a legitimate state; the KPI still prices the cost.";
+    } else if (unitsTotal === null) {
+      valueEl.textContent = "-";
+      valueEl.title = `Assumed ${groupedFixed(rate, 4)} USDC per ${unit} as of ${kpi.value_source_date}, but no units are reported yet.`;
+    } else {
+      valueEl.textContent = `${formatUsdc(unitsTotal * rate)} (as of ${kpi.value_source_date})`;
+      valueEl.title = `Units earned × the operator's assumed ${groupedFixed(rate, 4)} USDC per ${unit}, sourced ${kpi.value_source_date}. An assumption, not a payout.`;
+    }
+  }
+
+  // The ledger is written daily, independently of the status object the
+  // card's "Last update" age describes. Without its own timestamp a
+  // stalled ledger reads as current under a freshly-refreshed status
+  // (Codex, PR #38).
+  // A producer can emit an out-of-range epoch that is still a valid
+  // int64 on the wire; new Date(...).toISOString() throws a RangeError on
+  // it and takes the whole render down with it (Codex, PR #38). Only
+  // timestamps a bot could plausibly have written are formatted.
+  const asOf = subsidyLedgerTimestamp(units);
+  const asOfAgeMs = asOf === null ? null : Date.now() - asOf * 1000;
+  const ledgerStale = asOfAgeMs !== null && asOfAgeMs > SUBSIDY_LEDGER_STALE_MS;
+  setRow("subsidy-as-of", asOf === null ? "-" : formatDateWithAge(new Date(asOf * 1000).toISOString()));
+
+  const noteEl = card.querySelector('[data-field="subsidy-note"]');
+  if (noteEl) {
+    const note =
+      unitsTotal === null
+        ? reportedCost === null
+          ? "Units are not reported yet — the daily subsidy ledger lands with bot-strategy#938. Cost is shown from the bot's own net result."
+          // The contract permits a ledger that prices the cost before it
+          // can count the units; saying the cost came from the fallback
+          // would misattribute it (Codex, PR #38).
+          : "The ledger reports cost but not units yet, so there is nothing to divide it by."
+        : reportedCost === null
+          ? "The ledger counts units but does not price them yet, so the cost below is the bot's own result as of now and cannot be divided by a denominator from the ledger's older window."
+        : ledgerStale
+          ? `The subsidy ledger has not been written for ${formatAge(asOfAgeMs)}; the units and costs above describe that older window, not the status timestamp on this card.`
+          : asOf === null
+            ? "The bot's subsidy ledger does not report when it was written, so its age cannot be checked against the card's own freshness."
+            : units7d === null
+              ? "The rolling 7-day window comes from the bot's daily ledger and is not being reported yet."
+              : "";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
+
+  if (staleEl) {
+    if (kpi.stale) {
+      staleEl.textContent = `KPI STALE since ${kpi.stale_since}`;
+      staleEl.title =
+        "The venue changed the subsidy program (points weights, activity rules) more recently than the KPI was re-evaluated. " +
+        "Numbers below describe the old program until an operator reviews it and updates kpi_reviewed_on.";
+      staleEl.hidden = false;
+    } else {
+      staleEl.hidden = true;
+      staleEl.textContent = "";
+      staleEl.removeAttribute("title");
+    }
   }
 };
 

@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -800,9 +800,13 @@ test("beta bucket totals held value across bot shapes and never sums across buck
   // Other buckets get their aggregates from their own issues (#957/#958);
   // until then they must render no numbers at all rather than a total
   // borrowed from another bucket.
-  assert.equal(context.__test.bucketAggregateStats("subsidy", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("alpha_candidate", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("unclassified", items).length, 0);
+  // β-shaped payloads carry no subsidy cost, so the subsidy aggregate
+  // reports nothing rather than borrowing their equity.
+  const asSubsidy = context.__test.bucketAggregateStats("subsidy", items);
+  assert.equal(asSubsidy.length, 1);
+  assert.equal(asSubsidy[0].value, "-");
 });
 
 test("MTD stays unavailable until a recorded month-start baseline exists", () => {
@@ -889,6 +893,7 @@ const benchmarkCard = () => {
           textContent: "",
           hidden: false,
           title: "",
+          removeAttribute() { this.title = ""; },
           classList: { toggle() {}, add() {}, remove() {} },
         });
       }
@@ -1108,4 +1113,298 @@ test("beta aggregate sums excess only over targets that actually have a benchmar
     context.__test.bucketAggregateStats("beta", [items[1]]).find((s) => s.label === "vs buy & hold").value,
     "-",
   );
+});
+
+test("subsidy card leads with cost per unit and never manufactures a denominator", () => {
+  const card = benchmarkCard();
+  const target = {
+    bucket: "subsidy",
+    subsidy_kpi: { unit: "points", imputed_unit_value_usd: 0.05, value_source_date: "2026-09-08", stale: false },
+    status: {
+      subsidy: {
+        unit: "points",
+        units_total: 20000,
+        units_7d: 1000,
+        cost_total_usd: 210,
+        cost_7d_usd: 14,
+        as_of_ts: Math.floor(Date.now() / 1000) - 3600,
+      },
+      trade_stats: { pnl: -180 },
+    },
+  };
+  context.__test.renderSubsidyPanel(card, target, target.status);
+  assert.equal(card.querySelector('[data-field="subsidy-panel"]').hidden, false);
+  assert.equal(card.text("subsidy-cpu-7d"), "0.0140 USDC / points");
+  assert.equal(card.text("subsidy-cpu-total"), "0.0105 USDC / points");
+  assert.equal(card.text("subsidy-units"), "20,000.00 points");
+  // The bot's own ledger wins over the fallback derived from trade_stats.
+  assert.equal(card.text("subsidy-cost"), "210.0 USDC");
+  assert.equal(card.text("subsidy-value"), "1,000.0 USDC (as of 2026-09-08)");
+  assert.equal(card.querySelector('[data-field="subsidy-note"]').hidden, true);
+
+  // No ledger yet: cost is still sourced, but nothing is divided by a
+  // denominator that does not exist.
+  const pending = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    pending,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: false } },
+    { trade_stats: { pnl: -180 } },
+  );
+  assert.equal(pending.text("subsidy-cpu-total"), "-");
+  assert.equal(pending.text("subsidy-units"), "-");
+  assert.equal(pending.text("subsidy-cost"), "180.0 USDC");
+  assert.equal(pending.text("subsidy-value"), "-");
+  assert.match(pending.text("subsidy-note"), /bot-strategy#938/);
+
+  // A target with no configured KPI keeps the panel out of the way.
+  const other = benchmarkCard();
+  context.__test.renderSubsidyPanel(other, { bucket: "beta" }, { pnl_total: 10 });
+  assert.equal(other.querySelector('[data-field="subsidy-panel"]').hidden, true);
+});
+
+test("subsidy card ages the ledger separately from the status object", () => {
+  const kpi = { unit: "points", stale: false };
+  const fresh = benchmarkCard();
+  const now = Math.floor(Date.now() / 1000);
+  context.__test.renderSubsidyPanel(fresh, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: now - 3600 },
+  });
+  assert.notEqual(fresh.text("subsidy-as-of"), "-");
+  assert.equal(fresh.querySelector('[data-field="subsidy-note"]').hidden, true);
+
+  // The status object refreshes every minute; the ledger is daily. A
+  // ledger that stopped three days ago still renders units and costs,
+  // and without its own age they read as current.
+  const stalled = benchmarkCard();
+  context.__test.renderSubsidyPanel(stalled, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: now - 3 * 86400 },
+  });
+  assert.match(stalled.text("subsidy-note"), /has not been written/);
+
+  // An out-of-range epoch is still a valid int64 on the wire, and
+  // formatting it throws a RangeError that would take the whole render
+  // down. It is treated as no timestamp at all.
+  const bogus = benchmarkCard();
+  context.__test.renderSubsidyPanel(bogus, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: 9e18 },
+  });
+  assert.equal(bogus.text("subsidy-as-of"), "-");
+  assert.match(bogus.text("subsidy-note"), /does not report when it was written/);
+
+  // A ledger that prices the cost before it can count units: the cost is
+  // the ledger's, not the fallback's, and the note must not say otherwise.
+  const partial = benchmarkCard();
+  context.__test.renderSubsidyPanel(partial, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", cost_total_usd: 10, as_of_ts: now - 3600 },
+    trade_stats: { pnl: -999 },
+  });
+  assert.equal(partial.text("subsidy-cost"), "10.0 USDC");
+  assert.match(partial.text("subsidy-note"), /reports cost but not units/);
+
+  // A ledger with no timestamp cannot be aged at all, which is its own
+  // thing to say rather than silently passing as fresh.
+  const undated = benchmarkCard();
+  context.__test.renderSubsidyPanel(undated, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1 },
+  });
+  assert.equal(undated.text("subsidy-as-of"), "-");
+  assert.match(undated.text("subsidy-note"), /does not report when it was written/);
+});
+
+test("a program change marks the KPI stale on the card until it is reviewed", () => {
+  const card = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    card,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: true, stale_since: "2026-09-01" } },
+    { trade_stats: { pnl: -10 } },
+  );
+  const pill = card.querySelector('[data-field="kpi-stale"]');
+  assert.equal(pill.hidden, false);
+  assert.equal(pill.textContent, "KPI STALE since 2026-09-01");
+
+  const fresh = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    fresh,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: false } },
+    { trade_stats: { pnl: -10 } },
+  );
+  assert.equal(fresh.querySelector('[data-field="kpi-stale"]').hidden, true);
+});
+
+test("cost falls back to the bot's own net result, in the right direction", () => {
+  // Arcus values its initial basket at current prices, so this is
+  // already the price paid rather than a price move.
+  assert.equal(context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 42 } }), 42);
+  // cumulative_loss_usd is floored at zero for the risk limits, so an
+  // Arcus run that came out ahead would report a cost of exactly zero.
+  // The signed field wins wherever the exporter provides it.
+  assert.equal(
+    context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 0, cumulative_cost_usd: -12 } }),
+    -12,
+  );
+  // A losing subsidy bot has a positive cost; a bot that came out ahead
+  // has a negative one.
+  assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: -180 } }), 180);
+  assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: 20 } }), -20);
+  assert.equal(context.__test.subsidyCostFallback({ pnl_total: 1000 }), null);
+  assert.equal(context.__test.costPerUnit(100, 0), null);
+  assert.equal(context.__test.costPerUnit(100, null), null);
+});
+
+test("subsidy aggregate totals cost across the bucket but keeps units apart by unit", () => {
+  const items = [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 50 } },
+      },
+      index: 1,
+    },
+    {
+      // Different unit, and no ledger: contributes cost only.
+      target: { subsidy_kpi: { unit: "USD activity" }, status: { arcus: { cumulative_loss_usd: 30 } } },
+      index: 2,
+    },
+  ];
+  const stats = context.__test.bucketAggregateStats("subsidy", items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Cost paid").value, "180.0 USDC");
+  assert.equal(stat("Units (points)").value, "20,000.00 points");
+  // Points cost 150 of the 180: the Arcus spend must not be priced into
+  // thepoints  denominator.
+  assert.equal(stat("Cost / points").value, "0.0075 USDC / points");
+  assert.equal(stat("Units (USD activity)"), undefined);
+});
+
+test("a same-unit target reporting cost without units withholds the ratio", () => {
+  const stats = context.__test.bucketAggregateStats("subsidy", [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      // Same unit, cost priced, units not counted yet. Dropping it would
+      // leave a ratio that divides both costs' worth of spending by only
+      // one target's units.
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", cost_total_usd: 50 } },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(stats.find((s) => s.label === "Cost paid").value, "150.0 USDC");
+  assert.equal(stats.find((s) => s.label === "Cost / points").value, "-");
+  assert.match(stats.find((s) => s.label === "Units (points)").value, /partial/);
+});
+
+test("an unreadable or invalidated same-unit target makes its unit partial", () => {
+  const good = {
+    target: {
+      subsidy_kpi: { unit: "points" },
+      status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+    },
+    index: 0,
+  };
+  // The S3 read failed: the target is still in the bucket, and a ratio
+  // over the rest presented as the bucket's own would be wrong.
+  const unreadable = context.__test.bucketAggregateStats("subsidy", [
+    good,
+    { target: { subsidy_kpi: { unit: "points" } }, index: 1 },
+  ]);
+  assert.equal(unreadable.find((s) => s.label === "Cost / points").value, "-");
+
+  // The venue changed the program and nobody has re-reviewed: the card
+  // says so, and the bucket header must not launder those figures into
+  // an apparently current ratio.
+  const stale = context.__test.bucketAggregateStats("subsidy", [
+    good,
+    {
+      target: {
+        subsidy_kpi: { unit: "points", stale: true, stale_since: "2026-09-01" },
+        status: { subsidy: { unit: "points", units_total: 500, cost_total_usd: 5 } },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(stale.find((s) => s.label === "Cost / points").value, "-");
+});
+
+test("cost per unit needs both sides from the same window", () => {
+  // The ledger counts units but does not price them. The fallback cost
+  // is current while the units are as of the ledger's older write, so
+  // dividing one by the other spreads fees accrued since over yesterday's
+  // units. The cumulative cost still shows.
+  const card = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    card,
+    { subsidy_kpi: { unit: "points", stale: false } },
+    {
+      subsidy: { unit: "points", units_total: 10000, as_of_ts: Math.floor(Date.now() / 1000) - 3600 },
+      trade_stats: { pnl: -180 },
+    },
+  );
+  assert.equal(card.text("subsidy-cpu-total"), "-");
+  assert.equal(card.text("subsidy-units"), "10,000.00 points");
+  assert.equal(card.text("subsidy-cost"), "180.0 USDC");
+  assert.match(card.text("subsidy-note"), /older window/);
+});
+
+test("a same-unit target with no ledger at all also withholds the ratio", () => {
+  const stats = context.__test.bucketAggregateStats("subsidy", [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      // The state every subsidy target is in until bot-strategy#938
+      // ships, and the state one arm is in while the other already has a
+      // ledger: no subsidy block, but a cost from the fallback.
+      target: { subsidy_kpi: { unit: "points" }, status: { trade_stats: { pnl: -50 } } },
+      index: 1,
+    },
+  ]);
+  assert.equal(stats.find((s) => s.label === "Cost paid").value, "150.0 USDC");
+  assert.equal(stats.find((s) => s.label === "Cost / points").value, "-");
+  assert.match(stats.find((s) => s.label === "Units (points)").value, /partial/);
+});
+
+test("units the server treats as one unit are aggregated as one row", () => {
+  // usableSubsidyUnits matches the bot's unit against the configured one
+  // case-insensitively and trimmed, so the aggregate has to key the same
+  // way or two spellings of the same unit split into two uncombinable
+  // rows, each with a cost per unit computed over half the units.
+  const stats = context.__test.bucketAggregateStats("subsidy", [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      target: {
+        subsidy_kpi: { unit: " Points " },
+        status: { subsidy: { unit: "Points", units_total: 10000, cost_total_usd: 50 } },
+      },
+      index: 1,
+    },
+  ]);
+  const unitRows = stats.filter((s) => s.label.startsWith("Units ("));
+  assert.equal(unitRows.length, 1);
+  assert.equal(unitRows[0].value, "20,000.00 points");
+  assert.equal(stats.find((s) => s.label === "Cost / points").value, "0.0075 USDC / points");
 });

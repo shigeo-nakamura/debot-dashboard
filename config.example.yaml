@@ -45,6 +45,20 @@ targets:
     dex: "Lighter (Robinhood Chain)"
     # Optional: inherited from docs/buckets.md when omitted.
     bucket: subsidy
+    # Cost-per-unit KPI for a subsidy bot (bot-strategy#938/#957). Only
+    # valid on a target in the subsidy bucket. `unit` must match the unit
+    # the bot's own ledger reports, or its units are not rendered — a
+    # points figure priced with an activity conversion is worse than no
+    # KPI. The imputed value is an operator assumption and is always
+    # shown with the date it was sourced. Set `program_changed_on` when
+    # the venue changes points weights or activity rules; the card marks
+    # the KPI stale until `kpi_reviewed_on` catches up.
+    subsidy:
+      unit: points
+      imputed_unit_value_usd: 0.05
+      value_source_date: "2026-09-08"
+      # program_changed_on: "2026-09-01"
+      # kpi_reviewed_on: "2026-09-05"
 # HYPE accumulator targets use the same freshness/health path but render the
 # nested accumulator balance/activity view instead of PnL statistics — it
 # also shows an "Unrealized PnL" row when the S3 object was written by the
@@ -126,3 +140,5 @@ targets:
 #    s3_key: arcus-archive/status/arcus-spot.json
 #    stale_after_secs: 1920
 #    dex: "Uniswap (via Arcus)"
+#    subsidy:
+#      unit: USD activity

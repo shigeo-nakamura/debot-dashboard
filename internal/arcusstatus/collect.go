@@ -232,6 +232,16 @@ func sum(a, b *float64) *float64 {
 	}
 	return &v
 }
+func diff(a, b *float64) *float64 {
+	if a == nil || b == nil {
+		return nil
+	}
+	v := *a - *b
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return nil
+	}
+	return &v
+}
 func loss(a, b *float64) *float64 {
 	if a == nil || b == nil {
 		return nil
@@ -266,6 +276,7 @@ func (s *Status) readCheckpoint(c checkpoint) {
 	s.DailyLossUSD = loss(value(x.DailyBasket, pa, pb), s.EquityUSD)
 	cumulativeBenchmark := value(x.InitialBasket, pa, pb)
 	s.CumulativeLossUSD = loss(cumulativeBenchmark, s.EquityUSD)
+	s.CumulativeCostUSD = diff(cumulativeBenchmark, s.EquityUSD)
 	s.InventoryDrawdownUSD = loss(number(x.InitialEquity), cumulativeBenchmark)
 	s.DailyLossLimitUSD = number(c.Config.DailyLimit)
 	s.CumulativeLossLimitUSD = number(c.Config.CumulativeLimit)
