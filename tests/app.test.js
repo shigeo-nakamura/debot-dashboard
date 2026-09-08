@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -35,12 +35,12 @@ test("bull holder uses daily close, distinguishes unknown peaks and pending ADD"
   assert.equal(model.legs[1].drop, null);
   assert.equal(model.pending, "ADD × 2");
   assert.equal(model.total, "—");
-  assert.equal(context.__test.holderMoney(0), "0.00 USDC");
+  assert.equal(context.__test.holderMoney(0), "0.0 USDC");
   for (const missing of [null, undefined, "", " ", false]) {
     assert.equal(context.__test.holderMoney(missing), "—");
   }
   assert.equal(context.__test.bullHolderViewModel({ total_equity_usdc: null, legs: {} }).total, "—");
-  assert.equal(context.__test.holderMoney(0.003691), "0.003691 USDC");
+  assert.equal(context.__test.holderMoney(1301.004651), "1,301.0 USDC");
 });
 
 test("bull holder render is read-only and separates simulation from actual holdings", () => {
@@ -64,7 +64,7 @@ test("bull holder render is read-only and separates simulation from actual holdi
   assert.match(text(root), /Configured capital \(USD\)\s+1,000/);
   assert.match(text(root), /Hyperliquid spot allocation \(USD\)\s+900/);
   assert.match(text(root), /Lighter perp notional target \(USD\)\s+450/);
-  assert.match(text(root), /Combined unrealized PnL · estimate\s+-12.00 USDC/);
+  assert.match(text(root), /Combined unrealized PnL · estimate\s+-12.0 USDC/);
   assert.equal(tags.includes("button"), false);
   context.__test.renderBullHolderStatus(root, { pending: null, kill_switch: false }, false);
   assert.match(text(root), /Configured capital \(USD\)\s+—/);
@@ -385,8 +385,8 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
   assert.match(content, /route_unavailable · pending event commit/);
   const rowValue = (label) => root.children.find((n) => n.children[0]?.textContent === label)?.children[1]?.textContent;
   assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
-  assert.match(content, /Cumulative strategy loss\s+\$0.00/);
-  assert.match(content, /Starting basket drawdown\s+\$12.00/);
+  assert.match(content, /Cumulative strategy loss\s+\$0.0/);
+  assert.match(content, /Starting basket drawdown\s+\$12.0/);
   assert.match(content, /Gas · last reconciled snapshot\s+0.001 ETH/);
   assert.match(content, /Gas observed/);
   assert.match(content, /Risk halt\s+daily_loss/);
@@ -401,7 +401,7 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
     assert.equal(rowValue("Signal z"), "—");
     assert.equal(rowValue("Inventory equity"), "—");
     assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
-    assert.equal(rowValue("Cumulative strategy loss"), "$0.00 / — limit");
+    assert.equal(rowValue("Cumulative strategy loss"), "$0.0 / — limit");
   }
 });
 
@@ -552,7 +552,7 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
     [],
     "active",
   );
-  assert.equal(card.querySelector('[data-field="holder-equity"]').textContent, "1,234.50 USDC");
+  assert.equal(card.querySelector('[data-field="holder-equity"]').textContent, "1,234.5 USDC");
   assert.equal(card.querySelector('[data-field="holder-mode-pill"]').textContent, "On");
   assert.equal(card.querySelector('[data-field="holder-mode-pill"]').className, "status-pill active");
   assert.match(card.querySelector('[data-field="holder-last-trade"]').textContent, /Last tranche 2026-09-05 UTC/);
@@ -598,7 +598,7 @@ test("renderArcusSummary shows the inventory-equity headline and opens details o
     [],
     "active",
   );
-  assert.equal(card.querySelector('[data-field="arcus-equity"]').textContent, "$500.00");
+  assert.equal(card.querySelector('[data-field="arcus-equity"]').textContent, "$500.0");
   assert.equal(card.querySelector('[data-field="arcus-mode-pill"]').className, "status-pill active");
   assert.match(card.querySelector('[data-field="arcus-last-trade"]').textContent, /^Last swap 1m ago$/);
   assert.equal(card.querySelector('[data-field="arcus-details"]').open, false);
@@ -699,7 +699,7 @@ test("a book's legs are counted whole while pairtrade's are still halved", () =>
   assert.equal(bookFixture.position_count, 4);
   assert.equal(value("fleet-positions-total"), "5");
   // Equity comes from book.equity_usd (~1009.93), not pnl_total (~9.93).
-  assert.equal(value("fleet-equity-total"), "1109.9 USDC");
+  assert.equal(value("fleet-equity-total"), "1,109.9 USDC");
 });
 
 test("a book with no decision yet and an unfinished flatten reads correctly", () => {
@@ -749,4 +749,18 @@ test("book target counts as unhealthy while halted", () => {
     }),
     true,
   );
+});
+
+test("money and quantity formatters share one precision across panels", () => {
+  const f = context.__test;
+  // Every money figure: 1 decimal, thousands grouped, no -0.
+  assert.equal(f.formatUsdc(1301.004651), "1,301.0 USDC");
+  assert.equal(f.holderMoney(1301.004651), "1,301.0 USDC");
+  assert.equal(f.usdCurrency(1301.004651), "$1,301.0");
+  assert.equal(f.formatPnl(1234.56), "+1,234.6");
+  assert.equal(f.formatPnl(-0), "0.0");
+  assert.equal(f.formatPnl(null), "-");
+  // Token quantities: up to 4 decimals, trailing zeros dropped.
+  assert.equal(f.formatHype(27.123456), "27.1235 HYPE");
+  assert.equal(f.formatHype(2.5), "2.5 HYPE");
 });

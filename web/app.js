@@ -457,12 +457,13 @@ const createCard = (key) => {
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
       <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
-        <div class="panel-summary">
-          <div class="panel-summary-top">
-            <strong class="panel-summary-equity" data-field="arcus-equity"></strong>
+        <div class="equity-headline">
+          <div class="equity-headline-label">
+            <span>Inventory equity</span>
             <span class="status-pill" data-field="arcus-mode-pill"></span>
           </div>
-          <div class="panel-summary-meta" data-field="arcus-last-trade"></div>
+          <strong data-field="arcus-equity"></strong>
+          <div class="equity-headline-meta" data-field="arcus-last-trade"></div>
         </div>
         <div class="chart">
           <div class="chart-title">Inventory equity trend</div>
@@ -475,12 +476,13 @@ const createCard = (key) => {
         </details>
       </section>
       <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status">
-        <div class="panel-summary">
-          <div class="panel-summary-top">
-            <strong class="panel-summary-equity" data-field="holder-equity"></strong>
+        <div class="equity-headline">
+          <div class="equity-headline-label">
+            <span>Total equity</span>
             <span class="status-pill" data-field="holder-mode-pill"></span>
           </div>
-          <div class="panel-summary-meta" data-field="holder-last-trade"></div>
+          <strong data-field="holder-equity"></strong>
+          <div class="equity-headline-meta" data-field="holder-last-trade"></div>
         </div>
         <div class="chart">
           <div class="chart-title">Equity trend</div>
@@ -493,8 +495,8 @@ const createCard = (key) => {
         </details>
       </section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
-        <div class="accumulator-equity">
-          <span>Total equity</span>
+        <div class="equity-headline">
+          <div class="equity-headline-label"><span>Total equity</span></div>
           <strong data-field="accumulator-total"></strong>
         </div>
         <div class="kv accumulator-balances">
@@ -508,10 +510,13 @@ const createCard = (key) => {
         <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
       </div>
       <div data-field="trading-view">
+      <div class="equity-headline">
+        <div class="equity-headline-label"><span>Total equity</span></div>
+        <strong data-field="pnl-total"></strong>
+      </div>
       <div class="kv">
         <div>PnL today <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
-        <div>Equity total <span data-field="pnl-total"></span></div>
       </div>
       <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
       <div class="kv kv-stats">
@@ -902,7 +907,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
   applySignedClass(pnlTodayEl, pnlTodayValue);
-  applySignedClass(pnlTotalEl, pnlTotalValue);
   if (fundingTodayEl) {
     fundingTodayEl.textContent = fundingToday;
     applySignedClass(fundingTodayEl, fundingTodayValue);
@@ -1016,13 +1020,22 @@ const holderNumber = (value) => {
   if (value == null || (typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && value.trim() === "")) return null;
   return parseNumber(value);
 };
+// Money rows share MONEY_DIGITS with formatUsdc/usdCurrency so every
+// panel reads at the same precision ("1,301.0 USDC", never
+// "1,301.004651 USDC" next to a "2483.8 USDC" neighbour).
 const holderMoney = (value) => {
   const n = holderNumber(value);
-  return n === null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + " USDC";
+  return n === null ? "—" : `${groupedFixed(n, MONEY_DIGITS)} USDC`;
 };
+// Plain USD figure without a unit suffix (rows whose label already says USD).
+const holderUsd = (value) => {
+  const n = holderNumber(value);
+  return n === null ? "—" : groupedFixed(n, MONEY_DIGITS);
+};
+// Token quantities (BTC/ETH sizes): up to AMOUNT_DIGITS, trailing zeros dropped.
 const holderAmount = (value) => {
   const n = holderNumber(value);
-  return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 8 });
+  return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: AMOUNT_DIGITS });
 };
 const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
 const bullHolderViewModel = (b) => ({
@@ -1117,9 +1130,9 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   row("Mode", view.mode);
   add("h3", "Configured investment · read-only");
   const investment = b.investment;
-  row("Configured capital (USD)", holderAmount(investment?.equity_usd));
-  row("Hyperliquid spot allocation (USD)", investment ? holderAmount(investment.equity_usd * investment.spot_fraction) : "—");
-  row("Lighter perp notional target (USD)", investment ? holderAmount(investment.equity_usd * investment.perp_fraction) : "—");
+  row("Configured capital (USD)", holderUsd(investment?.equity_usd));
+  row("Hyperliquid spot allocation (USD)", investment ? holderUsd(investment.equity_usd * investment.spot_fraction) : "—");
+  row("Lighter perp notional target (USD)", investment ? holderUsd(investment.equity_usd * investment.perp_fraction) : "—");
   add("p", investment ? `Verified startup settings · fingerprint ${investment.config_fp}. These are configured targets, not account balances or remaining purchase amounts. Perp notional is not required margin; ADD can increase the cycle beyond the initial allocation. Editing the dashboard does not change bot settings.` : b.investment_error || "Verified startup investment settings unavailable.", container, "holder-note");
   row("ARM accepted", holderTime(b.armed_at));
   row("Last exit", holderTime(b.exited_at));
@@ -1183,7 +1196,7 @@ const isArcusStatus = (data) => Boolean(data && data.arcus);
 
 const usdCurrency = (v) => {
   const n = holderNumber(v);
-  return n === null ? "—" : n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return n === null ? "—" : n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: MONEY_DIGITS, maximumFractionDigits: MONEY_DIGITS });
 };
 
 // Compact loss/limit gauge reusing the same risk-bar visual pattern
@@ -1276,9 +1289,9 @@ const renderArcusStatus = (root, a) => {
     add("span", label, r);
     add("strong", text, r);
   };
-  const amount = (v, digits = 6) => {
+  const amount = (v, digits = AMOUNT_DIGITS) => {
     const n = holderNumber(v);
-    return n === null ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: digits });
+    return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: digits });
   };
   const usd = usdCurrency;
   const at = (v) => v ? formatDateWithAge(v) : "Unknown";
@@ -1533,8 +1546,7 @@ const isTargetUnhealthy = (target) => {
 const formatHype = (value) => {
   const number = parseNumber(value);
   if (number === null) return "-";
-  const amount = number.toFixed(6).replace(/\.?0+$/, "");
-  return `${amount} HYPE`;
+  return `${number.toLocaleString("en-US", { maximumFractionDigits: AMOUNT_DIGITS })} HYPE`;
 };
 
 const formatDateWithAge = (value, nowMs = Date.now()) => {
@@ -2037,29 +2049,39 @@ const reconcileOrderInGrid = (gridEl, orderedCards) => {
 const formatDexLabel = (dex) =>
   dex === dex.toLowerCase() ? dex.charAt(0).toUpperCase() + dex.slice(1) : dex;
 
+// Display precision shared by every money figure on the page (fleet
+// total, card headlines, holder/Arcus/book detail rows) and by token
+// quantities. Keep these two in one place so panels never drift apart
+// again (a "1,301.004651 USDC" headline next to "2483.8 USDC").
+const MONEY_DIGITS = 1;
+const AMOUNT_DIGITS = 4;
+
+// Fixed decimals with thousands separators: groupedFixed(1301.004651, 1) → "1,301.0".
+// `+ 0` folds -0 (e.g. a negated zero max_dd) into 0 so it never renders "-0.0".
+const groupedFixed = (number, digits) =>
+  (number + 0).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
 const formatPnl = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "-";
   }
   const number = Number(value);
   const sign = number > 0 ? "+" : "";
-  return `${sign}${number.toFixed(1)}`;
+  return `${sign}${groupedFixed(number, MONEY_DIGITS)}`;
 };
 
 const formatNumber = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "-";
   }
-  const number = Number(value);
-  return number.toFixed(1);
+  return groupedFixed(Number(value), MONEY_DIGITS);
 };
 
 const formatUsdc = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "-";
   }
-  const number = Number(value);
-  return `${number.toFixed(1)} USDC`;
+  return `${groupedFixed(Number(value), MONEY_DIGITS)} USDC`;
 };
 
 const parseNumber = (value) => {

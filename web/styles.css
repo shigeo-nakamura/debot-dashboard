@@ -650,7 +650,13 @@ body::after {
   color: var(--ink);
 }
 
-.accumulator-equity {
+/* Shared equity headline: the one always-visible capital figure on
+   every card type (generic trading view, HYPE accumulator, bull-holder,
+   Arcus). Same block, same position (right after the identity rows),
+   same 28px figure, so the eye lands on "Total equity" at the same
+   spot on every card. Holder/Arcus add their mode pill on the label
+   row and a one-line meta (last tranche / last swap) underneath. */
+.equity-headline {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -665,12 +671,32 @@ body::after {
   letter-spacing: 0.08em;
 }
 
-.accumulator-equity strong {
+.equity-headline-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.equity-headline strong {
   color: var(--ink);
   font-family: "Space Grotesk", sans-serif;
   font-size: 28px;
+  line-height: 1.15;
   letter-spacing: 0;
   text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.equity-headline-meta {
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.equity-headline-meta:empty {
+  display: none;
 }
 
 .accumulator-balances {
@@ -679,7 +705,7 @@ body::after {
   gap: 8px 16px;
 }
 
-.card.degraded .accumulator-equity {
+.card.degraded .equity-headline {
   background: rgba(220, 38, 38, 0.06);
 }
 
@@ -870,32 +896,13 @@ body::after {
 .bull-holder-view .row strong { text-align: right; overflow-wrap: anywhere; }
 .bull-holder-view progress { width: 100%; height: 8px; accent-color: #e3a55c; }
 
-/* Always-visible headline for the bull-holder/Arcus panels: equity,
-   mode, and last-trade timing, plus the equity-trend sparkline
-   (reusing .chart/.sparkline from the generic trading view). The
-   exhaustive per-leg/per-account dump sits below in .panel-details,
-   collapsed by default so the headline isn't buried in ~30 rows of
-   text on open. See bull_holder-view/.arcus-view markup in app.js. */
-.panel-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-.panel-summary-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.panel-summary-equity {
-  font-family: "Space Grotesk", monospace;
-  font-size: 22px;
-}
-.panel-summary-meta {
-  font-size: 13px;
-  color: var(--muted);
-}
+/* The bull-holder/Arcus panels put their always-visible headline in
+   the shared .equity-headline block above (equity, mode pill, last-
+   trade timing), followed by the equity-trend sparkline (reusing
+   .chart/.sparkline from the generic trading view). The exhaustive
+   per-leg/per-account dump sits below in .panel-details, collapsed by
+   default so the headline isn't buried in ~30 rows of text on open.
+   See .bull-holder-view/.arcus-view markup in app.js. */
 .panel-details {
   margin-top: 14px;
   border-top: 1px solid var(--border);
@@ -913,7 +920,7 @@ body::after {
 .panel-details > summary::before { content: "▸ "; }
 .panel-details[open] > summary::before { content: "▾ "; }
 
-.arcus-view { margin-top: 16px; }
+.arcus-view { margin-top: 0; }
 .arcus-view h3 { font-size: 16px; }
 .arcus-view h4 { margin: 20px 0 10px; font-size: 14px; }
 .arcus-view .row { gap: 12px; align-items: start; }
