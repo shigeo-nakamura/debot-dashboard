@@ -1308,6 +1308,28 @@ test("a same-unit target reporting cost without units withholds the ratio", () =
   assert.match(stats.find((s) => s.label === "Units (points)").value, /partial/);
 });
 
+test("a same-unit target with no ledger at all also withholds the ratio", () => {
+  const stats = context.__test.bucketAggregateStats("subsidy", [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      // The state every subsidy target is in until bot-strategy#938
+      // ships, and the state one arm is in while the other already has a
+      // ledger: no subsidy block, but a cost from the fallback.
+      target: { subsidy_kpi: { unit: "points" }, status: { trade_stats: { pnl: -50 } } },
+      index: 1,
+    },
+  ]);
+  assert.equal(stats.find((s) => s.label === "Cost paid").value, "150.0 USDC");
+  assert.equal(stats.find((s) => s.label === "Cost / points").value, "-");
+  assert.match(stats.find((s) => s.label === "Units (points)").value, /partial/);
+});
+
 test("units the server treats as one unit are aggregated as one row", () => {
   // usableSubsidyUnits matches the bot's unit against the configured one
   // case-insensitively and trimmed, so the aggregate has to key the same

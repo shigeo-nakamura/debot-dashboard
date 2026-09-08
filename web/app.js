@@ -333,16 +333,22 @@ const subsidyAggregateStats = (items) => {
     // other's units (Codex, PR #38). It is counted, and it withholds the
     // ratio instead.
     const counted = data.subsidy && Number.isFinite(data.subsidy.units_total);
-    if (!data.subsidy) return;
     // Key on the same normalization the server matches units by
     // (case-insensitive, trimmed), or two targets configured "points"
     // and "Points" would be accepted as the same unit there and split
     // into two uncombinable rows here (Codex, PR #38). The first
     // spelling seen is kept as the label.
+    // A configured target with no ledger at all is the same partial
+    // denominator as one with a ledger that cannot count units: its cost
+    // is in "Cost paid" either way, so it has to mark the unit's ratio
+    // incomplete rather than disappear from it (Codex, PR #38). This is
+    // the state every subsidy target is in until #938 ships, and the
+    // state one arm will be in while the other already has a ledger.
     const key = unit.trim().toLowerCase();
-    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, complete: true };
+    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, counted: 0, complete: true };
     if (counted) {
       entry.units += Number(data.subsidy.units_total);
+      entry.counted += 1;
     } else {
       entry.complete = false;
     }
@@ -362,6 +368,10 @@ const subsidyAggregateStats = (items) => {
     },
   ];
   for (const entry of byUnit.values()) {
+    // No target on this unit is counting it yet, which is every subsidy
+    // target's state until bot-strategy#938 ships. A row of zeros would
+    // be noise; the unit reappears with the first ledger.
+    if (entry.counted === 0) continue;
     stats.push({
       label: `Units (${entry.unit})`,
       value: entry.complete ? formatUnits(entry.units, entry.unit) : `${formatUnits(entry.units, entry.unit)} (partial)`,
