@@ -1067,6 +1067,49 @@ test("a changed benchmark anchor restarts both series instead of splicing books"
   assert.equal(context.__test.historyByKey.get(key), undefined);
 });
 
+test("a DRY_RUN holder compares nothing, and its ticks stay out of the benchmark series", () => {
+  const holder = {
+    total_equity_usdc: 1301,
+    benchmark: { anchor_ts: 1, funded_usd: 1301, cost_usd: 900, cash_usd: 401, equity_usd: 990 },
+    cum_funding_usdc: -12.5,
+  };
+  const botHistory = series([1000, 950, 1100]);
+  const benchHistory = series([1000, 800, 1000]);
+
+  // The accounts are an untouched deposit while the bot places no
+  // orders, so the bot's side is a constant and an "excess" would just
+  // track the market falling. Nothing is compared.
+  const dry = benchmarkCard();
+  context.__test.renderHolderBenchmark(dry, holder, 1301, botHistory, benchHistory, { dryRun: true });
+  assert.equal(dry.text("holder-bench-excess"), "-");
+  assert.equal(dry.text("holder-bench-dd"), "5.0% / -");
+  assert.match(dry.text("holder-bench-note"), /DRY_RUN/);
+  // The carry row is a real producer figure and stays.
+  assert.equal(dry.text("holder-bench-costs"), "-12.5 USDC");
+
+  // Live, the same inputs do compare.
+  const live = benchmarkCard();
+  context.__test.renderHolderBenchmark(live, holder, 1301, botHistory, benchHistory, { dryRun: false });
+  assert.equal(live.text("holder-bench-excess"), "+311.0 USDC (31.4%)");
+
+  // No benchmark samples are cached while dry, so once the bot goes live
+  // pairedSeries starts the comparison at that moment rather than
+  // dragging in a flat pre-live stretch.
+  const key = "dry-run-cache";
+  const tick = (dryRun, observedAt) => ({
+    ts: observedAt,
+    dry_run: dryRun,
+    bull_holder: {
+      total_equity_usdc: 1301,
+      benchmark: { anchor_ts: 1, funded_usd: 1301, cost_usd: 900, cash_usd: 401, equity_usd: 990 },
+      hyperliquid: { observed_at: observedAt },
+      lighter: { observed_at: observedAt },
+    },
+  });
+  assert.equal(context.__test.updateBenchmarkCache(key, tick(true, 1_700_001_000)).length, 0);
+  assert.equal(context.__test.updateBenchmarkCache(key, tick(false, 1_700_001_060)).length, 1);
+});
+
 test("drawdowns are compared only over observations both series share", () => {
   const botHistory = series([1000, 950, 1100]);
   // The benchmark kept being priced through an outage that stalled the

@@ -25,8 +25,17 @@ type HolderInvestment struct {
 // against the bot's startup log, exactly like the rest of the investment
 // snapshot, and share its config_fp freshness binding.
 type HolderAnchor struct {
-	TS     int64               `yaml:"ts" json:"ts"`
-	Assets []HolderAnchorAsset `yaml:"assets" json:"assets"`
+	TS int64 `yaml:"ts" json:"ts"`
+	// FundedUSD is the total account equity at TS — what was actually
+	// put behind the bot, which is not the same number as the strategy's
+	// declared EquityUSD. Bull-holder declares $1000 while its accounts
+	// hold $1301 (the perp leg's margin buffer), and sizing the benchmark
+	// from the declared figure while comparing it against live account
+	// equity reported the $301 difference as a 31% outperformance
+	// (bot-strategy#963). Optional: an account funded at exactly the
+	// declared capital needs nothing here.
+	FundedUSD *float64            `yaml:"funded_usd" json:"funded_usd,omitempty"`
+	Assets    []HolderAnchorAsset `yaml:"assets" json:"assets"`
 }
 
 // HolderAnchorAsset is one leg of the benchmark book. Symbol is the leg
@@ -64,6 +73,11 @@ func (v HolderInvestment) validate() error {
 func (a HolderAnchor) validate() error {
 	if a.TS <= 0 || len(a.Assets) == 0 {
 		return errors.New("invalid bull_holder.investment.anchor")
+	}
+	if a.FundedUSD != nil {
+		if finiteHolderValue(*a.FundedUSD) == nil || *a.FundedUSD <= 0 {
+			return errors.New("invalid bull_holder.investment.anchor.funded_usd")
+		}
 	}
 	seen := map[string]bool{}
 	for _, asset := range a.Assets {
@@ -131,7 +145,10 @@ func sumHolderPnL(accounts ...HolderAccount) *float64 {
 // the bot's own leverage and hedging are what the comparison is about,
 // so the benchmark takes none of it (no perp leg, no rebalancing).
 type HolderBenchmark struct {
-	AnchorTS  int64                  `json:"anchor_ts"`
+	AnchorTS int64 `json:"anchor_ts"`
+	// FundedUSD is the capital both sides start from: the account equity
+	// at the anchor, which the strategy's declared capital need not equal.
+	FundedUSD float64                `json:"funded_usd"`
 	CostUSD   float64                `json:"cost_usd"`
 	CashUSD   float64                `json:"cash_usd"`
 	EquityUSD float64                `json:"equity_usd"`
@@ -181,12 +198,27 @@ func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64,
 			}
 		}
 	}
+	// The spot the strategy deploys comes from its declared capital; the
+	// cash beside it is whatever else was funded. Both sides of the
+	// comparison then start at the funded total, which is what the card
+	// reads off the live accounts (bot-strategy#963).
 	cost := investment.EquityUSD * investment.SpotFraction
+	funded := investment.EquityUSD
+	if anchor.FundedUSD != nil {
+		funded = *anchor.FundedUSD
+	}
+	if funded < cost {
+		// Less in the accounts than the strategy says it deploys as spot.
+		// Filling the gap would make the benchmark levered, which is the
+		// one thing it must never be.
+		return nil, "Funded capital is below the anchored spot allocation"
+	}
 	perLeg := cost / float64(len(anchor.Assets))
 	b := HolderBenchmark{
-		AnchorTS: anchor.TS,
-		CostUSD:  cost,
-		CashUSD:  investment.EquityUSD - cost,
+		AnchorTS:  anchor.TS,
+		FundedUSD: funded,
+		CostUSD:   cost,
+		CashUSD:   funded - cost,
 	}
 	total := b.CashUSD
 	for _, asset := range anchor.Assets {

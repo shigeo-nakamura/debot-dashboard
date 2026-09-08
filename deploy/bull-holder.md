@@ -81,7 +81,8 @@ investment:
   spot_fraction: 0.90
   perp_fraction: 0.45
   anchor:
-    ts: 1757203200 # when the capital was deployed (epoch seconds)
+    ts: 1757203200   # when the capital was deployed (epoch seconds)
+    funded_usd: 1301 # total account equity at `ts` (optional)
     assets:
       - symbol: BTC
         spot_symbol: UBTC # Hyperliquid spot token used for the current price
@@ -106,14 +107,31 @@ where the venue's spot token differs (BTC → `UBTC`, ETH → `UETH`).
 
 The benchmark spends `equity_usd × spot_fraction` at the anchor, split equally
 by USD across the legs (matching how the bot deploys the same
-`tranche_spot_usd` into each leg), and leaves the remainder in cash. Both sides
-of the comparison therefore start at `equity_usd`; the bot's leverage and hedge
-are what the comparison is about, so the benchmark takes none of them. It is
+`tranche_spot_usd` into each leg), and leaves the remainder in cash. The bot's
+leverage and hedge are what the comparison is about, so the benchmark takes none
+of them. It is
 priced from the same public `spotMetaAndAssetCtxs` marks the card already reads,
 which are now fetched whether or not an account is configured — a DRY_RUN bot
 owns nothing, and its benchmark still has to be priced. A leg the marks cannot
 price suppresses the whole benchmark rather than dropping that leg, since a
 partial benchmark reads as the bot beating buy & hold.
+
+`funded_usd` is what both sides start from, and it is **not** the same number as
+`equity_usd`. The card's bot side is live account equity — Hyperliquid spot plus
+Lighter — which includes the perp leg's margin buffer, while `equity_usd` is the
+capital the strategy declares. On 2026-09-08 those were $1,301 and $1,000, and
+sizing the benchmark from the declared figure reported the $301 difference as a
+31% outperformance (bot-strategy#963). Set it to the total account equity at
+`ts`, verified the same way as the prices; omit it only when the accounts hold
+exactly the declared capital. A `funded_usd` below the spot allocation is
+rejected, since covering the gap would make the benchmark levered.
+
+**While the bot is in DRY_RUN the card compares nothing.** It places no orders,
+so those balances are the untouched deposit: the bot's side is a constant and an
+"excess" would only track the market falling. The four rows read "-" with that
+reason, and no benchmark samples are cached, so the drawdown comparison begins
+at the moment the bot goes live rather than dragging in a flat pre-live stretch.
+The anchor can be configured before then; it simply stays dormant.
 
 Four rows are shown. **Excess vs b&h** is current combined equity minus the
 benchmark, in USDC and percent. **Max DD** and **Calmar** are computed for both

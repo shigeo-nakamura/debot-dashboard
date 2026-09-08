@@ -238,3 +238,49 @@ func TestHolderBenchmarkIsDerivedNotForwardedFromTheProducer(t *testing.T) {
 		t.Fatalf("benchmark survived an unverified investment snapshot: %+v", b.Benchmark)
 	}
 }
+
+func TestHolderBenchmarkStartsFromTheFundedAccountNotTheDeclaredCapital(t *testing.T) {
+	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
+
+	// The live case that produced this fix: the strategy declares $1000
+	// while the accounts hold $1301, and the card compares the benchmark
+	// against those live accounts. Sizing the benchmark from the declared
+	// capital reported the $301 difference as a 31% outperformance.
+	funded := anchoredInvestment()
+	funded.Anchor.FundedUSD = finiteHolderValue(1301)
+	b, msg := holderBenchmarkFrom(funded, marks, nil)
+	if msg != "" {
+		t.Fatalf("benchmark unavailable: %q", msg)
+	}
+	if b.FundedUSD != 1301 || b.CostUSD != 900 || b.CashUSD != 401 {
+		t.Fatalf("wrong capital split: %+v", b)
+	}
+	// $900 of spot doubles to $1800, plus $401 that never left cash.
+	if math.Abs(b.EquityUSD-2201) > 1e-6 {
+		t.Fatalf("benchmark equity = %v, want 2201", b.EquityUSD)
+	}
+
+	// Omitted: an account funded at exactly the declared capital is the
+	// case the field exists to distinguish from, and must not change.
+	plain, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil)
+	if msg != "" || plain.FundedUSD != 1000 || plain.CashUSD != 100 {
+		t.Fatalf("fallback changed: %+v %q", plain, msg)
+	}
+
+	// Less funded than the strategy deploys as spot: filling the gap
+	// would make the benchmark levered, which is the one thing it must
+	// never be.
+	short := anchoredInvestment()
+	short.Anchor.FundedUSD = finiteHolderValue(500)
+	if b, msg := holderBenchmarkFrom(short, marks, nil); b != nil || msg != "Funded capital is below the anchored spot allocation" {
+		t.Fatalf("under-funded anchor accepted: %+v %q", b, msg)
+	}
+
+	for _, bad := range []float64{0, -1} {
+		v := anchoredInvestment()
+		v.Anchor.FundedUSD = finiteHolderValue(bad)
+		if err := v.validate(); err == nil {
+			t.Fatalf("funded_usd %v accepted", bad)
+		}
+	}
+}

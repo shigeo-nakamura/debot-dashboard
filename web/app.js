@@ -1168,7 +1168,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
   }
   if (bullHolder) {
     renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
-    renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data));
+    renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data), {
+      dryRun: data.dry_run === true,
+    });
     renderBullHolderStatus(card.querySelector('[data-field="holder-details-body"]'), bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
@@ -1447,7 +1449,7 @@ const formatRatio = (value) => (value === null ? "-" : value.toFixed(2));
 // hedge cost in funding and fees. Anything the dashboard cannot source
 // renders "-" — a β bot that looks like it beats buy & hold because a
 // leg was silently dropped is the failure this card exists to prevent.
-const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) => {
+const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory, { dryRun = false } = {}) => {
   const panel = card.querySelector('[data-field="holder-benchmark"]');
   if (!panel) return;
   const excessEl = card.querySelector('[data-field="holder-bench-excess"]');
@@ -1460,9 +1462,14 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   const benchmarkEquity = benchmark && Number.isFinite(benchmark.equity_usd) ? Number(benchmark.equity_usd) : null;
   const equity = Number.isFinite(botEquity) ? Number(botEquity) : null;
 
+  // In DRY_RUN the accounts this card reads are untouched deposits: the
+  // bot places no orders, so its side of the comparison is a constant
+  // while the benchmark moves with price. The excess would then read as
+  // the bot winning whenever the market falls, which says nothing about
+  // the bot (bot-strategy#963). Nothing is compared until it trades.
   let excessText = "-";
   let excessValue = null;
-  if (benchmarkEquity !== null && equity !== null && benchmarkEquity !== 0) {
+  if (!dryRun && benchmarkEquity !== null && equity !== null && benchmarkEquity !== 0) {
     excessValue = equity - benchmarkEquity;
     excessText = `${formatSignedUsdc(excessValue)} (${((excessValue / benchmarkEquity) * 100).toFixed(1)}%)`;
   }
@@ -1483,7 +1490,7 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   // one-sided outage (Lighter down while Hyperliquid marks still price
   // the benchmark, or the reverse) drops those ticks from both rather
   // than shifting one window against the other.
-  const [botSeries, benchmarkSeries] = benchmarkEquity === null
+  const [botSeries, benchmarkSeries] = benchmarkEquity === null || dryRun
     ? [history, []]
     : pairedSeries(history, benchmarkHistory);
   const botDd = maxDrawdownPct(botSeries);
@@ -1533,7 +1540,9 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   }
 
   if (noteEl) {
-    const note = benchmarkEquity !== null
+    const note = dryRun
+      ? "DRY_RUN: the bot places no orders, so the balances above are the untouched deposit and there is nothing to compare against buy & hold yet."
+      : benchmarkEquity !== null
       ? benchmarkHistory && benchmarkHistory.length >= 2
         ? ""
         : "Drawdown and Calmar start filling in once this page has watched both series for a while."
@@ -2544,6 +2553,14 @@ const pairedSeries = (history, benchmarkHistory) => {
 };
 
 const updateBenchmarkCache = (key, data) => {
+  // No samples while the bot is not trading: pairedSeries intersects the
+  // two series by timestamp, so leaving the DRY_RUN ticks out of the
+  // benchmark cache is what makes the drawdown comparison start at the
+  // moment the bot goes live, with no flat pre-live stretch dragged in
+  // from the equity history (bot-strategy#963).
+  if (data && data.dry_run === true) {
+    return benchmarkByKey.get(key) || [];
+  }
   const anchor = benchmarkAnchorId(data);
   if (anchor !== null && benchmarkAnchorByKey.get(key) !== anchor) {
     // A different book. Both series restart together rather than the
