@@ -1013,7 +1013,7 @@ test("benchmark series is cached on the same timestamps as the equity series", (
   assert.equal(context.__test.benchmarkEquityValue({ bull_holder: { benchmark: { equity_usd: null } } }), null);
 });
 
-test("a changed benchmark anchor restarts both series instead of splicing books", () => {
+test("a changed benchmark anchor restarts the benchmark series without taking the sparkline", () => {
   const key = "anchor-test";
   const book = (anchorTs, equity, observedAt) => ({
     ts: observedAt,
@@ -1029,14 +1029,14 @@ test("a changed benchmark anchor restarts both series instead of splicing books"
   assert.equal(context.__test.benchmarkByKey.get(key).length, 2);
   context.__test.historyByKey.set(key, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
 
-  // The first benchmark a page sees also restarts the equity series:
-  // points cached while the anchor was unconfigured reach back before
-  // the benchmark series starts, and comparing a long bot window against
-  // a short benchmark one overstates the bot's drawdown.
+  // The equity series is left alone when a book appears or changes:
+  // pairedSeries drops the points that predate the benchmark, so there
+  // is nothing to fix by deleting them, and deleting them would take the
+  // card's sparkline with it.
   const firstKey = "first-benchmark";
   context.__test.historyByKey.set(firstKey, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
   context.__test.updateBenchmarkCache(firstKey, book(1000, 1000, 1_700_000_000));
-  assert.equal(context.__test.historyByKey.get(firstKey), undefined);
+  assert.equal(context.__test.historyByKey.get(firstKey).length, 2);
 
   // A later rollout re-anchors the book under the same target key.
   // Appending its values to the old book's series would show a jump that
@@ -1064,7 +1064,94 @@ test("a changed benchmark anchor restarts both series instead of splicing books"
   const after = context.__test.updateBenchmarkCache(key, book(2000, 400, 1_700_000_120));
   assert.equal(after.length, 1);
   assert.equal(after[0].equity, 400);
-  assert.equal(context.__test.historyByKey.get(key), undefined);
+  assert.equal(context.__test.historyByKey.get(key).length, 2);
+});
+
+test("a DRY_RUN holder compares nothing, and its ticks stay out of the benchmark series", () => {
+  const holder = {
+    total_equity_usdc: 1301,
+    benchmark: { anchor_ts: 1, funded_usd: 1301, cost_usd: 900, cash_usd: 401, equity_usd: 990 },
+    cum_funding_usdc: -12.5,
+  };
+  const botHistory = series([1000, 950, 1100]);
+  const benchHistory = series([1000, 800, 1000]);
+
+  // The accounts are an untouched deposit while the bot places no
+  // orders, so the bot's side is a constant and an "excess" would just
+  // track the market falling. Nothing is compared.
+  const dry = benchmarkCard();
+  context.__test.renderHolderBenchmark(dry, holder, 1301, botHistory, benchHistory, { dryRun: true });
+  assert.equal(dry.text("holder-bench-excess"), "-");
+  assert.equal(dry.text("holder-bench-dd"), "5.0% / -");
+  assert.match(dry.text("holder-bench-note"), /DRY_RUN/);
+  // The carry row is a real producer figure and stays.
+  assert.equal(dry.text("holder-bench-costs"), "-12.5 USDC");
+
+  // Live, the same inputs do compare.
+  const live = benchmarkCard();
+  context.__test.renderHolderBenchmark(live, holder, 1301, botHistory, benchHistory, { dryRun: false });
+  assert.equal(live.text("holder-bench-excess"), "+311.0 USDC (31.4%)");
+
+  // No benchmark samples are cached while dry, so once the bot goes live
+  // pairedSeries starts the comparison at that moment rather than
+  // dragging in a flat pre-live stretch.
+  const key = "dry-run-cache";
+  const tick = (dryRun, observedAt) => ({
+    ts: observedAt,
+    dry_run: dryRun,
+    bull_holder: {
+      total_equity_usdc: 1301,
+      benchmark: { anchor_ts: 1, funded_usd: 1301, cost_usd: 900, cash_usd: 401, equity_usd: 990 },
+      hyperliquid: { observed_at: observedAt },
+      lighter: { observed_at: observedAt },
+    },
+  });
+  assert.equal(context.__test.updateBenchmarkCache(key, tick(true, 1_700_001_000)).length, 0);
+  assert.equal(context.__test.updateBenchmarkCache(key, tick(false, 1_700_001_060)).length, 1);
+  // The anchor was recorded on the dry tick, so the first live poll does
+  // not see it as a new book and reset around the point it has just
+  // taken; the series simply continues.
+  assert.equal(context.__test.updateBenchmarkCache(key, tick(false, 1_700_001_120)).length, 2);
+
+  // A book that changes while the bot is paused into DRY_RUN: the reset
+  // has to be recorded on the dry tick, or the samples taken before the
+  // pause are still there when it resumes and the new book's values are
+  // appended to the old book's series.
+  const rebook = (dryRun, observedAt, anchorTs, equity) => ({
+    ts: observedAt,
+    dry_run: dryRun,
+    bull_holder: {
+      total_equity_usdc: 1301,
+      benchmark: { anchor_ts: anchorTs, funded_usd: 1301, cost_usd: 900, cash_usd: 401, equity_usd: equity },
+      hyperliquid: { observed_at: observedAt },
+      lighter: { observed_at: observedAt },
+    },
+  });
+  context.__test.updateBenchmarkCache(key, rebook(true, 1_700_002_000, 999, 500));
+  assert.equal(context.__test.updateBenchmarkCache(key, rebook(false, 1_700_002_060, 999, 500)).length, 1);
+});
+
+test("the beta bucket does not republish a DRY_RUN holder's comparison", () => {
+  const dryHolder = {
+    target: {
+      bucket: "beta",
+      status: {
+        dry_run: true,
+        bull_holder: { total_equity_usdc: 1301, benchmark: { equity_usd: 990 } },
+      },
+    },
+    index: 0,
+  };
+  // The card withholds this target's excess; the bucket header must not
+  // put the same untouched-deposit number back on the page.
+  const dry = context.__test.bucketAggregateStats("beta", [dryHolder]);
+  assert.equal(dry.find((s) => s.label === "vs buy & hold").value, "-");
+  assert.equal(dry.find((s) => s.label === "Equity held").value, "1,301.0 USDC");
+
+  const live = context.__test.bucketAggregateStats("beta", [
+    { target: { ...dryHolder.target, status: { ...dryHolder.target.status, dry_run: false } }, index: 0 },
+  ]);
+  assert.equal(live.find((s) => s.label === "vs buy & hold").value, "+311.0 USDC");
 });
 
 test("drawdowns are compared only over observations both series share", () => {

@@ -256,8 +256,12 @@ const bucketAggregateStats = (bucket, items) => {
     equityCount += 1;
     // Only targets with a configured, fully priced benchmark contribute;
     // a bot without one is left out of the sum rather than counted as
-    // matching its benchmark exactly.
-    const benchmark = benchmarkEquityValue(data);
+    // matching its benchmark exactly. A DRY_RUN holder is left out for
+    // the same reason the card withholds its excess: its balances are an
+    // untouched deposit, so the difference is the market moving, not the
+    // bot (Codex, PR #42). Publishing it here would put back at bucket
+    // level exactly what the card stopped showing.
+    const benchmark = data.dry_run === true ? null : benchmarkEquityValue(data);
     if (benchmark !== null) {
       excess += equity - benchmark;
       excessCount += 1;
@@ -296,7 +300,7 @@ const bucketAggregateStats = (bucket, items) => {
       signed: excessCount > 0 ? excess : null,
       title:
         excessCount > 0 && excessCount < equityCount
-          ? `Excess over holding the same exposure as spot, across the ${excessCount} of ${equityCount} targets that have a benchmark anchor configured.`
+          ? `Excess over holding the same exposure as spot, across the ${excessCount} of ${equityCount} targets that are trading against a configured benchmark anchor. The rest are unanchored or in DRY_RUN.`
           : "Excess over holding the same exposure as spot, from each target's verified startup anchor (bot-strategy#955).",
     },
   ];
@@ -1168,7 +1172,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
   }
   if (bullHolder) {
     renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
-    renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data));
+    renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data), {
+      dryRun: data.dry_run === true,
+    });
     renderBullHolderStatus(card.querySelector('[data-field="holder-details-body"]'), bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
@@ -1447,7 +1453,7 @@ const formatRatio = (value) => (value === null ? "-" : value.toFixed(2));
 // hedge cost in funding and fees. Anything the dashboard cannot source
 // renders "-" — a β bot that looks like it beats buy & hold because a
 // leg was silently dropped is the failure this card exists to prevent.
-const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) => {
+const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory, { dryRun = false } = {}) => {
   const panel = card.querySelector('[data-field="holder-benchmark"]');
   if (!panel) return;
   const excessEl = card.querySelector('[data-field="holder-bench-excess"]');
@@ -1460,9 +1466,14 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   const benchmarkEquity = benchmark && Number.isFinite(benchmark.equity_usd) ? Number(benchmark.equity_usd) : null;
   const equity = Number.isFinite(botEquity) ? Number(botEquity) : null;
 
+  // In DRY_RUN the accounts this card reads are untouched deposits: the
+  // bot places no orders, so its side of the comparison is a constant
+  // while the benchmark moves with price. The excess would then read as
+  // the bot winning whenever the market falls, which says nothing about
+  // the bot (bot-strategy#963). Nothing is compared until it trades.
   let excessText = "-";
   let excessValue = null;
-  if (benchmarkEquity !== null && equity !== null && benchmarkEquity !== 0) {
+  if (!dryRun && benchmarkEquity !== null && equity !== null && benchmarkEquity !== 0) {
     excessValue = equity - benchmarkEquity;
     excessText = `${formatSignedUsdc(excessValue)} (${((excessValue / benchmarkEquity) * 100).toFixed(1)}%)`;
   }
@@ -1483,7 +1494,7 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   // one-sided outage (Lighter down while Hyperliquid marks still price
   // the benchmark, or the reverse) drops those ticks from both rather
   // than shifting one window against the other.
-  const [botSeries, benchmarkSeries] = benchmarkEquity === null
+  const [botSeries, benchmarkSeries] = benchmarkEquity === null || dryRun
     ? [history, []]
     : pairedSeries(history, benchmarkHistory);
   const botDd = maxDrawdownPct(botSeries);
@@ -1533,7 +1544,9 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   }
 
   if (noteEl) {
-    const note = benchmarkEquity !== null
+    const note = dryRun
+      ? "DRY_RUN: the bot places no orders, so the balances above are the untouched deposit and there is nothing to compare against buy & hold yet."
+      : benchmarkEquity !== null
       ? benchmarkHistory && benchmarkHistory.length >= 2
         ? ""
         : "Drawdown and Calmar start filling in once this page has watched both series for a while."
@@ -2544,21 +2557,29 @@ const pairedSeries = (history, benchmarkHistory) => {
 };
 
 const updateBenchmarkCache = (key, data) => {
+  // The book this series belongs to is recorded even on a tick that
+  // contributes no sample, so a page watching the DRY_RUN → live
+  // transition does not discover the anchor as "new" on the first live
+  // poll and reset around a point it has already taken (Codex, PR #42).
   const anchor = benchmarkAnchorId(data);
   if (anchor !== null && benchmarkAnchorByKey.get(key) !== anchor) {
-    // A different book. Both series restart together rather than the
-    // benchmark alone, so the drawdown comparison stays aligned and the
-    // old book's curve is not attributed to the new one.
+    // A different book: its values must not join the old book's series,
+    // or the step between them is rendered as return and drawdown.
     //
-    // This includes the first benchmark a page ever sees: equity points
-    // cached while the anchor was unconfigured or its marks unavailable
-    // reach back before the benchmark series starts, and comparing a
-    // long bot window against a short benchmark one overstates the bot's
-    // drawdown (Codex, PR #41).
-    historyByKey.delete(key);
-    recordedHistoryKeys.delete(key);
+    // Only the benchmark cache is dropped. Alignment is pairedSeries's
+    // job now — it intersects the two series by timestamp, so equity
+    // points that predate this book simply go unpaired — and deleting
+    // the equity history here would also take the card's sparkline with
+    // it for no benefit.
     benchmarkByKey.delete(key);
     benchmarkAnchorByKey.set(key, anchor);
+  }
+  // No samples while the bot is not trading: leaving the DRY_RUN ticks
+  // out of the benchmark cache is what makes the drawdown comparison
+  // start at the moment the bot goes live, with no flat pre-live stretch
+  // dragged in from the equity history (bot-strategy#963).
+  if (data && data.dry_run === true) {
+    return benchmarkByKey.get(key) || [];
   }
   const point = snapshotToBenchmarkPoint(data);
   if (!point) {

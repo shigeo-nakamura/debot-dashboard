@@ -117,8 +117,13 @@ targets:
 #        # Hyperliquid spot token the current price is read from and is
 #        # needed for wrapped assets (BTC → UBTC, ETH → UETH). Legs are
 #        # equal-weight by USD, matching how a tranche is deployed.
+#        # `funded_usd` is the total account equity at `ts` — the live
+#        # accounts include the perp leg's margin buffer, so it is not
+#        # `equity_usd`. Omit it only when they hold exactly the declared
+#        # capital. Both sides of the comparison start from this figure.
 #        anchor:
 #          ts: 1757203200
+#          funded_usd: 1301
 #          assets:
 #            - symbol: BTC
 #              spot_symbol: UBTC
