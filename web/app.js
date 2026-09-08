@@ -327,14 +327,20 @@ const subsidyAggregateStats = (items) => {
     }
     if (!kpi || !data.subsidy || !Number.isFinite(data.subsidy.units_total)) return;
     const unit = kpi.unit || "unit";
-    const entry = byUnit.get(unit) || { units: 0, cost: 0, costKnown: true };
+    // Key on the same normalization the server matches units by
+    // (case-insensitive, trimmed), or two targets configured "points"
+    // and "Points" would be accepted as the same unit there and split
+    // into two uncombinable rows here (Codex, PR #38). The first
+    // spelling seen is kept as the label.
+    const key = unit.trim().toLowerCase();
+    const entry = byUnit.get(key) || { unit, units: 0, cost: 0, costKnown: true };
     entry.units += Number(data.subsidy.units_total);
     if (targetCost === null) {
       entry.costKnown = false;
     } else {
       entry.cost += targetCost;
     }
-    byUnit.set(unit, entry);
+    byUnit.set(key, entry);
   });
   const stats = [
     {
@@ -344,11 +350,11 @@ const subsidyAggregateStats = (items) => {
         "What this bucket has spent in fees, slippage and adverse selection to earn its subsidy. Negative PnL here is the price, not a loss to fix.",
     },
   ];
-  for (const [unit, entry] of byUnit) {
-    stats.push({ label: `Units (${unit})`, value: formatUnits(entry.units, unit) });
+  for (const entry of byUnit.values()) {
+    stats.push({ label: `Units (${entry.unit})`, value: formatUnits(entry.units, entry.unit) });
     stats.push({
-      label: `Cost / ${unit}`,
-      value: entry.costKnown ? formatCostPerUnit(entry.cost, entry.units, unit) : "-",
+      label: `Cost / ${entry.unit}`,
+      value: entry.costKnown ? formatCostPerUnit(entry.cost, entry.units, entry.unit) : "-",
     });
   }
   return stats;

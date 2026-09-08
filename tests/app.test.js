@@ -1219,3 +1219,30 @@ test("subsidy aggregate totals cost across the bucket but keeps units apart by u
   assert.equal(stat("Cost / points").value, "0.0075 USDC / points");
   assert.equal(stat("Units (USD activity)"), undefined);
 });
+
+test("units the server treats as one unit are aggregated as one row", () => {
+  // usableSubsidyUnits matches the bot's unit against the configured one
+  // case-insensitively and trimmed, so the aggregate has to key the same
+  // way or two spellings of the same unit split into two uncombinable
+  // rows, each with a cost per unit computed over half the units.
+  const stats = context.__test.bucketAggregateStats("subsidy", [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      target: {
+        subsidy_kpi: { unit: " Points " },
+        status: { subsidy: { unit: "Points", units_total: 10000, cost_total_usd: 50 } },
+      },
+      index: 1,
+    },
+  ]);
+  const unitRows = stats.filter((s) => s.label.startsWith("Units ("));
+  assert.equal(unitRows.length, 1);
+  assert.equal(unitRows[0].value, "20,000.00 points");
+  assert.equal(stats.find((s) => s.label === "Cost / points").value, "0.0075 USDC / points");
+});
