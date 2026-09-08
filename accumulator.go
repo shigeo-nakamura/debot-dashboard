@@ -255,7 +255,11 @@ func applyAccumulatorDCA(ctx context.Context, status *StatusData, cfg *Accumulat
 		status.AccumulatorDCAError = "DCA window not configured"
 		return
 	}
-	closes, closesErr := dailyCloses.get(ctx, client, cfg.DCA.coin(), start, now)
+	// Bounded like every other outbound read in the poll loop: a hung
+	// price endpoint must not stall the target's goroutine.
+	fetchCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	closes, closesErr := dailyCloses.get(fetchCtx, client, cfg.DCA.coin(), start, now)
 	status.AccumulatorDCA, status.AccumulatorDCAError = accumulatorDCABenchmark(
 		status.Accumulator, status.AccumulatorOps, cfg.DCA, closes, closesErr, now,
 	)
