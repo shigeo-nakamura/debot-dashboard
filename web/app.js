@@ -231,11 +231,11 @@ const reconcileBucketOrder = () => {
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
 //
-// β is the only bucket with an aggregate today. The subsidy bucket's cost
-// per unit arrives with bot-strategy#957 and the α candidates' gate
-// progress with #958 — until then those buckets show their card count and
-// their benchmark line only, rather than a placeholder number.
+// The α candidates' gate progress arrives with bot-strategy#958; until
+// then that bucket shows its card count and its benchmark line only,
+// rather than a placeholder number.
 const bucketAggregateStats = (bucket, items) => {
+  if (bucket === "subsidy") return subsidyAggregateStats(items);
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
@@ -302,6 +302,56 @@ const bucketAggregateStats = (bucket, items) => {
           : "Excess over holding the same exposure as spot, from each target's verified startup anchor (bot-strategy#955).",
     },
   ];
+};
+
+// Costs sum across the bucket, but units do not: points and qualifying
+// activity notional are different things, so each unit gets its own
+// total and its own cost per unit. Only the targets reporting that unit
+// contribute to its cost, or the price per point would be inflated by
+// another bot's spending.
+const subsidyAggregateStats = (items) => {
+  let cost = 0;
+  let costCount = 0;
+  const byUnit = new Map();
+  items.forEach(({ target }) => {
+    const data = target.status;
+    if (!data) return;
+    const kpi = target.subsidy_kpi;
+    const reported = data.subsidy && Number.isFinite(data.subsidy.cost_total_usd)
+      ? Number(data.subsidy.cost_total_usd)
+      : null;
+    const targetCost = reported === null ? subsidyCostFallback(data) : reported;
+    if (targetCost !== null) {
+      cost += targetCost;
+      costCount += 1;
+    }
+    if (!kpi || !data.subsidy || !Number.isFinite(data.subsidy.units_total)) return;
+    const unit = kpi.unit || "unit";
+    const entry = byUnit.get(unit) || { units: 0, cost: 0, costKnown: true };
+    entry.units += Number(data.subsidy.units_total);
+    if (targetCost === null) {
+      entry.costKnown = false;
+    } else {
+      entry.cost += targetCost;
+    }
+    byUnit.set(unit, entry);
+  });
+  const stats = [
+    {
+      label: "Cost paid",
+      value: costCount > 0 ? formatUsdc(cost) : "-",
+      title:
+        "What this bucket has spent in fees, slippage and adverse selection to earn its subsidy. Negative PnL here is the price, not a loss to fix.",
+    },
+  ];
+  for (const [unit, entry] of byUnit) {
+    stats.push({ label: `Units (${unit})`, value: formatUnits(entry.units, unit) });
+    stats.push({
+      label: `Cost / ${unit}`,
+      value: entry.costKnown ? formatCostPerUnit(entry.cost, entry.units, unit) : "-",
+    });
+  }
+  return stats;
 };
 
 const updateBucketAggregate = (group, bucket, items) => {
@@ -472,6 +522,7 @@ const createCard = (key) => {
         <span class="status-pill bucket" data-field="bucket"></span>
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
+        <span class="status-pill kpi-stale" data-field="kpi-stale" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
@@ -525,6 +576,15 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="benchmark-panel" data-field="subsidy-panel" hidden aria-label="Subsidy KPI">
+        <div class="benchmark-title" title="A subsidy bot buys points or qualifying activity with fees, slippage and adverse selection. Its PnL is the price paid, so it is judged on the price per unit, not on the PnL (bot-strategy#938, taxonomy §4.2).">Cost per unit of subsidy</div>
+        <div class="row"><span data-field="subsidy-cpu-7d-label">Cost / unit (7d)</span><strong data-field="subsidy-cpu-7d"></strong></div>
+        <div class="row"><span data-field="subsidy-cpu-total-label">Cost / unit (since start)</span><strong data-field="subsidy-cpu-total"></strong></div>
+        <div class="row"><span data-field="subsidy-units-label">Units earned</span><strong data-field="subsidy-units"></strong></div>
+        <div class="row"><span>Cumulative cost</span><strong data-field="subsidy-cost"></strong></div>
+        <div class="row"><span>Imputed value</span><strong data-field="subsidy-value"></strong></div>
+        <div class="benchmark-note" data-field="subsidy-note" hidden></div>
+      </section>
       <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
         <div class="equity-headline">
           <div class="equity-headline-label">
@@ -592,7 +652,7 @@ const createCard = (key) => {
         <strong data-field="pnl-total"></strong>
       </div>
       <div class="kv">
-        <div>PnL today <span data-field="pnl-today"></span></div>
+        <div><span data-field="pnl-today-label">PnL today</span> <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
       </div>
       <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
@@ -956,6 +1016,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
     startedEl.textContent = formatStarted(target.service_started_at);
   }
   ageEl.textContent = ageText;
+  // Rendered before the per-shape branches below, which return early:
+  // the KPI panel is the headline for a subsidy bot whatever shape its
+  // status payload has (pairtrade-like for Robinhood, Arcus for Arcus).
+  renderSubsidyPanel(card, target, data);
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
@@ -992,6 +1056,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
       errorEl.textContent = "";
     }
     return;
+  }
+  // On a subsidy bot the daily PnL is the day's price paid, not a
+  // result to improve; the KPI panel above is what the bot is judged on
+  // (bot-strategy#957).
+  const pnlTodayLabelEl = card.querySelector('[data-field="pnl-today-label"]');
+  if (pnlTodayLabelEl) {
+    pnlTodayLabelEl.textContent = bucketOf(target) === "subsidy" ? "Cost today (PnL)" : "PnL today";
   }
   pnlTodayEl.textContent = pnlToday;
   pnlTotalEl.textContent = pnlTotal;
@@ -1333,6 +1404,125 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
       : (b && b.benchmark_error) || "Buy & hold benchmark unavailable";
     noteEl.textContent = note;
     noteEl.hidden = note === "";
+  }
+};
+
+// Cumulative cost when the bot does not (yet) report one. Both fallbacks
+// are the bot's own net result read as a price: Arcus values its initial
+// basket at current prices, so cumulative_loss_usd is already
+// price-neutral, and a pairtrade-shaped bot's lifetime trade_stats.pnl
+// is net of the fees and slippage that make up the cost.
+const subsidyCostFallback = (data) => {
+  if (!data) return null;
+  if (data.arcus) {
+    return Number.isFinite(data.arcus.cumulative_loss_usd) ? Number(data.arcus.cumulative_loss_usd) : null;
+  }
+  if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
+    return -Number(data.trade_stats.pnl);
+  }
+  return null;
+};
+
+// Cost per unit is a price, often a small one (fractions of a cent per
+// point), so it gets its own precision rather than the card's money
+// rounding, which would show every value as 0.0.
+const costPerUnit = (cost, units) => {
+  if (!Number.isFinite(cost) || !Number.isFinite(units) || units === 0) return null;
+  return cost / units;
+};
+
+const formatCostPerUnit = (cost, units, unit) => {
+  const value = costPerUnit(cost, units);
+  if (value === null) return "-";
+  return `${groupedFixed(value, 4)} USDC / ${unit}`;
+};
+
+const formatUnits = (value, unit) =>
+  Number.isFinite(value) ? `${groupedFixed(value, 2)} ${unit}` : "-";
+
+// The subsidy KPI panel (bot-strategy#957). The denominator comes from
+// the bot's daily ledger (bot-strategy#938) and is absent until that
+// lands; the numerator can already be sourced today. Nothing here is
+// filled in from the other half: a cost with no units earned renders as
+// a cost, never as a cost per unit.
+const renderSubsidyPanel = (card, target, data) => {
+  const panel = card.querySelector('[data-field="subsidy-panel"]');
+  const staleEl = card.querySelector('[data-field="kpi-stale"]');
+  const kpi = target ? target.subsidy_kpi : null;
+  if (!panel) return;
+  if (!kpi) {
+    panel.hidden = true;
+    if (staleEl) {
+      staleEl.hidden = true;
+      staleEl.textContent = "";
+      staleEl.removeAttribute("title");
+    }
+    return;
+  }
+  panel.hidden = false;
+
+  const unit = kpi.unit || "unit";
+  const units = data && data.subsidy ? data.subsidy : null;
+  const unitsTotal = units && Number.isFinite(units.units_total) ? Number(units.units_total) : null;
+  const units7d = units && Number.isFinite(units.units_7d) ? Number(units.units_7d) : null;
+  const reportedCost = units && Number.isFinite(units.cost_total_usd) ? Number(units.cost_total_usd) : null;
+  const cost7d = units && Number.isFinite(units.cost_7d_usd) ? Number(units.cost_7d_usd) : null;
+  const costTotal = reportedCost === null ? subsidyCostFallback(data) : reportedCost;
+
+  const setRow = (field, text, signed) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    el.textContent = text;
+    if (signed !== undefined) applySignedClass(el, signed);
+  };
+
+  setRow("subsidy-cpu-7d", formatCostPerUnit(cost7d, units7d, unit));
+  setRow("subsidy-cpu-total", formatCostPerUnit(costTotal, unitsTotal, unit));
+  setRow("subsidy-units", formatUnits(unitsTotal, unit));
+  // Cost is money given up, so it is not tinted green when it grows.
+  setRow("subsidy-cost", costTotal === null ? "-" : formatUsdc(costTotal));
+  const labelEl = card.querySelector('[data-field="subsidy-units-label"]');
+  if (labelEl) labelEl.textContent = `Units earned (${unit})`;
+
+  const valueEl = card.querySelector('[data-field="subsidy-value"]');
+  if (valueEl) {
+    const rate = Number.isFinite(kpi.imputed_unit_value_usd) ? Number(kpi.imputed_unit_value_usd) : null;
+    if (rate === null) {
+      valueEl.textContent = "-";
+      valueEl.title = "No payout assumption is configured. An unpriced subsidy is a legitimate state; the KPI still prices the cost.";
+    } else if (unitsTotal === null) {
+      valueEl.textContent = "-";
+      valueEl.title = `Assumed ${groupedFixed(rate, 4)} USDC per ${unit} as of ${kpi.value_source_date}, but no units are reported yet.`;
+    } else {
+      valueEl.textContent = `${formatUsdc(unitsTotal * rate)} (as of ${kpi.value_source_date})`;
+      valueEl.title = `Units earned × the operator's assumed ${groupedFixed(rate, 4)} USDC per ${unit}, sourced ${kpi.value_source_date}. An assumption, not a payout.`;
+    }
+  }
+
+  const noteEl = card.querySelector('[data-field="subsidy-note"]');
+  if (noteEl) {
+    const note =
+      unitsTotal === null
+        ? "Units are not reported yet — the daily subsidy ledger lands with bot-strategy#938. Cost is shown from the bot's own net result."
+        : units7d === null
+          ? "The rolling 7-day window comes from the bot's daily ledger and is not being reported yet."
+          : "";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
+
+  if (staleEl) {
+    if (kpi.stale) {
+      staleEl.textContent = `KPI STALE since ${kpi.stale_since}`;
+      staleEl.title =
+        "The venue changed the subsidy program (points weights, activity rules) more recently than the KPI was re-evaluated. " +
+        "Numbers below describe the old program until an operator reviews it and updates kpi_reviewed_on.";
+      staleEl.hidden = false;
+    } else {
+      staleEl.hidden = true;
+      staleEl.textContent = "";
+      staleEl.removeAttribute("title");
+    }
   }
 };
 

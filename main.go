@@ -78,6 +78,10 @@ type TargetConfig struct {
 	// classification for `service`, and a service the taxonomy does not
 	// know becomes "unclassified". See resolveBucket in buckets.go.
 	Bucket string `yaml:"bucket"`
+	// Subsidy carries the operator-entered half of the cost-per-unit KPI
+	// for a subsidy bot (bot-strategy#938/#957). Only meaningful for a
+	// target in the subsidy bucket.
+	Subsidy *SubsidyConfig `yaml:"subsidy"`
 }
 
 type StatusPosition struct {
@@ -239,18 +243,22 @@ type StatusData struct {
 	// renders "-" instead of a misleading "$0.00". Post-#371
 	// binaries always emit the field (zero is a meaningful "no
 	// closed cycles today" measurement).
-	FundingCarryToday *float64               `json:"funding_carry_today,omitempty"`
-	Accumulator       *AccumulatorStatus     `json:"accumulator,omitempty"`
-	AccumulatorOps    *AccumulatorOperations `json:"operations,omitempty"`
-	BullHolder        *BullHolderStatus      `json:"bull_holder,omitempty"`
-	HanBridge         *HanBridgeStatus       `json:"han_bridge,omitempty"`
-	Book              *BookStatus            `json:"book,omitempty"`
-	TradeStats        *TradeStats            `json:"trade_stats,omitempty"`
-	Maintenance       *string                `json:"maintenance,omitempty"`
-	Shutdown          *ShutdownStatus        `json:"shutdown,omitempty"`
-	ErrorSummary      *ErrorSummary          `json:"error_summary,omitempty"`
-	EquityHistory     []EquityPoint          `json:"equity_history,omitempty"`
-	Arcus             *arcusstatus.Status    `json:"arcus,omitempty"`
+	FundingCarryToday *float64 `json:"funding_carry_today,omitempty"`
+	// Subsidy is the bot-reported units/cost ledger behind the
+	// cost-per-unit KPI (bot-strategy#938). Absent until the bot emits
+	// it; the card then shows what it can source and "-" for the rest.
+	Subsidy        *SubsidyUnits          `json:"subsidy,omitempty"`
+	Accumulator    *AccumulatorStatus     `json:"accumulator,omitempty"`
+	AccumulatorOps *AccumulatorOperations `json:"operations,omitempty"`
+	BullHolder     *BullHolderStatus      `json:"bull_holder,omitempty"`
+	HanBridge      *HanBridgeStatus       `json:"han_bridge,omitempty"`
+	Book           *BookStatus            `json:"book,omitempty"`
+	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
+	Maintenance    *string                `json:"maintenance,omitempty"`
+	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
+	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
+	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
+	Arcus          *arcusstatus.Status    `json:"arcus,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -413,7 +421,10 @@ type TargetStatus struct {
 	// docs/buckets.md. Always populated ("unclassified" when unknown) so
 	// the frontend, error-watch and any other API reader can group and
 	// filter by it (bot-strategy#959).
-	Bucket           string      `json:"bucket"`
+	Bucket string `json:"bucket"`
+	// SubsidyKPI is the configured cost-per-unit KPI plus its staleness
+	// verdict; nil for a target that is not a configured subsidy bot.
+	SubsidyKPI       *SubsidyKPI `json:"subsidy_kpi,omitempty"`
 	ServiceStatus    string      `json:"service_status"`
 	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
 	Status           *StatusData `json:"status,omitempty"`
@@ -579,6 +590,14 @@ func normalizeConfig(cfg *Config) error {
 		if err := resolveBucket(target); err != nil {
 			return fmt.Errorf("targets[%d]: %w", i, err)
 		}
+		if target.Subsidy != nil {
+			if target.Bucket != BucketSubsidy {
+				return fmt.Errorf("targets[%d]: subsidy KPI configured for a %s target", i, target.Bucket)
+			}
+			if err := target.Subsidy.validate(); err != nil {
+				return fmt.Errorf("targets[%d]: %w", i, err)
+			}
+		}
 		if target.BullHolder != nil {
 			if target.S3Bucket != "" || target.S3Key != "" {
 				return fmt.Errorf("targets[%d]: choose bull_holder or S3", i)
@@ -694,6 +713,10 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			}
 			// Set last: both fetchers rebuild the TargetStatus wholesale.
 			results[i].Bucket = target.Bucket
+			results[i].SubsidyKPI = resolveSubsidyKPI(target.Subsidy)
+			if results[i].Status != nil {
+				results[i].Status.Subsidy = usableSubsidyUnits(results[i].Status.Subsidy, target.Subsidy)
+			}
 		}()
 	}
 	wg.Wait()

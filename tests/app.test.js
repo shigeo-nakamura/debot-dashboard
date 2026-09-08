@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -800,9 +800,13 @@ test("beta bucket totals held value across bot shapes and never sums across buck
   // Other buckets get their aggregates from their own issues (#957/#958);
   // until then they must render no numbers at all rather than a total
   // borrowed from another bucket.
-  assert.equal(context.__test.bucketAggregateStats("subsidy", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("alpha_candidate", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("unclassified", items).length, 0);
+  // β-shaped payloads carry no subsidy cost, so the subsidy aggregate
+  // reports nothing rather than borrowing their equity.
+  const asSubsidy = context.__test.bucketAggregateStats("subsidy", items);
+  assert.equal(asSubsidy.length, 1);
+  assert.equal(asSubsidy[0].value, "-");
 });
 
 test("MTD stays unavailable until a recorded month-start baseline exists", () => {
@@ -889,6 +893,7 @@ const benchmarkCard = () => {
           textContent: "",
           hidden: false,
           title: "",
+          removeAttribute() { this.title = ""; },
           classList: { toggle() {}, add() {}, remove() {} },
         });
       }
@@ -1108,4 +1113,109 @@ test("beta aggregate sums excess only over targets that actually have a benchmar
     context.__test.bucketAggregateStats("beta", [items[1]]).find((s) => s.label === "vs buy & hold").value,
     "-",
   );
+});
+
+test("subsidy card leads with cost per unit and never manufactures a denominator", () => {
+  const card = benchmarkCard();
+  const target = {
+    bucket: "subsidy",
+    subsidy_kpi: { unit: "points", imputed_unit_value_usd: 0.05, value_source_date: "2026-09-08", stale: false },
+    status: {
+      subsidy: { unit: "points", units_total: 20000, units_7d: 1000, cost_total_usd: 210, cost_7d_usd: 14 },
+      trade_stats: { pnl: -180 },
+    },
+  };
+  context.__test.renderSubsidyPanel(card, target, target.status);
+  assert.equal(card.querySelector('[data-field="subsidy-panel"]').hidden, false);
+  assert.equal(card.text("subsidy-cpu-7d"), "0.0140 USDC / points");
+  assert.equal(card.text("subsidy-cpu-total"), "0.0105 USDC / points");
+  assert.equal(card.text("subsidy-units"), "20,000.00 points");
+  // The bot's own ledger wins over the fallback derived from trade_stats.
+  assert.equal(card.text("subsidy-cost"), "210.0 USDC");
+  assert.equal(card.text("subsidy-value"), "1,000.0 USDC (as of 2026-09-08)");
+  assert.equal(card.querySelector('[data-field="subsidy-note"]').hidden, true);
+
+  // No ledger yet: cost is still sourced, but nothing is divided by a
+  // denominator that does not exist.
+  const pending = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    pending,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: false } },
+    { trade_stats: { pnl: -180 } },
+  );
+  assert.equal(pending.text("subsidy-cpu-total"), "-");
+  assert.equal(pending.text("subsidy-units"), "-");
+  assert.equal(pending.text("subsidy-cost"), "180.0 USDC");
+  assert.equal(pending.text("subsidy-value"), "-");
+  assert.match(pending.text("subsidy-note"), /bot-strategy#938/);
+
+  // A target with no configured KPI keeps the panel out of the way.
+  const other = benchmarkCard();
+  context.__test.renderSubsidyPanel(other, { bucket: "beta" }, { pnl_total: 10 });
+  assert.equal(other.querySelector('[data-field="subsidy-panel"]').hidden, true);
+});
+
+test("a program change marks the KPI stale on the card until it is reviewed", () => {
+  const card = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    card,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: true, stale_since: "2026-09-01" } },
+    { trade_stats: { pnl: -10 } },
+  );
+  const pill = card.querySelector('[data-field="kpi-stale"]');
+  assert.equal(pill.hidden, false);
+  assert.equal(pill.textContent, "KPI STALE since 2026-09-01");
+
+  const fresh = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    fresh,
+    { bucket: "subsidy", subsidy_kpi: { unit: "points", stale: false } },
+    { trade_stats: { pnl: -10 } },
+  );
+  assert.equal(fresh.querySelector('[data-field="kpi-stale"]').hidden, true);
+});
+
+test("cost falls back to the bot's own net result, in the right direction", () => {
+  // Arcus values its initial basket at current prices, so this is
+  // already the price paid rather than a price move.
+  assert.equal(context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 42 } }), 42);
+  // A losing subsidy bot has a positive cost; a bot that came out ahead
+  // has a negative one.
+  assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: -180 } }), 180);
+  assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: 20 } }), -20);
+  assert.equal(context.__test.subsidyCostFallback({ pnl_total: 1000 }), null);
+  assert.equal(context.__test.costPerUnit(100, 0), null);
+  assert.equal(context.__test.costPerUnit(100, null), null);
+});
+
+test("subsidy aggregate totals cost across the bucket but keeps units apart by unit", () => {
+  const items = [
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+      },
+      index: 0,
+    },
+    {
+      target: {
+        subsidy_kpi: { unit: "points" },
+        status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 50 } },
+      },
+      index: 1,
+    },
+    {
+      // Different unit, and no ledger: contributes cost only.
+      target: { subsidy_kpi: { unit: "USD activity" }, status: { arcus: { cumulative_loss_usd: 30 } } },
+      index: 2,
+    },
+  ];
+  const stats = context.__test.bucketAggregateStats("subsidy", items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Cost paid").value, "180.0 USDC");
+  assert.equal(stat("Units (points)").value, "20,000.00 points");
+  // Points cost 150 of the 180: the Arcus spend must not be priced into
+  // thepoints  denominator.
+  assert.equal(stat("Cost / points").value, "0.0075 USDC / points");
+  assert.equal(stat("Units (USD activity)"), undefined);
 });

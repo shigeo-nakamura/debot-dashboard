@@ -223,6 +223,12 @@ body::after {
   margin-bottom: 4px;
 }
 
+.status-pill.kpi-stale {
+  background: rgba(214, 158, 46, 0.16);
+  color: var(--warning);
+  border: 1px solid rgba(214, 158, 46, 0.4);
+}
+
 .benchmark-note {
   font-size: 12px;
   color: var(--muted);
