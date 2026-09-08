@@ -10,15 +10,29 @@ gate needs.
 ## Configuration
 
 ```yaml
-  - name: XSMOM
-    # ... existing target fields ...
+  - name: XSMOM shadow track
+    instance_id: local
+    service: xsmom-695-shadow
+    region: eu-central-1
+    s3_bucket: debot-dashboard
+    s3_key: debot/status/xsmom-695-shadow/status.json
+    # The watcher publishes hourly, so the default 180 s freshness window
+    # would read every card as stale.
+    stale_after_secs: 7200
     bucket: alpha_candidate
     gate:
-      spec_hash: "a1b2c3d4e5f6"   # 12-64 lowercase hex, the frozen pre-registration
-      required_samples: 60
-      readout_on: "2026-10-02"    # UTC
-      sample_source: "book runtime decision journal (bot-strategy#937)"
+      spec_hash: "b33440bde55908f2"   # 12-64 lowercase hex, the frozen pre-registration
+      required_samples: 91
+      readout_on: "2026-10-02"        # UTC
+      sample_source: "daily marks in the shadow-paper ledger (bot-strategy#695)"
 ```
+
+**Which producer holds the gate matters.** XSMOM has two: the shadow-paper
+watcher whose ledger the 2026-10-02 readout is computed from, and the Tokyo
+`book-runtime-xsmom-695` that started following it on 2026-09-11. Only the
+first one carries `gate:` — counting the follower's decisions against the
+frozen gate would report progress on a study the readout never reads
+(bot-strategy#964).
 
 `gate:` is only valid on a target in the alpha_candidate bucket; anywhere else
 it is a startup config error. `spec_hash` lives in the dashboard config, not
@@ -50,6 +64,17 @@ independently of the process being observed.
   status has stopped arriving: a frozen payload's last `decision_on_time: true`
   is not evidence that the study is still running.
 
+- **Sampling health** reports "sample overdue" when the producer's own
+  `next_sample_due_at` has passed and the readout has not. A fresh status
+  object proves the producer is alive, not that the study is accumulating:
+  the XSMOM watcher kept publishing through the 2026-08-26..08-31 gap that
+  cost the track six marks. The deadline is the producer's because only it
+  knows its cadence — XSMOM marks daily, Engine B once per session, the
+  ex-dividend book (#948) far more sparsely — and a dashboard-side rule
+  general enough to cover all three would flag none of them. A producer that
+  declares no deadline gets no verdict: the dashboard never infers one from
+  `last_sample_at`.
+
 The generic trading view's equity headline, PnL rows, lifetime stats and equity
 chart are hidden for these targets, along with the risk progress panel (its bars
 state the live drawdown in bps against its threshold) and the book panel's
@@ -71,9 +96,18 @@ does not render them.
   "valid_samples": 12,
   "last_sample_at": 1757300000,
   "decision_on_time": true,
-  "signal_hash_matched": true
+  "signal_hash_matched": true,
+  "next_sample_due_at": 1757386400,
+  "sample_cadence_secs": 86400
 }
 ```
+
+`next_sample_due_at` is a unix second and already includes whatever grace
+the producer allows itself (the XSMOM watcher retries hourly, so its
+deadline is 01:30 UTC for a mark nominally taken at 00:20).
+`sample_cadence_secs` is shown to the operator and never used to derive a
+deadline. Both are optional; both are withheld along with the sample count
+when the spec hash drifts.
 
 There is deliberately no PnL, t-statistic or equity in this block.
 

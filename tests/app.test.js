@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1593,6 +1593,46 @@ test("gate health reports the machinery, not the result", () => {
     "Not sampling (stale)",
   );
   assert.equal(health({ decision_on_time: true }, {}, "active"), "Sampling normally");
+
+  // A producer can be alive and publishing while the study stops
+  // accumulating samples -- the XSMOM watcher kept writing status
+  // through the six-day gap that cost the track six marks
+  // (bot-strategy#964/#695). The deadline is the producer's own, echoed
+  // through the resolved gate.
+  const overdue = { gate: { sample_overdue: true } };
+  assert.equal(health({ decision_on_time: true }, {}, "active", overdue), "sample overdue");
+  // The producer's own "late" flag is the same condition seen from the
+  // other side, so it is not repeated as a second label.
+  assert.equal(health({ decision_on_time: false }, {}, "active", overdue), "sample overdue");
+  assert.equal(
+    health({ decision_on_time: false, signal_hash_matched: false }, {}, "active", overdue),
+    "sample overdue; signal hash mismatch",
+  );
+  assert.equal(
+    health({ decision_on_time: true }, {}, "active", { gate: { sample_overdue: false } }),
+    "Sampling normally",
+  );
+});
+
+test("the sampling-health tooltip states when the next sample was due", () => {
+  const card = benchmarkCard();
+  const gate = {
+    spec_hash: "b33440bde55908f2",
+    required_samples: 91,
+    readout_on: "2026-10-02",
+    valid_samples: 61,
+    next_sample_due_at: Date.UTC(2026, 8, 8, 1, 30) / 1000,
+    sample_cadence_secs: 86400,
+    sample_overdue: true,
+  };
+  context.__test.renderGatePanel(card, { gate }, {});
+  assert.equal(card.text("gate-samples"), "61 / 91");
+  const tip = card.querySelector('[data-field="gate-health"]').title;
+  assert.match(tip, /Next sample due 2026-09-08 01:30 UTC \(every day\)\./);
+  assert.equal(context.__test.formatCadence(86400), "day");
+  assert.equal(context.__test.formatCadence(432000), "5 days");
+  assert.equal(context.__test.formatCadence(3600), "hour");
+  assert.equal(context.__test.formatCadence(0), "");
 });
 
 test("a blinded card names a halt without quoting the number that caused it", () => {

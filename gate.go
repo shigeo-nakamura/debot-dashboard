@@ -44,6 +44,19 @@ type GateStatus struct {
 	LastSampleAt      int64  `json:"last_sample_at,omitempty"`
 	DecisionOnTime    *bool  `json:"decision_on_time,omitempty"`
 	SignalHashMatched *bool  `json:"signal_hash_matched,omitempty"`
+	// NextSampleDueAt is the unix second by which the next valid sample
+	// must have been produced, grace included. It is the producer's own
+	// deadline because only the producer knows its cadence: XSMOM marks
+	// daily, Engine B once per session, #948 far more sparsely, and a
+	// dashboard-side rule general enough to cover all three would flag
+	// none of them (bot-strategy#964, debot-dashboard#39 thread). Zero
+	// means the producer does not declare one, and the dashboard then
+	// says nothing about sample staleness rather than guessing.
+	NextSampleDueAt int64 `json:"next_sample_due_at,omitempty"`
+	// SampleCadenceSecs is the nominal spacing between samples, shown to
+	// the operator so an overdue count reads against the expected rate.
+	// Never used to derive the deadline above.
+	SampleCadenceSecs int64 `json:"sample_cadence_secs,omitempty"`
 }
 
 // GateProgress is what the API exposes: the frozen spec plus the derived
@@ -56,6 +69,16 @@ type GateProgress struct {
 	// issue, not on the dashboard.
 	ReadoutDue    bool `json:"readout_due"`
 	DaysToReadout *int `json:"days_to_readout,omitempty"`
+	// SampleOverdue is true when the producer's own deadline for the
+	// next sample has passed. A fresh status object proves the producer
+	// is alive, not that the study is still accumulating samples: the
+	// XSMOM watcher kept publishing through the 08-26..08-31 gap that
+	// cost the track six marks (bot-strategy#695).
+	SampleOverdue bool `json:"sample_overdue"`
+	// NextSampleDueAt / SampleCadenceSecs are echoed from the bot so the
+	// card can say when the next sample was expected.
+	NextSampleDueAt   int64 `json:"next_sample_due_at,omitempty"`
+	SampleCadenceSecs int64 `json:"sample_cadence_secs,omitempty"`
 	// SpecDrift is true when the bot reports a different spec hash than
 	// the frozen one. The sample count is withheld while it is set.
 	SpecDrift bool `json:"spec_drift"`
@@ -97,5 +120,12 @@ func resolveGate(cfg *GateConfig, status *GateStatus, now time.Time) *GateProgre
 		return progress
 	}
 	progress.ValidSamples = status.ValidSamples
+	progress.NextSampleDueAt = status.NextSampleDueAt
+	progress.SampleCadenceSecs = status.SampleCadenceSecs
+	// Only after the readout is the deadline meaningless: the study is
+	// done accumulating and the operator is running the script.
+	if status.NextSampleDueAt > 0 && !progress.ReadoutDue {
+		progress.SampleOverdue = now.UTC().Unix() > status.NextSampleDueAt
+	}
 	return progress
 }

@@ -1755,6 +1755,16 @@ const entryBlockingHalts = (target, data) => {
   return labels;
 };
 
+// Sample cadence for the tooltip: whole days read better than 86400 s
+// for a daily mark, and every α candidate's cadence so far is a whole
+// number of hours or days.
+const formatCadence = (secs) => {
+  if (!Number.isFinite(secs) || secs <= 0) return "";
+  if (secs % 86400 === 0) return secs === 86400 ? "day" : `${secs / 86400} days`;
+  if (secs % 3600 === 0) return secs === 3600 ? "hour" : `${secs / 3600} hours`;
+  return `${secs}s`;
+};
+
 const gateHealthText = (gate, data, serviceStatus, target) => {
   // A stale or failing target is not sampling, whatever its last status
   // object said before it stopped arriving; deriving "normal" from that
@@ -1764,7 +1774,14 @@ const gateHealthText = (gate, data, serviceStatus, target) => {
     return `Not sampling (${serviceStatus})`;
   }
   const parts = [];
-  if (gate && gate.decision_on_time === false) parts.push("decision late");
+  // The producer's own deadline for the next sample (bot-strategy#964).
+  // A fresh status object only proves the producer is alive: the XSMOM
+  // watcher kept publishing through the six-day gap that cost the track
+  // six marks. `decision_on_time: false` is the same condition seen from
+  // the producer's side, so it is not repeated as a second label.
+  const overdue = Boolean(target && target.gate && target.gate.sample_overdue);
+  if (overdue) parts.push("sample overdue");
+  else if (gate && gate.decision_on_time === false) parts.push("decision late");
   if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
   // Every entry-blocking state, by label: a kill switch or a generic
   // daily/session/circuit halt stops the study sampling just as surely
@@ -1836,6 +1853,11 @@ const renderGatePanel = (card, target, data) => {
   set(
     "gate-health",
     gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined, target),
+    gate.next_sample_due_at
+      ? `Next sample due ${new Date(gate.next_sample_due_at * 1000).toISOString().replace("T", " ").slice(0, 16)} UTC${
+          gate.sample_cadence_secs ? ` (every ${formatCadence(gate.sample_cadence_secs)})` : ""
+        }.`
+      : undefined,
   );
 
   const noteEl = card.querySelector('[data-field="gate-note"]');
