@@ -1446,6 +1446,17 @@ const subsidyCostFallback = (data) => {
 // landed yet.
 const SUBSIDY_LEDGER_STALE_MS = 48 * 60 * 60 * 1000;
 
+// Epoch seconds a running bot could have written: no earlier than this
+// project's first bot, no later than a day ahead of the reader's clock.
+const SUBSIDY_LEDGER_TS_MIN = Date.UTC(2024, 0, 1) / 1000;
+
+const subsidyLedgerTimestamp = (units) => {
+  if (!units || !Number.isFinite(units.as_of_ts)) return null;
+  const ts = Number(units.as_of_ts);
+  const max = Date.now() / 1000 + 86400;
+  return ts >= SUBSIDY_LEDGER_TS_MIN && ts <= max ? ts : null;
+};
+
 const costPerUnit = (cost, units) => {
   if (!Number.isFinite(cost) || !Number.isFinite(units) || units === 0) return null;
   return cost / units;
@@ -1523,7 +1534,11 @@ const renderSubsidyPanel = (card, target, data) => {
   // card's "Last update" age describes. Without its own timestamp a
   // stalled ledger reads as current under a freshly-refreshed status
   // (Codex, PR #38).
-  const asOf = units && Number.isFinite(units.as_of_ts) ? Number(units.as_of_ts) : null;
+  // A producer can emit an out-of-range epoch that is still a valid
+  // int64 on the wire; new Date(...).toISOString() throws a RangeError on
+  // it and takes the whole render down with it (Codex, PR #38). Only
+  // timestamps a bot could plausibly have written are formatted.
+  const asOf = subsidyLedgerTimestamp(units);
   const asOfAgeMs = asOf === null ? null : Date.now() - asOf * 1000;
   const ledgerStale = asOfAgeMs !== null && asOfAgeMs > SUBSIDY_LEDGER_STALE_MS;
   setRow("subsidy-as-of", asOf === null ? "-" : formatDateWithAge(new Date(asOf * 1000).toISOString()));
@@ -1532,7 +1547,12 @@ const renderSubsidyPanel = (card, target, data) => {
   if (noteEl) {
     const note =
       unitsTotal === null
-        ? "Units are not reported yet — the daily subsidy ledger lands with bot-strategy#938. Cost is shown from the bot's own net result."
+        ? reportedCost === null
+          ? "Units are not reported yet — the daily subsidy ledger lands with bot-strategy#938. Cost is shown from the bot's own net result."
+          // The contract permits a ledger that prices the cost before it
+          // can count the units; saying the cost came from the fallback
+          // would misattribute it (Codex, PR #38).
+          : "The ledger reports cost but not units yet, so there is nothing to divide it by."
         : ledgerStale
           ? `The subsidy ledger has not been written for ${formatAge(asOfAgeMs)}; the units and costs above describe that older window, not the status timestamp on this card.`
           : asOf === null

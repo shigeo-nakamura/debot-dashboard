@@ -1181,6 +1181,26 @@ test("subsidy card ages the ledger separately from the status object", () => {
   });
   assert.match(stalled.text("subsidy-note"), /has not been written/);
 
+  // An out-of-range epoch is still a valid int64 on the wire, and
+  // formatting it throws a RangeError that would take the whole render
+  // down. It is treated as no timestamp at all.
+  const bogus = benchmarkCard();
+  context.__test.renderSubsidyPanel(bogus, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", units_total: 100, units_7d: 10, cost_total_usd: 10, cost_7d_usd: 1, as_of_ts: 9e18 },
+  });
+  assert.equal(bogus.text("subsidy-as-of"), "-");
+  assert.match(bogus.text("subsidy-note"), /does not report when it was written/);
+
+  // A ledger that prices the cost before it can count units: the cost is
+  // the ledger's, not the fallback's, and the note must not say otherwise.
+  const partial = benchmarkCard();
+  context.__test.renderSubsidyPanel(partial, { subsidy_kpi: kpi }, {
+    subsidy: { unit: "points", cost_total_usd: 10, as_of_ts: now - 3600 },
+    trade_stats: { pnl: -999 },
+  });
+  assert.equal(partial.text("subsidy-cost"), "10.0 USDC");
+  assert.match(partial.text("subsidy-note"), /reports cost but not units/);
+
   // A ledger with no timestamp cannot be aged at all, which is its own
   // thing to say rather than silently passing as fresh.
   const undated = benchmarkCard();
