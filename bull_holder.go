@@ -48,22 +48,22 @@ func (c BullHolderConfig) validate() error {
 
 // Explicit producer allowlist: never forward account identity or signing data.
 type BullHolderStatus struct {
-	ConfigFP          string                   `json:"config_fp"`
-	Investment        *HolderInvestment        `json:"investment"`
-	InvestmentError   string                   `json:"investment_error,omitempty"`
-	UnrealizedPnL     *float64                 `json:"unrealized_pnl_usdc"`
-	Mode              string                   `json:"mode"`
-	ArmedAt           *int64                   `json:"armed_at"`
-	ExitedAt          *int64                   `json:"exited_at"`
-	ExitReason        *string                  `json:"exit_reason"`
-	Halted            bool                     `json:"halted"`
-	HaltReason        *string                  `json:"halt_reason"`
-	KillSwitch        bool                     `json:"kill_switch"`
-	TranchesDone      uint32                   `json:"tranches_done"`
-	TranchesRemaining uint32                   `json:"tranches_remaining"`
-	TrancheSpotUSD    float64                  `json:"tranche_spot_usd"`
-	TranchePerpUSD    float64                  `json:"tranche_perp_usd"`
-	LastTrancheDate   *string                  `json:"last_tranche_date"`
+	ConfigFP          string            `json:"config_fp"`
+	Investment        *HolderInvestment `json:"investment"`
+	InvestmentError   string            `json:"investment_error,omitempty"`
+	UnrealizedPnL     *float64          `json:"unrealized_pnl_usdc"`
+	Mode              string            `json:"mode"`
+	ArmedAt           *int64            `json:"armed_at"`
+	ExitedAt          *int64            `json:"exited_at"`
+	ExitReason        *string           `json:"exit_reason"`
+	Halted            bool              `json:"halted"`
+	HaltReason        *string           `json:"halt_reason"`
+	KillSwitch        bool              `json:"kill_switch"`
+	TranchesDone      uint32            `json:"tranches_done"`
+	TranchesRemaining uint32            `json:"tranches_remaining"`
+	TrancheSpotUSD    float64           `json:"tranche_spot_usd"`
+	TranchePerpUSD    float64           `json:"tranche_perp_usd"`
+	LastTrancheDate   *string           `json:"last_tranche_date"`
 	// ConfiguredSymbols is the book the bot is configured to trade, which
 	// Legs only describes once a tranche has filled. The benchmark's leg
 	// check uses it so a misconfigured anchor is caught before ARM, the
