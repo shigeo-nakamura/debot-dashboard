@@ -1904,10 +1904,14 @@ const updateBenchmarkCache = (key, data) => {
     // A different book. Both series restart together rather than the
     // benchmark alone, so the drawdown comparison stays aligned and the
     // old book's curve is not attributed to the new one.
-    if (benchmarkAnchorByKey.has(key)) {
-      historyByKey.delete(key);
-      recordedHistoryKeys.delete(key);
-    }
+    //
+    // This includes the first benchmark a page ever sees: equity points
+    // cached while the anchor was unconfigured or its marks unavailable
+    // reach back before the benchmark series starts, and comparing a
+    // long bot window against a short benchmark one overstates the bot's
+    // drawdown (Codex, PR #41).
+    historyByKey.delete(key);
+    recordedHistoryKeys.delete(key);
     benchmarkByKey.delete(key);
     benchmarkAnchorByKey.set(key, anchor);
   }

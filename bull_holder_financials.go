@@ -154,7 +154,7 @@ type HolderBenchmarkAsset struct {
 // deploys a tranche (the same tranche_spot_usd into every leg). A book
 // whose legs are not equal-weight would need explicit weights here
 // rather than a silently wrong benchmark.
-func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64) (*HolderBenchmark, string) {
+func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64, legs map[string]BullHolderLeg) (*HolderBenchmark, string) {
 	if investment == nil {
 		return nil, "Verified startup investment settings not configured"
 	}
@@ -164,6 +164,22 @@ func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64)
 	}
 	if len(marks) == 0 {
 		return nil, "Benchmark prices unavailable"
+	}
+	// The whole spot allocation is split across the anchor's legs, so an
+	// anchor that lists fewer legs than the bot trades buys the missing
+	// leg's budget of the remaining ones. That is not a partial
+	// benchmark, it is a different portfolio, and it moves the comparison
+	// by the spread between the legs (Codex, PR #41). Compare against the
+	// book the producer reports whenever it reports one.
+	if len(legs) > 0 {
+		if len(legs) != len(anchor.Assets) {
+			return nil, "Benchmark anchor does not match the book's legs"
+		}
+		for _, asset := range anchor.Assets {
+			if _, ok := legs[asset.Symbol]; !ok {
+				return nil, "Benchmark anchor does not match the book's legs"
+			}
+		}
 	}
 	cost := investment.EquityUSD * investment.SpotFraction
 	perLeg := cost / float64(len(anchor.Assets))

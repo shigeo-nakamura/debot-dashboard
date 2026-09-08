@@ -117,7 +117,7 @@ func TestHolderBenchmarkValuesTheAnchoredBookAtCurrentMarks(t *testing.T) {
 	// 0.45 ETH. At 100k / 2k those legs are worth $900 each, and the
 	// $100 the bot kept as perp margin stays cash in the benchmark, so
 	// both sides start from the same $1000.
-	b, msg := holderBenchmarkFrom(anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 2000})
+	b, msg := holderBenchmarkFrom(anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 2000}, nil)
 	if msg != "" || b == nil {
 		t.Fatalf("benchmark unavailable: %q", msg)
 	}
@@ -155,11 +155,41 @@ func TestHolderBenchmarkNeverGuessesAMissingInput(t *testing.T) {
 		{"leg priced at zero", anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 0}, "Benchmark price unavailable for ETH"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, msg := holderBenchmarkFrom(tc.investment, tc.marks)
+			b, msg := holderBenchmarkFrom(tc.investment, tc.marks, nil)
 			if b != nil || msg != tc.want {
 				t.Fatalf("benchmark = %+v, msg = %q, want msg %q", b, msg, tc.want)
 			}
 		})
+	}
+}
+
+func TestHolderBenchmarkRequiresTheAnchorToDescribeTheWholeBook(t *testing.T) {
+	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
+	legs := map[string]BullHolderLeg{"BTC": {}, "ETH": {}}
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, legs); msg != "" {
+		t.Fatalf("matching book rejected: %q", msg)
+	}
+
+	// An anchor missing a leg does not produce a partial benchmark: the
+	// whole spot allocation is split across the legs it does list, so the
+	// missing leg's budget is spent on the others. That is a different
+	// portfolio, and it beats or loses to the bot by the spread between
+	// the two legs.
+	oneLeg := anchoredInvestment()
+	oneLeg.Anchor.Assets = oneLeg.Anchor.Assets[:1]
+	if b, msg := holderBenchmarkFrom(oneLeg, marks, legs); b != nil || msg != "Benchmark anchor does not match the book's legs" {
+		t.Fatalf("short anchor accepted: %+v %q", b, msg)
+	}
+
+	// A leg the bot does not trade is the same problem mirrored.
+	if b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]BullHolderLeg{"BTC": {}, "SOL": {}}); b != nil || msg == "" {
+		t.Fatalf("mismatched book accepted: %+v %q", b, msg)
+	}
+
+	// Before the bot arms it reports no legs, so there is nothing to
+	// check the anchor against and the benchmark still stands.
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]BullHolderLeg{}); msg != "" {
+		t.Fatalf("benchmark suppressed for an unarmed bot: %q", msg)
 	}
 }
 

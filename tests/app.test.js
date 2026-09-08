@@ -1021,6 +1021,15 @@ test("a changed benchmark anchor restarts both series instead of splicing books"
   assert.equal(context.__test.benchmarkByKey.get(key).length, 2);
   context.__test.historyByKey.set(key, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
 
+  // The first benchmark a page sees also restarts the equity series:
+  // points cached while the anchor was unconfigured reach back before
+  // the benchmark series starts, and comparing a long bot window against
+  // a short benchmark one overstates the bot's drawdown.
+  const firstKey = "first-benchmark";
+  context.__test.historyByKey.set(firstKey, [{ ts: 1, equity: 1 }, { ts: 2, equity: 2 }]);
+  context.__test.updateBenchmarkCache(firstKey, book(1000, 1000, 1_700_000_000));
+  assert.equal(context.__test.historyByKey.get(firstKey), undefined);
+
   // A later rollout re-anchors the book under the same target key.
   // Appending its values to the old book's series would show a jump that
   // never happened, so both series restart together.

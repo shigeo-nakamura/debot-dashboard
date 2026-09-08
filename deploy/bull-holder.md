@@ -91,6 +91,14 @@ investment:
         price_usd: 4300
 ```
 
+The anchor must list every leg the bot trades. The whole spot allocation is
+split across the legs it does list, so an anchor missing one spends that leg's
+budget on the others — not a partial benchmark but a different portfolio,
+beating or losing to the bot by the spread between the legs. The dashboard
+compares the anchor's symbols against the producer's reported `legs` and
+suppresses the benchmark on a mismatch; before the bot arms it reports no legs,
+and the benchmark stands.
+
 Verify `ts` and each `price_usd` the same way as the rest of the snapshot, and
 against the same `config_fp`: a fingerprint mismatch hides the benchmark along
 with the budget amounts. `spot_symbol` defaults to `symbol` and is only needed
