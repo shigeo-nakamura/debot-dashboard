@@ -2393,7 +2393,10 @@ const renderAccumulatorDCA = (card, data) => {
       ? `Naive DCA (${dca.days}d from ${dca.window_start})`
       : "Naive DCA";
     if (dca && dca.symbol) {
-      labelEl.title = `Priced from ${dca.symbol} ${dca.market} daily closes. The current day's candle is still open and is not counted.`;
+      labelEl.title =
+        `Priced from ${dca.symbol} ${dca.market} daily closes. The current day's candle is still open, so it is not counted — ` +
+        `a fill the bot made today is therefore in its cost basis while today is not yet in the schedule it is compared against. ` +
+        `The two align at the next UTC rollover; the residual is at most one day's weight in a ${dca.days}-day window.`;
     }
   }
   const noteEl = card.querySelector('[data-field="accumulator-dca-note"]');

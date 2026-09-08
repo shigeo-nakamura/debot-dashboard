@@ -59,7 +59,15 @@ once a day while the dashboard polls every 20 seconds. A failed read is cached
 for one minute instead: a timeout or a rate limit is transient, and holding it
 for the full TTL would blank the benchmark for half an hour over one bad
 request. The current UTC day's candle is still open, so its close is the latest
-intraday price rather than a daily close; it is excluded from the window. The benchmark is derived
+intraday price rather than a daily close; it is excluded from the window.
+
+That leaves one accounting asymmetry, disclosed on the card rather than papered
+over: a fill the bot makes today is already in its cost basis (`spent_usdc` is
+cumulative, with no daily breakdown to remove it from) while today is not yet in
+the schedule it is compared against. The two alternatives are mutually
+exclusive — counting today's open candle would price the naive schedule at a
+tick instead of a close — so the residual is left and bounded: at most one day's
+weight in an N-day window, and it clears at the next UTC rollover. The benchmark is derived
 by the dashboard and any `accumulator_dca` in the producer payload is discarded
 before it is computed.
 
