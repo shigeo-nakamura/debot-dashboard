@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, blindAlphaCandidate, alphaAggregateStats };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1491,6 +1491,33 @@ test("gate health reports the machinery, not the result", () => {
   assert.equal(health(null, { book: { equity_ready: false, last_decision: { outcome: "applied" } } }), "venue equity unavailable");
   // Nothing observed at all is "-", never a green "normal".
   assert.equal(health(null, {}), "-");
+  // Engine B's halt lives under han_bridge, not book.
+  assert.equal(
+    health(null, { han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } }),
+    "max_session_loss_bps exceeded",
+  );
+  assert.equal(health(null, { han_bridge: { session_halt_reason: null } }), "Sampling normally");
+  // A stale target is not sampling, whatever its last payload claimed
+  // before it stopped arriving.
+  assert.equal(
+    health({ decision_on_time: true, signal_hash_matched: true }, {}, "stale"),
+    "Not sampling (stale)",
+  );
+  assert.equal(health({ decision_on_time: true }, {}, "active"), "Sampling normally");
+});
+
+test("an alpha card withholds the risk panel and the magnitudes in its halt tooltips", () => {
+  const card = benchmarkCard();
+  const data = {
+    daily_risk: { daily_pnl: -12, daily_pnl_bps: -120, effective_max_daily_loss_bps: 200, risk_halted: true },
+    session_risk: { dd_bps: 150, effective_max_session_loss_bps: 300, session_halted: true },
+  };
+  // Blinded: the panel is not rendered at all. The bars state the live
+  // drawdown in bps against its threshold, which is the running result.
+  context.__test.renderRiskPanel(card, data, { blindResult: true });
+  assert.equal(card.querySelector('[data-field="risk-panel"]').hidden, true);
+  assert.equal(card.text("daily-dd-text"), "");
+  assert.equal(card.text("session-dd-text"), "");
 });
 
 test("alpha candidate cards hide equity, PnL, win rate and CAGR", () => {
@@ -1548,6 +1575,14 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
   const stats = context.__test.alphaAggregateStats(items);
   const stat = (label) => stats.find((s) => s.label === label);
   assert.equal(stat("Studies running").value, "2");
+  // A stale target is still in the bucket but is not accumulating
+  // samples; counting it as running overstates the experiment exactly
+  // when it has stopped.
+  const withStalled = context.__test.alphaAggregateStats([
+    items[0],
+    { target: { ...items[1].target, service_status: "stale" }, index: 1 },
+  ]);
+  assert.equal(withStalled.find((s) => s.label === "Studies running").value, "1 of 2");
   assert.equal(stat("Nearest readout").value, "2026-09-11 (3d)");
   // No money or performance figure may appear in this bucket's header.
   for (const entry of stats) {

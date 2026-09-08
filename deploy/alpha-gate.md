@@ -37,11 +37,20 @@ independently of the process being observed.
 - **Frozen spec** — the first 12 characters of `spec_hash`.
 - **Sampling health** — whether the machinery is producing samples: a late
   decision, a signal-hash mismatch, a halt, or a last decision that was
-  rejected or skipped. For a book runtime this is derived from the decision it
-  actually took. Nothing observed at all reads "-", never a green "normal".
+  rejected or skipped — for a book runtime derived from the decision it actually
+  took, for Engine B from its `han_bridge` session halt. Nothing observed at all
+  reads "-", never a green "normal".
+
+- **Sampling health** also reports "Not sampling (stale)" when the target's own
+  status has stopped arriving: a frozen payload's last `decision_on_time: true`
+  is not evidence that the study is still running.
 
 The generic trading view's equity headline, PnL rows, lifetime stats and equity
-chart are hidden for these targets. The numbers stay in `status.json` and in
+chart are hidden for these targets, along with the risk progress panel (its bars
+state the live drawdown in bps against its threshold) and the book panel's
+equity term. The halt pills stay in the header — halt state is safety, not
+performance — but their tooltips withhold the magnitudes. The bucket header
+counts only the targets currently reporting as running studies. The numbers stay in `status.json` and in
 `/api/status` so the readout script can still read them; the frontend simply
 does not render them.
 

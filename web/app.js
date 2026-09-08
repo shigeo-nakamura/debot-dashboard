@@ -405,14 +405,26 @@ const subsidyAggregateStats = (items) => {
 const alphaAggregateStats = (items) => {
   let nearest = null;
   let due = 0;
+  // A stale or failing target is still in the bucket, but calling it a
+  // running study overstates the count exactly when an experiment has
+  // stopped — the moment that matters (Codex, PR #39).
+  let sampling = 0;
   items.forEach(({ target }) => {
+    if (!isTargetUnhealthy(target)) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
     if (nearest === null || gate.readout_on < nearest.readout_on) nearest = gate;
   });
   return [
-    { label: "Studies running", value: `${items.length}` },
+    {
+      label: "Studies running",
+      value: sampling === items.length ? `${sampling}` : `${sampling} of ${items.length}`,
+      title:
+        sampling === items.length
+          ? "Studies whose target is currently reporting."
+          : `${items.length - sampling} target(s) stale or failing: their studies are not accumulating samples.`,
+    },
     {
       label: "Nearest readout",
       value: nearest
@@ -801,6 +813,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // without this the card stays green and "active" while the fleet
   // summary already counts it under halts.
   const bookDegraded = isBookHalted(data);
+  // An α candidate's card must not carry a running result anywhere
+  // (taxonomy §4.3), including the halt pills' tooltips and the risk
+  // panel's drawdown bars, which state it in bps and dollars (Codex,
+  // PR #39). Halt *state* stays: it is safety, not performance.
+  const blindResult = bucketOf(target) === "alpha_candidate";
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
     : status === "active" && (holderDegraded || arcusDegraded || bookDegraded) ? "degraded" : status;
@@ -961,9 +978,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (sr && sr.session_halted === true) {
       sessionDdEl.textContent = "SESSION DD";
       const reason = sr.halt_reason ? ` (${sr.halt_reason})` : "";
-      sessionDdEl.title =
-        `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
-        `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
+      sessionDdEl.title = blindResult
+        ? `Session DD halt active${reason}. The magnitude is withheld on an α candidate's card. ` +
+          `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`
+        : `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
+          `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
       sessionDdEl.hidden = false;
     } else {
       sessionDdEl.hidden = true;
@@ -977,9 +996,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
     const dr = data.daily_risk;
     if (dr && dr.risk_halted === true) {
       dailyDdEl.textContent = "DAILY DD";
-      dailyDdEl.title =
-        `Daily DD halt active: realized loss ${(-dr.daily_pnl).toFixed(2)} (${(-dr.daily_pnl_bps).toFixed(0)} bps) ≥ effective threshold ${dr.effective_max_daily_loss_bps.toFixed(0)} bps. ` +
-        `Auto-clears at next UTC midnight; existing positions exit normally.`;
+      dailyDdEl.title = blindResult
+        ? "Daily DD halt active. The magnitude is withheld on an α candidate's card. " +
+          "Auto-clears at next UTC midnight; existing positions exit normally."
+        : `Daily DD halt active: realized loss ${(-dr.daily_pnl).toFixed(2)} (${(-dr.daily_pnl_bps).toFixed(0)} bps) ≥ effective threshold ${dr.effective_max_daily_loss_bps.toFixed(0)} bps. ` +
+          `Auto-clears at next UTC midnight; existing positions exit normally.`;
       dailyDdEl.hidden = false;
     } else {
       dailyDdEl.hidden = true;
@@ -994,8 +1015,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (cb && cb.active === true && cb.cooldown_remaining_secs) {
       const remaining = formatAge(cb.cooldown_remaining_secs * 1000);
       circuitBreakerEl.textContent = `CIRCUIT (${remaining})`;
-      circuitBreakerEl.title =
-        `Circuit breaker active after ${cb.consecutive_losses} consecutive losses ` +
+      circuitBreakerEl.title = blindResult
+        ? `Circuit breaker active. The loss count is withheld on an α candidate's card. ` +
+          `Auto-clears in ${remaining}; a winning trade also resets, but new entries are blocked while active.`
+        : `Circuit breaker active after ${cb.consecutive_losses} consecutive losses ` +
         `(tier1=${cb.tier1_threshold} / tier2=${cb.tier2_threshold}). ` +
         `Auto-clears in ${remaining}; a winning trade also resets, but new entries are blocked while active.`;
       circuitBreakerEl.hidden = false;
@@ -1012,7 +1035,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // threshold so a glance at the panel ranks the bot's distance to
   // halt without the operator doing arithmetic. Hidden when all three
   // gates are disabled or unset.
-  renderRiskPanel(card, data);
+  renderRiskPanel(card, data, { blindResult });
 
   // Auto-expand on halt (#231 Phase A3). A card with any active halt
   // ignores the operator's previous collapse choice and opens — the
@@ -1144,7 +1167,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
     return;
   }
-  blindAlphaCandidate(card, bucketOf(target) === "alpha_candidate");
+  blindAlphaCandidate(card, blindResult);
 
   // On a subsidy bot the daily PnL is the day's price paid, not a
   // result to improve; the KPI panel above is what the bot is judged on
@@ -1239,7 +1262,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const book = isBookStatus(data) ? data.book : null;
   if (bookViewEl) {
     bookViewEl.hidden = book === null;
-    if (book) renderBookStatus(card, book, { blindResult: bucketOf(target) === "alpha_candidate" });
+    if (book) renderBookStatus(card, book, { blindResult });
   }
 
   const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
@@ -1673,10 +1696,21 @@ const renderSubsidyPanel = (card, target, data) => {
 // and, for a book runtime, from the decision it actually took. This is
 // the only "how is it doing" the card answers for an α candidate: it is
 // about the study still being valid, not about the result.
-const gateHealthText = (gate, data) => {
+const gateHealthText = (gate, data, serviceStatus) => {
+  // A stale or failing target is not sampling, whatever its last status
+  // object said before it stopped arriving; deriving "normal" from that
+  // frozen payload is exactly the case an operator needs told (Codex,
+  // PR #39).
+  if (serviceStatus && serviceStatus !== "active") {
+    return `Not sampling (${serviceStatus})`;
+  }
   const parts = [];
   if (gate && gate.decision_on_time === false) parts.push("decision late");
   if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
+  // Engine B's halt lives under han_bridge, not book: without this the
+  // panel could say "Sampling normally" for a halted study (Codex, PR #39).
+  const hanBridge = data && data.han_bridge ? data.han_bridge : null;
+  if (hanBridge && hanBridge.session_halt_reason) parts.push(hanBridge.session_halt_reason);
   const book = data && data.book ? data.book : null;
   if (book) {
     if (book.session_halted) parts.push(book.session_halt_reason || "session halt");
@@ -1688,7 +1722,8 @@ const gateHealthText = (gate, data) => {
   if (parts.length > 0) return parts.join("; ");
   const known =
     (gate && (gate.decision_on_time === true || gate.signal_hash_matched === true)) ||
-    Boolean(book && book.last_decision);
+    Boolean(book && book.last_decision) ||
+    Boolean(hanBridge);
   return known ? "Sampling normally" : "-";
 };
 
@@ -1740,7 +1775,7 @@ const renderGatePanel = (card, target, data) => {
     gate.spec_hash ? gate.spec_hash.slice(0, 12) : "-",
     "Hash of the frozen pre-registration this sample count is being counted against.",
   );
-  set("gate-health", gateHealthText(data && data.gate ? data.gate : null, data));
+  set("gate-health", gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined));
 
   const noteEl = card.querySelector('[data-field="gate-note"]');
   if (noteEl) {
@@ -2634,9 +2669,18 @@ const renderEquityChart = (chartEl, emptyEl, history) => {
 // (effective threshold ≤ 0) so a clean steady-state has no bars at
 // all. The whole panel collapses to hidden when no bar is visible —
 // keeps disabled-everywhere cards looking the same as before.
-const renderRiskPanel = (card, data) => {
+const renderRiskPanel = (card, data, { blindResult = false } = {}) => {
   const panel = card.querySelector('[data-field="risk-panel"]');
   if (!panel) return;
+  // The bars state the live drawdown in bps against its threshold, and
+  // the halt-history strip states how often it has happened. Both are
+  // the running result of a pre-registered study, so the whole panel is
+  // withheld on an α candidate's card; the halt pills in the header keep
+  // the state visible (Codex, PR #39).
+  if (blindResult) {
+    panel.hidden = true;
+    return;
+  }
   let anyVisible = false;
 
   // Daily DD bar.
