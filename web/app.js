@@ -7,6 +7,10 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
+// Benchmark equity, cached per target on the same timestamps as
+// historyByKey so drawdown and Calmar compare the bot and its buy & hold
+// benchmark over exactly the same window (bot-strategy#955).
+const benchmarkByKey = new Map();
 const bucketMap = new Map(); // bucket key -> { container, grid }
 let hasRendered = false;
 
@@ -217,17 +221,18 @@ const reconcileBucketOrder = () => {
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
 //
-// β is the only bucket with an aggregate today. Its buy & hold benchmark
-// column arrives with bot-strategy#955, the subsidy bucket's cost per
-// unit with #957, and the α candidates' gate progress with #958 — until
-// then those buckets show their card count and their benchmark line
-// only, rather than a placeholder number.
+// β is the only bucket with an aggregate today. The subsidy bucket's cost
+// per unit arrives with bot-strategy#957 and the α candidates' gate
+// progress with #958 — until then those buckets show their card count and
+// their benchmark line only, rather than a placeholder number.
 const bucketAggregateStats = (bucket, items) => {
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
   let mtd = 0;
   let mtdAvail = false;
+  let excess = 0;
+  let excessCount = 0;
   const monthStartMs = currentUtcMonthStartMs();
   items.forEach(({ target, index }) => {
     const data = target.status;
@@ -236,6 +241,14 @@ const bucketAggregateStats = (bucket, items) => {
     if (equity === null) return;
     equityTotal += equity;
     equityCount += 1;
+    // Only targets with a configured, fully priced benchmark contribute;
+    // a bot without one is left out of the sum rather than counted as
+    // matching its benchmark exactly.
+    const benchmark = benchmarkEquityValue(data);
+    if (benchmark !== null) {
+      excess += equity - benchmark;
+      excessCount += 1;
+    }
     // Both sides of the delta must come from snapshotEquityValue: the
     // cached baseline is whatever it stored for this target.
     const baseline = baselineEquityAt(historyByKey.get(keyForTarget(target, index)), monthStartMs);
@@ -253,16 +266,19 @@ const bucketAggregateStats = (bucket, items) => {
     },
     {
       label: "MTD change",
-      value: mtdAvail ? formatPnl(mtd) : "-",
+      value: mtdAvail ? formatSignedUsdc(mtd) : "-",
       signed: mtdAvail ? mtd : null,
       title:
         "Change in the held value since the most recent UTC month rollover. Meaningful only against the buy & hold benchmark (bot-strategy#955).",
     },
     {
       label: "vs buy & hold",
-      value: "-",
+      value: excessCount > 0 ? formatSignedUsdc(excess) : "-",
+      signed: excessCount > 0 ? excess : null,
       title:
-        "Excess over holding the same exposure as spot. Wired up by bot-strategy#955, which anchors the benchmark to the verified startup snapshot.",
+        excessCount > 0 && excessCount < equityCount
+          ? `Excess over holding the same exposure as spot, across the ${excessCount} of ${equityCount} targets that have a benchmark anchor configured.`
+          : "Excess over holding the same exposure as spot, from each target's verified startup anchor (bot-strategy#955).",
     },
   ];
 };
@@ -505,6 +521,14 @@ const createCard = (key) => {
           </div>
           <strong data-field="holder-equity"></strong>
           <div class="equity-headline-meta" data-field="holder-last-trade"></div>
+        </div>
+        <div class="benchmark-panel" data-field="holder-benchmark">
+          <div class="benchmark-title" title="A β bot is judged against buying the same exposure as spot and holding it, not against zero (bot-strategy#954 §4.1).">Buy &amp; hold benchmark</div>
+          <div class="row"><span>Excess vs b&amp;h</span><strong data-field="holder-bench-excess"></strong></div>
+          <div class="row"><span>Max DD (bot / b&amp;h)</span><strong data-field="holder-bench-dd"></strong></div>
+          <div class="row"><span>Calmar (bot / b&amp;h)</span><strong data-field="holder-bench-calmar"></strong></div>
+          <div class="row"><span>Funding + fees paid</span><strong data-field="holder-bench-costs"></strong></div>
+          <div class="benchmark-note" data-field="holder-bench-note" hidden></div>
         </div>
         <div class="chart">
           <div class="chart-title">Equity trend</div>
@@ -918,6 +942,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   }
   if (bullHolder) {
     renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
+    renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data));
     renderBullHolderStatus(card.querySelector('[data-field="holder-details-body"]'), bullHolder, data.dry_run);
     errorEl.hidden = !target.error;
     errorEl.textContent = target.error || "";
@@ -1146,6 +1171,123 @@ const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
   // PR #32).
   const killSwitchEngaged = Boolean(b.kill_switch) || Boolean(b.pending?.KILL_SWITCH);
   if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active" || killSwitchEngaged)) detailsEl.open = true;
+};
+
+// Max drawdown as a fraction of the running peak, which is what Calmar
+// divides into the annualized return. computeStats reports drawdown in
+// currency; the same currency drawdown means something very different on
+// a $1,000 book and a $100,000 one.
+const maxDrawdownPct = (history) => {
+  if (!history || history.length < 2) return null;
+  let peak = -Infinity;
+  let worst = 0;
+  for (const point of history) {
+    if (point.equity > peak) peak = point.equity;
+    if (peak > 0) {
+      const dd = (peak - point.equity) / peak;
+      if (dd > worst) worst = dd;
+    }
+  }
+  return worst * 100;
+};
+
+// Calmar = annualized return / max drawdown, both in percent. Null
+// whenever computeStats withholds CAGR (< 7 days of history, so the
+// annualization exponent would explode) or the series never drew down,
+// which makes the ratio undefined rather than infinitely good.
+const calmarRatio = (history) => {
+  const cagr = computeStats(history).cagr;
+  const dd = maxDrawdownPct(history);
+  if (cagr === null || dd === null || dd <= 0) return null;
+  return cagr / dd;
+};
+
+const formatRatio = (value) => (value === null ? "-" : value.toFixed(2));
+
+// Four rows, per the β evaluation rule (bot-strategy#954 §4.1): excess
+// over buy & hold, the two drawdown-shaped comparisons, and what the
+// hedge cost in funding and fees. Anything the dashboard cannot source
+// renders "-" — a β bot that looks like it beats buy & hold because a
+// leg was silently dropped is the failure this card exists to prevent.
+const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) => {
+  const panel = card.querySelector('[data-field="holder-benchmark"]');
+  if (!panel) return;
+  const excessEl = card.querySelector('[data-field="holder-bench-excess"]');
+  const ddEl = card.querySelector('[data-field="holder-bench-dd"]');
+  const calmarEl = card.querySelector('[data-field="holder-bench-calmar"]');
+  const costsEl = card.querySelector('[data-field="holder-bench-costs"]');
+  const noteEl = card.querySelector('[data-field="holder-bench-note"]');
+
+  const benchmark = b && b.benchmark ? b.benchmark : null;
+  const benchmarkEquity = benchmark && Number.isFinite(benchmark.equity_usd) ? Number(benchmark.equity_usd) : null;
+  const equity = Number.isFinite(botEquity) ? Number(botEquity) : null;
+
+  let excessText = "-";
+  let excessValue = null;
+  if (benchmarkEquity !== null && equity !== null && benchmarkEquity !== 0) {
+    excessValue = equity - benchmarkEquity;
+    excessText = `${formatSignedUsdc(excessValue)} (${((excessValue / benchmarkEquity) * 100).toFixed(1)}%)`;
+  }
+  if (excessEl) {
+    excessEl.textContent = excessText;
+    applySignedClass(excessEl, excessValue);
+  }
+
+  const botDd = maxDrawdownPct(history);
+  const benchDd = maxDrawdownPct(benchmarkHistory);
+  if (ddEl) {
+    ddEl.textContent =
+      botDd === null && benchDd === null
+        ? "-"
+        : `${botDd === null ? "-" : botDd.toFixed(1) + "%"} / ${benchDd === null ? "-" : benchDd.toFixed(1) + "%"}`;
+    ddEl.title =
+      "Peak-to-trough drawdown of each series over the window this page has cached. " +
+      "The bot's claim is a shallower drawdown for the same exposure, so this is the row that claim lives or dies on.";
+  }
+  if (calmarEl) {
+    const botCalmar = calmarRatio(history);
+    const benchCalmar = calmarRatio(benchmarkHistory);
+    calmarEl.textContent =
+      botCalmar === null && benchCalmar === null
+        ? "-"
+        : `${formatRatio(botCalmar)} / ${formatRatio(benchCalmar)}`;
+    calmarEl.title =
+      "Annualized return divided by max drawdown, for the bot and for buy & hold. " +
+      "Needs at least 7 days of cached history; until then it reads \"-\".";
+  }
+
+  // Funding and fees are producer figures. Partial data is still worth
+  // showing (funding alone is the dominant term for a hedged holder), so
+  // render whichever side exists and name the missing one.
+  const funding = holderNumber(b ? b.cum_funding_usdc : null);
+  const fees = holderNumber(b ? b.cum_fees_usdc : null);
+  if (costsEl) {
+    if (funding === null && fees === null) {
+      costsEl.textContent = "-";
+      applySignedClass(costsEl, null);
+      costsEl.title = "The producer does not report cumulative funding or fees yet.";
+    } else {
+      const total = (funding || 0) + (fees || 0);
+      costsEl.textContent = formatSignedUsdc(total);
+      applySignedClass(costsEl, total);
+      costsEl.title =
+        funding === null
+          ? "Fees only — the producer does not report cumulative funding yet."
+          : fees === null
+            ? "Funding only — the producer does not report cumulative fees yet."
+            : "Cumulative funding paid/received plus fees, as reported by the bot.";
+    }
+  }
+
+  if (noteEl) {
+    const note = benchmark
+      ? benchmarkHistory && benchmarkHistory.length >= 2
+        ? ""
+        : "Drawdown and Calmar start filling in once this page has watched both series for a while."
+      : (b && b.benchmark_error) || "Buy & hold benchmark unavailable";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
 };
 
 const renderBullHolderStatus = (container, b, dryRun) => {
@@ -1695,6 +1837,22 @@ const updateHistoryCache = (key, data) => {
   return history;
 };
 
+// The benchmark series is cached exactly like the equity series (same
+// keys, same timestamps) so that a drawdown or Calmar computed from the
+// two is comparing the same window. Like the bull-holder equity history,
+// this cache only spans the time this page has been open: the producer
+// writes no equity_history file for a local target, so a fresh page has
+// no past to compare against and the window-dependent rows say so.
+const updateBenchmarkCache = (key, data) => {
+  const point = snapshotToBenchmarkPoint(data);
+  if (!point) {
+    return benchmarkByKey.get(key) || [];
+  }
+  const history = appendHistoryPoint(benchmarkByKey.get(key) || [], point);
+  benchmarkByKey.set(key, history);
+  return history;
+};
+
 // bull_holder / arcus have their own equity fields nested under their
 // sub-object rather than the top-level pnl_total pairtrade-style bots
 // report (they're asset-value bots, not PnL-cycle bots). Dispatch on
@@ -1738,6 +1896,30 @@ const snapshotToPoint = (data) => {
   if (equity === null) {
     return null;
   }
+  const ts = snapshotPointTs(data);
+  return ts === null ? null : { ts, equity };
+};
+
+// Current value of the buy & hold benchmark the server derived for this
+// target (bull_holder only today). Null when the anchor isn't configured
+// or a leg couldn't be priced — the card then renders "-" rather than a
+// benchmark that silently dropped a leg.
+const benchmarkEquityValue = (data) => {
+  const benchmark = data && data.bull_holder ? data.bull_holder.benchmark : null;
+  return benchmark && Number.isFinite(benchmark.equity_usd) ? Number(benchmark.equity_usd) : null;
+};
+
+const snapshotToBenchmarkPoint = (data) => {
+  if (!data) return null;
+  const equity = benchmarkEquityValue(data);
+  if (equity === null) {
+    return null;
+  }
+  const ts = snapshotPointTs(data);
+  return ts === null ? null : { ts, equity };
+};
+
+const snapshotPointTs = (data) => {
   // bull_holder's total_equity_usdc is recomputed by the dashboard
   // server from live Hyperliquid/Lighter account queries every server
   // poll cycle (fetchBullHolder in bull_holder.go), decoupled from
@@ -1774,17 +1956,14 @@ const snapshotToPoint = (data) => {
         : hlObserved !== null
           ? hlObserved
           : ltObserved;
-    return { ts: observedSec !== null ? observedSec * 1000 : Date.now(), equity };
+    return observedSec !== null ? observedSec * 1000 : Date.now();
   }
   const tsSeconds = Number.isFinite(data.ts) ? Number(data.ts) * 1000 : null;
   const ts =
     tsSeconds ||
     (data.updated_at ? Date.parse(data.updated_at) : null) ||
     Date.now();
-  if (!Number.isFinite(ts)) {
-    return null;
-  }
-  return { ts, equity };
+  return Number.isFinite(ts) ? ts : null;
 };
 
 const appendHistoryPoint = (history, point) => {
@@ -2119,6 +2298,18 @@ const formatNumber = (value) => {
   return groupedFixed(Number(value), MONEY_DIGITS);
 };
 
+// Signed money with its unit: "+100.0 USDC". formatPnl deliberately
+// omits the unit for the compact key/value stats, but a benchmark
+// comparison is read next to plain equity figures and must not be
+// mistakable for a percentage or a count.
+const formatSignedUsdc = (value) => {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  const number = Number(value);
+  const sign = number > 0 ? "+" : "";
+  return `${sign}${groupedFixed(number, MONEY_DIGITS)} USDC`;
+};
 const formatUsdc = (value) => {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "-";

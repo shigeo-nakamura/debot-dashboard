@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, benchmarkEquityValue, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -813,5 +813,133 @@ test("accumulator equity is the held balance, not its constant-zero pnl_total", 
   assert.equal(
     context.__test.snapshotEquityValue({ pnl_total: 0, accumulator: { total_equity_usdc: null } }),
     null,
+  );
+});
+
+// A card stub good enough for the benchmark renderer: it only ever
+// touches [data-field] leaves, and each must report what it was given.
+const benchmarkCard = () => {
+  const fields = new Map();
+  return {
+    fields,
+    querySelector(selector) {
+      if (!fields.has(selector)) {
+        fields.set(selector, {
+          textContent: "",
+          hidden: false,
+          title: "",
+          classList: { toggle() {}, add() {}, remove() {} },
+        });
+      }
+      return fields.get(selector);
+    },
+    text(name) {
+      return this.querySelector(`[data-field="${name}"]`).textContent;
+    },
+  };
+};
+
+// 1h apart so both series clear the 7-day CAGR gate used by Calmar.
+const series = (values, startMs = Date.UTC(2026, 0, 1)) =>
+  values.map((equity, i) => ({ ts: startMs + i * 24 * 60 * 60 * 1000, equity }));
+
+test("benchmark rows compare bot and buy & hold, and say nothing when the anchor is missing", () => {
+  const card = benchmarkCard();
+  const holder = {
+    total_equity_usdc: 1100,
+    benchmark: { anchor_ts: 1788000000, cost_usd: 900, cash_usd: 100, equity_usd: 1000 },
+    cum_funding_usdc: -12.5,
+    cum_fees_usdc: -2.5,
+  };
+  // Bot 1000 → 1100 with a dip to 950 (5% DD); benchmark 1000 → 1000
+  // with a dip to 800 (20% DD): the shallower-drawdown claim, visible.
+  const botHistory = series([1000, 950, 1100]);
+  const benchHistory = series([1000, 800, 1000]);
+  context.__test.renderHolderBenchmark(card, holder, 1100, botHistory, benchHistory);
+  assert.equal(card.text("holder-bench-excess"), "+100.0 USDC (10.0%)");
+  assert.equal(card.text("holder-bench-dd"), "5.0% / 20.0%");
+  assert.equal(card.text("holder-bench-costs"), "-15.0 USDC");
+  assert.equal(card.querySelector('[data-field="holder-bench-note"]').hidden, true);
+
+  // No anchor configured: every derived row goes to "-" and the card
+  // says why instead of quietly comparing against nothing.
+  const bare = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    bare,
+    { total_equity_usdc: 1100, benchmark: null, benchmark_error: "Buy & hold anchor not configured" },
+    1100,
+    botHistory,
+    [],
+  );
+  assert.equal(bare.text("holder-bench-excess"), "-");
+  assert.equal(bare.text("holder-bench-calmar"), "-");
+  assert.equal(bare.text("holder-bench-costs"), "-");
+  assert.equal(bare.text("holder-bench-note"), "Buy & hold anchor not configured");
+  assert.equal(bare.querySelector('[data-field="holder-bench-note"]').hidden, false);
+});
+
+test("drawdown and Calmar are windowed ratios, not currency, and refuse to divide by nothing", () => {
+  assert.equal(context.__test.maxDrawdownPct(series([100, 80, 90])), 20);
+  // Monotonic series never drew down, so Calmar is undefined rather than
+  // infinitely good.
+  assert.equal(context.__test.maxDrawdownPct(series([100, 110])), 0);
+  assert.equal(context.__test.calmarRatio(series([100, 110])), null);
+  assert.equal(context.__test.maxDrawdownPct([]), null);
+  assert.equal(context.__test.maxDrawdownPct(series([100])), null);
+  // Under 7 days of history computeStats withholds CAGR, so Calmar
+  // cannot be computed even though the drawdown is known.
+  const short = [
+    { ts: Date.UTC(2026, 0, 1), equity: 100 },
+    { ts: Date.UTC(2026, 0, 2), equity: 80 },
+  ];
+  assert.equal(context.__test.maxDrawdownPct(short), 20);
+  assert.equal(context.__test.calmarRatio(short), null);
+
+  // Past the 7-day gate the ratio is real, and a deeper drawdown for the
+  // same end-to-end return scores worse — the whole point of ranking a β
+  // bot against buy & hold on Calmar rather than on return alone.
+  const shallow = series([100, 95, 100, 105, 105, 105, 105, 110, 121]);
+  const deep = series([100, 70, 100, 105, 105, 105, 105, 110, 121]);
+  const shallowCalmar = context.__test.calmarRatio(shallow);
+  const deepCalmar = context.__test.calmarRatio(deep);
+  assert.ok(Number.isFinite(shallowCalmar) && shallowCalmar > 0);
+  assert.ok(shallowCalmar > deepCalmar);
+});
+
+test("benchmark series is cached on the same timestamps as the equity series", () => {
+  const data = {
+    ts: 1788600000,
+    bull_holder: {
+      total_equity_usdc: 1100,
+      benchmark: { equity_usd: 1000 },
+      hyperliquid: { observed_at: 1788600060 },
+      lighter: { observed_at: 1788600120 },
+    },
+  };
+  const equityPoint = context.__test.snapshotToPoint(data);
+  const benchmarkPoint = context.__test.snapshotToBenchmarkPoint(data);
+  assert.equal(equityPoint.ts, 1788600120 * 1000);
+  assert.equal(benchmarkPoint.ts, equityPoint.ts);
+  assert.equal(benchmarkPoint.equity, 1000);
+  // No benchmark on the payload → no point, so the two series never
+  // drift onto different timestamps.
+  assert.equal(context.__test.snapshotToBenchmarkPoint({ bull_holder: { total_equity_usdc: 1100 } }), null);
+  assert.equal(context.__test.benchmarkEquityValue({ bull_holder: { benchmark: { equity_usd: null } } }), null);
+});
+
+test("beta aggregate sums excess only over targets that actually have a benchmark", () => {
+  const items = [
+    { target: { bucket: "beta", status: { bull_holder: { total_equity_usdc: 1100, benchmark: { equity_usd: 1000 } } } }, index: 0 },
+    // Anchor not configured: contributes its equity but no excess.
+    { target: { bucket: "beta", status: { accumulator: { total_equity_usdc: 500 } } }, index: 1 },
+  ];
+  const stats = context.__test.bucketAggregateStats("beta", items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Equity held").value, "1,600.0 USDC");
+  assert.equal(stat("vs buy & hold").value, "+100.0 USDC");
+  assert.match(stat("vs buy & hold").title, /1 of 2 targets/);
+  assert.equal(
+    context.__test.bucketAggregateStats("beta", [items[1]]).find((s) => s.label === "vs buy & hold").value,
+    "-",
   );
 });
