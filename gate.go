@@ -120,12 +120,17 @@ func resolveGate(cfg *GateConfig, status *GateStatus, now time.Time) *GateProgre
 		return progress
 	}
 	progress.ValidSamples = status.ValidSamples
-	progress.NextSampleDueAt = status.NextSampleDueAt
-	progress.SampleCadenceSecs = status.SampleCadenceSecs
 	// Only after the readout is the deadline meaningless: the study is
-	// done accumulating and the operator is running the script.
-	if status.NextSampleDueAt > 0 && !progress.ReadoutDue {
-		progress.SampleOverdue = now.UTC().Unix() > status.NextSampleDueAt
+	// done accumulating and the operator is running the script. Withheld
+	// rather than echoed, since a card that keeps advertising "next sample
+	// due" beside a not-overdue health state is claiming something is
+	// still being waited for (Codex, PR #44).
+	if !progress.ReadoutDue {
+		progress.NextSampleDueAt = status.NextSampleDueAt
+		progress.SampleCadenceSecs = status.SampleCadenceSecs
+		if status.NextSampleDueAt > 0 {
+			progress.SampleOverdue = now.UTC().Unix() > status.NextSampleDueAt
+		}
 	}
 	return progress
 }

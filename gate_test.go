@@ -165,9 +165,20 @@ func TestGateProgressFlagsAnOverdueSample(t *testing.T) {
 	}
 
 	// Past the readout the study is done accumulating; a deadline that
-	// keeps sliding by is not a problem to report.
-	if got := resolveGate(&cfg, status(), at("2026-10-02T12:00:00Z")); got.SampleOverdue {
+	// keeps sliding by is not a problem to report -- and is not echoed
+	// either, or the card would go on saying "next sample due" beside a
+	// health state that is deliberately not overdue, forever.
+	after := resolveGate(&cfg, status(), at("2026-10-02T12:00:00Z"))
+	if after.SampleOverdue {
 		t.Fatalf("sample_overdue after the readout")
+	}
+	if after.NextSampleDueAt != 0 || after.SampleCadenceSecs != 0 {
+		t.Fatalf("deadline still echoed after the readout: %+v", after)
+	}
+	// What the study did collect is still reported: the readout is the
+	// point of the count, not a reason to hide it.
+	if after.ValidSamples == nil || *after.ValidSamples != samples {
+		t.Fatalf("valid samples withheld after the readout: %+v", after)
 	}
 
 	// A producer that declares no cadence gets no verdict either way.
