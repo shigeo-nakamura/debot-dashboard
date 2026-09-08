@@ -1583,6 +1583,20 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
     { target: { ...items[1].target, service_status: "stale" }, index: 1 },
   ]);
   assert.equal(withStalled.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A halted Engine B reports fine and takes no trades: healthy by the
+  // fetch's standard, not sampling by the study's.
+  const withHalted = context.__test.alphaAggregateStats([
+    items[0],
+    {
+      target: {
+        ...items[1].target,
+        service_status: "active",
+        status: { han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(withHalted.find((s) => s.label === "Studies running").value, "1 of 2");
   assert.equal(stat("Nearest readout").value, "2026-09-11 (3d)");
   // No money or performance figure may appear in this bucket's header.
   for (const entry of stats) {

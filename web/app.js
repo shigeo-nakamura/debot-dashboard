@@ -410,7 +410,12 @@ const alphaAggregateStats = (items) => {
   // stopped — the moment that matters (Codex, PR #39).
   let sampling = 0;
   items.forEach(({ target }) => {
-    if (!isTargetUnhealthy(target)) sampling += 1;
+    // isTargetUnhealthy covers the book runtime's halts but not Engine
+    // B's, which lives under han_bridge: a halted Engine B is reporting
+    // fine and taking no trades, so it is not accumulating samples
+    // either (Codex, PR #39).
+    const halted = isHanBridgeHalted(target.status);
+    if (!isTargetUnhealthy(target) && !halted) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
