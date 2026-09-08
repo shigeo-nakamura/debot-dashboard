@@ -1533,7 +1533,10 @@ test("blinding an alpha card also keeps the book's equity off it", () => {
 // has to be checked: without this rule the α blinding is a no-op in a
 // real browser.
 test("hidden elements are actually hidden by the stylesheet", () => {
-  const css = fs.readFileSync(`${__dirname}/../web/styles.css`, "utf8");
+  // Strip comments first: the rule is explained in prose right above
+  // itself, and a regex over the raw file would happily match the
+  // explanation instead of the declaration.
+  const css = fs.readFileSync(`${__dirname}/../web/styles.css`, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
 });
 
