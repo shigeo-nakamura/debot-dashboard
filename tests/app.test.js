@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -803,6 +803,54 @@ test("beta bucket totals held value across bot shapes and never sums across buck
   assert.equal(context.__test.bucketAggregateStats("subsidy", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("alpha_candidate", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("unclassified", items).length, 0);
+});
+
+test("MTD stays unavailable until a recorded month-start baseline exists", () => {
+  // A beta target the server has no equity_history for (bull-holder):
+  // updateCard seeds the cache with the current observation, so the only
+  // point is one this page just made. Treating it as the baseline made
+  // MTD read 0.0 on every reload and change-since-page-load after that
+  // (PR #36 review).
+  const target = { name: "holder", service: "debot-bull-holder", instance_id: "i-1", bucket: "beta" };
+  const key = context.__test.keyForTarget(target, 0);
+  const data = { bull_holder: { total_equity_usdc: 1250.5 }, updated_at: new Date().toISOString() };
+  context.__test.updateHistoryCache(key, data);
+  const items = [{ target: { ...target, status: data }, index: 0 }];
+  const stat = (stats, label) => stats.find((s) => s.label === label);
+  const snapshotOnly = context.__test.bucketAggregateStats("beta", items);
+  assert.equal(stat(snapshotOnly, "Equity held").value, "1,250.5 USDC");
+  assert.equal(stat(snapshotOnly, "MTD change").value, "-");
+  assert.equal(stat(snapshotOnly, "MTD change").signed, null);
+
+  // Once the server sends a recorded series that reaches back before the
+  // month rollover, the delta is real and gets rendered.
+  const now = new Date();
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  context.__test.updateHistoryCache(key, {
+    ...data,
+    equity_history: [
+      { ts: monthStart - 86400000, equity: 1000 },
+      { ts: monthStart + 3600000, equity: 1100 },
+    ],
+  });
+  const recorded = context.__test.bucketAggregateStats("beta", items);
+  assert.equal(stat(recorded, "MTD change").signed, 250.5);
+
+  // A series that only begins inside the month is still a baseline when
+  // it is the server's own record (bot provisioned mid-month).
+  const key2 = context.__test.keyForTarget({ ...target, name: "holder2" }, 1);
+  context.__test.updateHistoryCache(key2, {
+    ...data,
+    equity_history: [{ ts: monthStart + 3600000, equity: 1200 }],
+  });
+  const items2 = [{ target: { ...target, name: "holder2", status: data }, index: 1 }];
+  assert.equal(stat(context.__test.bucketAggregateStats("beta", items2), "MTD change").signed, 50.5);
+
+  // The predicate itself: identical series, opposite answers.
+  const inMonth = [{ ts: monthStart + 1000, equity: 42 }];
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart, true), 42);
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart, false), null);
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart), null);
 });
 
 test("accumulator equity is the held balance, not its constant-zero pnl_total", () => {

@@ -7,6 +7,11 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
+// Which keys' cached history is the server's recorded series
+// (`equity_history`) rather than points this page appended from live
+// snapshots. Only a recorded series can anchor a month-to-date figure:
+// see baselineEquityAt (bot-strategy#959, PR #36 review).
+const recordedHistoryKeys = new Set();
 const bucketMap = new Map(); // bucket key -> { container, grid }
 let hasRendered = false;
 
@@ -238,7 +243,12 @@ const bucketAggregateStats = (bucket, items) => {
     equityCount += 1;
     // Both sides of the delta must come from snapshotEquityValue: the
     // cached baseline is whatever it stored for this target.
-    const baseline = baselineEquityAt(historyByKey.get(keyForTarget(target, index)), monthStartMs);
+    const key = keyForTarget(target, index);
+    const baseline = baselineEquityAt(
+      historyByKey.get(key),
+      monthStartMs,
+      recordedHistoryKeys.has(key),
+    );
     if (baseline !== null) {
       mtd += equity - baseline;
       mtdAvail = true;
@@ -300,12 +310,22 @@ const updateBucketAggregate = (group, bucket, items) => {
 // the earliest point in the array when the bot's history starts after
 // the anchor (e.g. bot was provisioned mid-month). Returns null when
 // the cache is empty.
-const baselineEquityAt = (history, anchorMs) => {
+const baselineEquityAt = (history, anchorMs, fromRecordedHistory = false) => {
   if (!history || history.length === 0) return null;
   let i = 0;
   while (i < history.length && history[i].ts < anchorMs) i++;
   if (i === 0) {
-    return history[0].equity;
+    // Nothing at or before the anchor: the series begins inside the
+    // month. That is a real baseline only when the series is the
+    // server's recorded history (a bot provisioned mid-month has no
+    // earlier point to offer). When it is points this page appended
+    // from live snapshots — every beta target without a server
+    // `equity_history`, bull-holder among them — `history[0]` is just
+    // "whatever the equity was when this tab opened", which would
+    // report an MTD of 0.0 on every reload and then change-since-load
+    // (PR #36 review). No baseline is the honest answer; the caller
+    // renders "-".
+    return fromRecordedHistory ? history[0].equity : null;
   }
   return history[i - 1].equity;
 };
@@ -1685,6 +1705,10 @@ const updateHistoryCache = (key, data) => {
       }))
       .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
     historyByKey.set(key, history);
+    // Recorded by the server, so it can anchor a month-to-date figure.
+    // Sticky per key: a later poll without the field appends to this
+    // same series rather than downgrading it.
+    recordedHistoryKeys.add(key);
     return history;
   }
   const point = snapshotToPoint(data);
