@@ -315,8 +315,22 @@ const subsidyAggregateStats = (items) => {
   const byUnit = new Map();
   items.forEach(({ target }) => {
     const data = target.status;
-    if (!data) return;
     const kpi = target.subsidy_kpi;
+    // A target that cannot be read, and one whose KPI the venue
+    // invalidated by changing the program, both still belong to the
+    // bucket. Skipping them outright leaves a ratio over the remaining
+    // targets presented as the bucket's own (Codex, PR #38/#40) — the
+    // same rule the β bucket already applies to its month-to-date
+    // figure. Register the unit as incomplete and move on.
+    if (!data || (kpi && kpi.stale)) {
+      if (kpi) {
+        const key = (kpi.unit || "unit").trim().toLowerCase();
+        const entry = byUnit.get(key) || { unit: kpi.unit || "unit", units: 0, cost: 0, counted: 0, complete: true };
+        entry.complete = false;
+        byUnit.set(key, entry);
+      }
+      return;
+    }
     const reported = data.subsidy && Number.isFinite(data.subsidy.cost_total_usd)
       ? Number(data.subsidy.cost_total_usd)
       : null;
@@ -1534,8 +1548,14 @@ const renderSubsidyPanel = (card, target, data) => {
     if (signed !== undefined) applySignedClass(el, signed);
   };
 
+  // The ratio needs both sides from the same window. The fallback cost is
+  // the bot's result as of now, while units come from the ledger's own
+  // as_of_ts, so dividing one by the other spreads fees accrued after the
+  // daily write over yesterday's units (Codex, PR #39). Only the ledger's
+  // own cost can be a numerator; the fallback still stands on its own as
+  // the cumulative cost below.
   setRow("subsidy-cpu-7d", formatCostPerUnit(cost7d, units7d, unit));
-  setRow("subsidy-cpu-total", formatCostPerUnit(costTotal, unitsTotal, unit));
+  setRow("subsidy-cpu-total", formatCostPerUnit(reportedCost, unitsTotal, unit));
   setRow("subsidy-units", formatUnits(unitsTotal, unit));
   // Cost is money given up, so it is not tinted green when it grows.
   setRow("subsidy-cost", costTotal === null ? "-" : formatUsdc(costTotal));
@@ -1580,6 +1600,8 @@ const renderSubsidyPanel = (card, target, data) => {
           // can count the units; saying the cost came from the fallback
           // would misattribute it (Codex, PR #38).
           : "The ledger reports cost but not units yet, so there is nothing to divide it by."
+        : reportedCost === null
+          ? "The ledger counts units but does not price them yet, so the cost below is the bot's own result as of now and cannot be divided by a denominator from the ledger's older window."
         : ledgerStale
           ? `The subsidy ledger has not been written for ${formatAge(asOfAgeMs)}; the units and costs above describe that older window, not the status timestamp on this card.`
           : asOf === null

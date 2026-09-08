@@ -1308,6 +1308,58 @@ test("a same-unit target reporting cost without units withholds the ratio", () =
   assert.match(stats.find((s) => s.label === "Units (points)").value, /partial/);
 });
 
+test("an unreadable or invalidated same-unit target makes its unit partial", () => {
+  const good = {
+    target: {
+      subsidy_kpi: { unit: "points" },
+      status: { subsidy: { unit: "points", units_total: 10000, cost_total_usd: 100 } },
+    },
+    index: 0,
+  };
+  // The S3 read failed: the target is still in the bucket, and a ratio
+  // over the rest presented as the bucket's own would be wrong.
+  const unreadable = context.__test.bucketAggregateStats("subsidy", [
+    good,
+    { target: { subsidy_kpi: { unit: "points" } }, index: 1 },
+  ]);
+  assert.equal(unreadable.find((s) => s.label === "Cost / points").value, "-");
+
+  // The venue changed the program and nobody has re-reviewed: the card
+  // says so, and the bucket header must not launder those figures into
+  // an apparently current ratio.
+  const stale = context.__test.bucketAggregateStats("subsidy", [
+    good,
+    {
+      target: {
+        subsidy_kpi: { unit: "points", stale: true, stale_since: "2026-09-01" },
+        status: { subsidy: { unit: "points", units_total: 500, cost_total_usd: 5 } },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(stale.find((s) => s.label === "Cost / points").value, "-");
+});
+
+test("cost per unit needs both sides from the same window", () => {
+  // The ledger counts units but does not price them. The fallback cost
+  // is current while the units are as of the ledger's older write, so
+  // dividing one by the other spreads fees accrued since over yesterday's
+  // units. The cumulative cost still shows.
+  const card = benchmarkCard();
+  context.__test.renderSubsidyPanel(
+    card,
+    { subsidy_kpi: { unit: "points", stale: false } },
+    {
+      subsidy: { unit: "points", units_total: 10000, as_of_ts: Math.floor(Date.now() / 1000) - 3600 },
+      trade_stats: { pnl: -180 },
+    },
+  );
+  assert.equal(card.text("subsidy-cpu-total"), "-");
+  assert.equal(card.text("subsidy-units"), "10,000.00 points");
+  assert.equal(card.text("subsidy-cost"), "180.0 USDC");
+  assert.match(card.text("subsidy-note"), /older window/);
+});
+
 test("a same-unit target with no ledger at all also withholds the ratio", () => {
   const stats = context.__test.bucketAggregateStats("subsidy", [
     {
