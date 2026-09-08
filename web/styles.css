@@ -109,71 +109,117 @@ body::after {
      over-state the min track and force auto-fit back to 3 columns at
      typical widescreen widths. On narrow screens the max() falls back
      to 260px so cards stay readable; on wide screens each card takes
-     exactly 1/4 of the grid and extra bots wrap onto a new row.
-     Tokyo (ap-northeast-1) has 5 cards (Lighter A/B/C + Extended +
-     xvenue-arb) — overridden to 3 columns below so Lighter A/B/C
-     occupies row 1 and Extended + xvenue-arb pairs nicely on row 2. */
+     exactly 1/4 of the grid and extra bots wrap onto a new row. Cards
+     are grouped by return-source bucket (bot-strategy#959), so a group
+     holds 1-3 cards today and the auto-fit rule is all that is needed. */
   grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 60px) / 4)), 1fr));
-}
-
-/* Region-specific overrides: Tokyo has 5 cards so cap at 3 columns to
-   keep Lighter A/B/C on a single row, with Extended + xvenue-arb on
-   row 2. 40px = 2 × 20px gap accounting for the 3-column layout. */
-.region-group[data-region="ap-northeast-1"] .grid {
-  grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 40px) / 3)), 1fr));
 }
 
 .regions.live .card {
   animation: none;
 }
 
-/* Region grouping (bot-strategy#231 redesign Phase A2). Each region
-   gets its own labeled section so a 7-bot fleet doesn't read as a
-   flat 7-card grid. The grid inside still uses the 3-column rule so
-   a single region's A/B/C cards lay out exactly as before. */
+/* Bucket grouping (bot-strategy#959). Cards are grouped by return
+   source — α candidate / β / subsidy — because the bucket decides which
+   benchmark the numbers mean anything against. Each group carries its
+   benchmark in the header and its own aggregate row; there is no
+   cross-bucket total. Supersedes the region grouping from #231 Phase
+   A2; the region is still on every card. */
 .regions {
   display: flex;
   flex-direction: column;
   gap: 28px;
 }
 
-.region-group {
+.bucket-group {
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-.region-header {
+.bucket-header {
   display: flex;
   align-items: baseline;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 0 4px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
 }
 
-.region-name {
+.bucket-name {
   font-family: "Space Grotesk", sans-serif;
   font-size: 20px;
   margin: 0;
   color: var(--ink);
 }
 
-.region-code {
+.bucket-benchmark {
   font-size: 13px;
   color: var(--muted);
-  font-family: "Space Grotesk", monospace;
+  flex: 1 1 260px;
 }
 
-.region-count {
+.bucket-count {
   margin-left: auto;
   font-size: 13px;
   color: var(--muted);
+  white-space: nowrap;
 }
 
-/* Fleet summary row (Phase A1). Shows fleet-wide aggregates above
-   any region group. severity stats turn alert-red when their count is
-   non-zero so the operator's eye lands there first. */
+.bucket-aggregate {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 0 4px;
+}
+
+.bucket-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bucket-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.bucket-stat-value {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.bucket-stat-value.positive {
+  color: var(--success);
+}
+
+.bucket-stat-value.negative {
+  color: var(--danger);
+}
+
+/* Bucket badge on the card header. Muted by design: it is a label, not
+   a state, so it must not compete with the status / halt pills. */
+.status-pill.bucket {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.status-pill.bucket.bucket-unclassified {
+  border-style: solid;
+  color: var(--danger);
+}
+
+/* Fleet summary row (Phase A1). Fleet-wide *health* counters above the
+   bucket groups — the money aggregates moved into the per-bucket
+   headers (bot-strategy#959). severity stats turn alert-red when their
+   count is non-zero so the operator's eye lands there first. */
 .fleet-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

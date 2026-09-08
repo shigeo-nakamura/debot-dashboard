@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -24,7 +24,6 @@ test("fleet includes holder halt and kill switch without counting simulated capi
   const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
   assert.equal(value("fleet-halts"), "1");
   assert.equal(value("fleet-kill-switches"), "1");
-  assert.equal(value("fleet-equity-total"), "100.0 USDC");
   assert.equal(value("fleet-positions-total"), "1");
 });
 
@@ -356,7 +355,6 @@ test("Arcus fleet tracks halt and health without treating inventory as trading P
     { service_status: "active", status: { pnl_total: 3000, pnl_today: 200, position_count: 2, arcus: { healthy: false, risk_halt: { kind: "daily_loss" } } } },
   ]);
   const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
-  assert.equal(value("fleet-equity-total"), "100.0 USDC");
   assert.equal(value("fleet-halts"), "1");
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: true } } }), false);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: false } } }), true);
@@ -698,8 +696,6 @@ test("a book's legs are counted whole while pairtrade's are still halved", () =>
   const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
   assert.equal(bookFixture.position_count, 4);
   assert.equal(value("fleet-positions-total"), "5");
-  // Equity comes from book.equity_usd (~1009.93), not pnl_total (~9.93).
-  assert.equal(value("fleet-equity-total"), "1,109.9 USDC");
 });
 
 test("a book with no decision yet and an unfinished flatten reads correctly", () => {
@@ -763,4 +759,120 @@ test("money and quantity formatters share one precision across panels", () => {
   // Token quantities: up to 4 decimals, trailing zeros dropped.
   assert.equal(f.formatHype(27.123456), "27.1235 HYPE");
   assert.equal(f.formatHype(2.5), "2.5 HYPE");
+});
+
+test("bucket classification falls back to unclassified instead of inventing a group", () => {
+  assert.equal(context.__test.bucketOf({ bucket: "beta" }), "beta");
+  assert.equal(context.__test.bucketOf({ bucket: " subsidy " }), "subsidy");
+  // Older server (no field), a value this frontend doesn't know, and a
+  // target object with nothing at all all land in the same visible group
+  // rather than silently disappearing.
+  assert.equal(context.__test.bucketOf({}), "unclassified");
+  assert.equal(context.__test.bucketOf({ bucket: "carry" }), "unclassified");
+  assert.equal(context.__test.bucketOf(null), "unclassified");
+  // Every bucket the API can send has a label and a place in the order.
+  for (const bucket of context.__test.BUCKET_ORDER) {
+    assert.ok(context.__test.BUCKET_LABELS[bucket]);
+  }
+  assert.equal(
+    Object.keys(context.__test.BUCKET_LABELS).sort().join(","),
+    [...context.__test.BUCKET_ORDER].sort().join(","),
+  );
+});
+
+test("beta bucket totals held value across bot shapes and never sums across buckets", () => {
+  const items = [
+    // Bull-holder: equity lives under bull_holder.total_equity_usdc.
+    { target: { name: "Bull-holder", bucket: "beta", status: { pnl_total: 0, bull_holder: { total_equity_usdc: 1000 } } }, index: 0 },
+    // Accumulator: a reconciled asset balance, and a pnl_total of 0 that
+    // must not win over it.
+    { target: { name: "HYPE", bucket: "beta", status: { pnl_total: 0, accumulator: { total_equity_usdc: 250.5 } } }, index: 1 },
+    // Equity unavailable (venue read failed) — skipped, not counted as 0.
+    { target: { name: "Broken", bucket: "beta", status: { bull_holder: { total_equity_usdc: null } } }, index: 2 },
+  ];
+  const stats = context.__test.bucketAggregateStats("beta", items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Equity held").value, "1,250.5 USDC");
+  // No cached history in this context, so month-to-date is unknown, and
+  // the benchmark column is not wired up until bot-strategy#955.
+  assert.equal(stat("MTD change").value, "-");
+  assert.equal(stat("vs buy & hold").value, "-");
+  // Other buckets get their aggregates from their own issues (#957/#958);
+  // until then they must render no numbers at all rather than a total
+  // borrowed from another bucket.
+  assert.equal(context.__test.bucketAggregateStats("subsidy", items).length, 0);
+  assert.equal(context.__test.bucketAggregateStats("alpha_candidate", items).length, 0);
+  assert.equal(context.__test.bucketAggregateStats("unclassified", items).length, 0);
+});
+
+test("MTD stays unavailable until a recorded month-start baseline exists", () => {
+  // A beta target the server has no equity_history for (bull-holder):
+  // updateCard seeds the cache with the current observation, so the only
+  // point is one this page just made. Treating it as the baseline made
+  // MTD read 0.0 on every reload and change-since-page-load after that
+  // (PR #36 review).
+  const target = { name: "holder", service: "debot-bull-holder", instance_id: "i-1", bucket: "beta" };
+  const key = context.__test.keyForTarget(target, 0);
+  const data = { bull_holder: { total_equity_usdc: 1250.5 }, updated_at: new Date().toISOString() };
+  context.__test.updateHistoryCache(key, data);
+  const items = [{ target: { ...target, status: data }, index: 0 }];
+  const stat = (stats, label) => stats.find((s) => s.label === label);
+  const snapshotOnly = context.__test.bucketAggregateStats("beta", items);
+  assert.equal(stat(snapshotOnly, "Equity held").value, "1,250.5 USDC");
+  assert.equal(stat(snapshotOnly, "MTD change").value, "-");
+  assert.equal(stat(snapshotOnly, "MTD change").signed, null);
+
+  // Once the server sends a recorded series that reaches back before the
+  // month rollover, the delta is real and gets rendered.
+  const now = new Date();
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  context.__test.updateHistoryCache(key, {
+    ...data,
+    equity_history: [
+      { ts: monthStart - 86400000, equity: 1000 },
+      { ts: monthStart + 3600000, equity: 1100 },
+    ],
+  });
+  const recorded = context.__test.bucketAggregateStats("beta", items);
+  assert.equal(stat(recorded, "MTD change").signed, 250.5);
+
+  // A series that only begins inside the month is still a baseline when
+  // it is the server's own record (bot provisioned mid-month).
+  const key2 = context.__test.keyForTarget({ ...target, name: "holder2" }, 1);
+  context.__test.updateHistoryCache(key2, {
+    ...data,
+    equity_history: [{ ts: monthStart + 3600000, equity: 1200 }],
+  });
+  const items2 = [{ target: { ...target, name: "holder2", status: data }, index: 1 }];
+  assert.equal(stat(context.__test.bucketAggregateStats("beta", items2), "MTD change").signed, 50.5);
+
+  // A bucket where only some targets have a baseline must not show a
+  // partial delta beside an "Equity held" that counts them all
+  // (PR #36 review round 2).
+  const mixed = [
+    { target: { ...target, name: "holder2", status: data }, index: 1 },   // recorded
+    { target: { ...target, name: "holder3", status: data }, index: 2 },   // snapshot only
+  ];
+  context.__test.updateHistoryCache(context.__test.keyForTarget({ ...target, name: "holder3" }, 2), data);
+  const partial = context.__test.bucketAggregateStats("beta", mixed);
+  assert.equal(stat(partial, "Equity held").value, "2,501.0 USDC");
+  assert.equal(stat(partial, "MTD change").value, "-");
+  assert.equal(stat(partial, "MTD change").signed, null);
+
+  // The predicate itself: identical series, opposite answers.
+  const inMonth = [{ ts: monthStart + 1000, equity: 42 }];
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart, true), 42);
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart, false), null);
+  assert.equal(context.__test.baselineEquityAt(inMonth, monthStart), null);
+});
+
+test("accumulator equity is the held balance, not its constant-zero pnl_total", () => {
+  assert.equal(
+    context.__test.snapshotEquityValue({ pnl_total: 0, accumulator: { total_equity_usdc: 987.65 } }),
+    987.65,
+  );
+  assert.equal(
+    context.__test.snapshotEquityValue({ pnl_total: 0, accumulator: { total_equity_usdc: null } }),
+    null,
+  );
 });

@@ -7,22 +7,45 @@ const rangeToggleEl = document.getElementById("range-toggle");
 const POLL_MS = 5000;
 const cardMap = new Map();
 const historyByKey = new Map();
-const regionMap = new Map(); // region key (AWS code) -> { container, grid }
+// Which keys' cached history is the server's recorded series
+// (`equity_history`) rather than points this page appended from live
+// snapshots. Only a recorded series can anchor a month-to-date figure:
+// see baselineEquityAt (bot-strategy#959, PR #36 review).
+const recordedHistoryKeys = new Set();
+const bucketMap = new Map(); // bucket key -> { container, grid }
 let hasRendered = false;
 
-// AWS region → human-readable label for the region group header. Falls
-// back to the raw region string when a code isn't in the map.
-const REGION_LABELS = {
-  "eu-central-1": "Frankfurt",
-  "ap-northeast-1": "Tokyo",
-  "us-east-1": "N. Virginia",
-  "us-west-2": "Oregon",
+// Return-source bucket → group header label. The bucket comes from the
+// API (`target.bucket`), resolved server-side against docs/buckets.md,
+// itself a mirror of bot-strategy docs/return-source-taxonomy.md §3.
+// Cards are grouped by bucket rather than by AWS region because the
+// bucket, not the region, decides which benchmark the numbers on the
+// card mean anything against (bot-strategy#959). The region stays on
+// each card's "AWS Region" row.
+const BUCKET_LABELS = {
+  alpha_candidate: "α candidate",
+  beta: "β — risk premium",
+  subsidy: "Subsidy capture",
+  unclassified: "Unclassified",
 };
 
-// Stable display order so Frankfurt always appears above Tokyo
-// regardless of config.yaml ordering. Unknown regions sort to the
-// bottom alphabetically.
-const REGION_ORDER = ["eu-central-1", "ap-northeast-1", "us-east-1", "us-west-2"];
+// One line per bucket saying what its cards are judged against, so the
+// benchmark is visible next to the numbers instead of living only in
+// the taxonomy document.
+const BUCKET_BENCHMARKS = {
+  alpha_candidate:
+    "Benchmark: zero after all costs. Judged by its pre-registered gate on the readout date — not by running PnL.",
+  beta: "Benchmark: buying the same exposure as spot and holding it.",
+  subsidy:
+    "Benchmark: cost per unit of subsidy earned. A negative PnL is the price paid, not a loss to fix.",
+  unclassified:
+    "Not in the return-source taxonomy — add a row to docs/buckets.md. Excluded from every aggregate.",
+};
+
+// Stable display order: α candidates first (they are the ones with a
+// pending decision), then β, then subsidy, and anything unclassified
+// last so a missing taxonomy row is visible at the bottom.
+const BUCKET_ORDER = ["alpha_candidate", "beta", "subsidy", "unclassified"];
 
 const RANGE_OPTIONS = [
   { id: "1d", label: "1D", ms: 24 * 60 * 60 * 1000 },
@@ -65,27 +88,30 @@ const render = (data) => {
     pollIntervalEl.textContent = `Poll ${pollSecs}s`;
   }
 
-  // Group targets by AWS region. Each region gets its own .region-group
-  // container with a header + grid; cards are routed into the right
-  // grid by `target.region`. Targets with no region fall under
-  // "unknown". (bot-strategy#231 redesign Phase A2)
+  // Group targets by return-source bucket. Each bucket gets its own
+  // .bucket-group container with a header + aggregate row + grid; cards
+  // are routed into the right grid by `target.bucket`. A target the API
+  // reports without a bucket (an older server, or a service missing from
+  // docs/buckets.md) falls under "unclassified" and stays out of the
+  // aggregates. (bot-strategy#959; supersedes the region grouping from
+  // #231 Phase A2 — region is still shown on each card.)
   const seenKeys = new Set();
-  const seenRegions = new Set();
-  const cardsByRegion = new Map();
+  const seenBuckets = new Set();
+  const cardsByBucket = new Map();
 
   data.targets.forEach((target, index) => {
-    const region = target.region || "unknown";
-    seenRegions.add(region);
-    if (!cardsByRegion.has(region)) cardsByRegion.set(region, []);
-    cardsByRegion.get(region).push({ target, index });
+    const bucket = bucketOf(target);
+    seenBuckets.add(bucket);
+    if (!cardsByBucket.has(bucket)) cardsByBucket.set(bucket, []);
+    cardsByBucket.get(bucket).push({ target, index });
   });
 
-  // Render each region's cards into its grid; create the group on
+  // Render each bucket's cards into its grid; create the group on
   // first sight, reuse on subsequent ticks.
-  for (const region of cardsByRegion.keys()) {
-    const group = getOrCreateRegionGroup(region);
+  for (const bucket of cardsByBucket.keys()) {
+    const group = getOrCreateBucketGroup(bucket);
     const orderedCards = [];
-    const items = cardsByRegion.get(region);
+    const items = cardsByBucket.get(bucket);
     items.forEach(({ target, index }) => {
       const key = keyForTarget(target, index);
       let card = cardMap.get(key);
@@ -94,7 +120,7 @@ const render = (data) => {
         cardMap.set(key, card);
         group.grid.appendChild(card);
       } else if (card.parentElement !== group.grid) {
-        // Region change for this target — move the card.
+        // Re-bucketed target (config change) — move the card.
         group.grid.appendChild(card);
       }
       updateCard(card, target, pollSecs, index, key);
@@ -102,10 +128,11 @@ const render = (data) => {
       orderedCards.push(card);
     });
     reconcileOrderInGrid(group.grid, orderedCards);
-    const countEl = group.container.querySelector('[data-field="region-count"]');
+    const countEl = group.container.querySelector('[data-field="bucket-count"]');
     if (countEl) {
       countEl.textContent = `${items.length} ${items.length === 1 ? "target" : "targets"}`;
     }
+    updateBucketAggregate(group, bucket, items);
   }
 
   // Drop cards whose target disappeared between ticks.
@@ -116,18 +143,20 @@ const render = (data) => {
     }
   }
 
-  // Drop region groups that no longer have any targets, then reorder
-  // the remaining groups according to REGION_ORDER.
-  for (const [region, group] of regionMap.entries()) {
-    if (!seenRegions.has(region)) {
+  // Drop bucket groups that no longer have any targets, then reorder
+  // the remaining groups according to BUCKET_ORDER.
+  for (const [bucket, group] of bucketMap.entries()) {
+    if (!seenBuckets.has(bucket)) {
       group.container.remove();
-      regionMap.delete(region);
+      bucketMap.delete(bucket);
     }
   }
-  reconcileRegionOrder();
+  reconcileBucketOrder();
 
-  // Fleet summary: aggregates over all targets, regardless of region.
-  // (bot-strategy#231 redesign Phase A1)
+  // Fleet summary: health counters only. Money aggregates moved into the
+  // per-bucket headers — a fleet-wide equity or PnL sum mixes a held
+  // asset balance, a subsidy bot's intentional cost and a paper book's
+  // reference capital into one meaningless number (bot-strategy#959).
   updateFleetSummary(data.targets);
 
   if (!hasRendered) {
@@ -136,42 +165,51 @@ const render = (data) => {
   }
 };
 
-const getOrCreateRegionGroup = (region) => {
-  if (regionMap.has(region)) return regionMap.get(region);
+// The API always sends a bucket (main.go resolves it to "unclassified"
+// when the taxonomy doesn't know the service). Treat anything else —
+// missing field from an older server, or a value this frontend doesn't
+// know — as unclassified rather than inventing a group for it.
+const bucketOf = (target) => {
+  const bucket = target && typeof target.bucket === "string" ? target.bucket.trim() : "";
+  return Object.prototype.hasOwnProperty.call(BUCKET_LABELS, bucket) ? bucket : "unclassified";
+};
+
+const getOrCreateBucketGroup = (bucket) => {
+  if (bucketMap.has(bucket)) return bucketMap.get(bucket);
   const container = document.createElement("section");
-  container.className = "region-group";
-  container.dataset.region = region;
-  const label = REGION_LABELS[region] || region;
+  container.className = "bucket-group";
+  container.dataset.bucket = bucket;
   container.innerHTML = `
-    <header class="region-header">
-      <h2 class="region-name">${escapeHtml(label)}</h2>
-      <span class="region-code">${escapeHtml(region)}</span>
-      <span class="region-count" data-field="region-count">0 targets</span>
+    <header class="bucket-header">
+      <h2 class="bucket-name">${escapeHtml(BUCKET_LABELS[bucket] || bucket)}</h2>
+      <span class="bucket-benchmark">${escapeHtml(BUCKET_BENCHMARKS[bucket] || "")}</span>
+      <span class="bucket-count" data-field="bucket-count">0 targets</span>
     </header>
-    <div class="grid region-grid"></div>
+    <div class="bucket-aggregate" data-field="bucket-aggregate" hidden></div>
+    <div class="grid bucket-grid"></div>
   `;
   cardsEl.appendChild(container);
   const group = {
     container,
     grid: container.querySelector(".grid"),
-    region,
+    bucket,
   };
-  regionMap.set(region, group);
+  bucketMap.set(bucket, group);
   return group;
 };
 
-const reconcileRegionOrder = () => {
-  const sortedRegions = Array.from(regionMap.keys()).sort((a, b) => {
-    const ai = REGION_ORDER.indexOf(a);
-    const bi = REGION_ORDER.indexOf(b);
+const reconcileBucketOrder = () => {
+  const sortedBuckets = Array.from(bucketMap.keys()).sort((a, b) => {
+    const ai = BUCKET_ORDER.indexOf(a);
+    const bi = BUCKET_ORDER.indexOf(b);
     if (ai === -1 && bi === -1) return a.localeCompare(b);
     if (ai === -1) return 1;
     if (bi === -1) return -1;
     return ai - bi;
   });
   let node = cardsEl.firstElementChild;
-  sortedRegions.forEach((region) => {
-    const group = regionMap.get(region);
+  sortedBuckets.forEach((bucket) => {
+    const group = bucketMap.get(bucket);
     if (group.container !== node) {
       cardsEl.insertBefore(group.container, node);
     } else {
@@ -180,17 +218,120 @@ const reconcileRegionOrder = () => {
   });
 };
 
+// Per-bucket aggregates. Only figures that mean the same thing for every
+// card in the bucket belong here; there is deliberately no cross-bucket
+// total (bot-strategy#959).
+//
+// β is the only bucket with an aggregate today. Its buy & hold benchmark
+// column arrives with bot-strategy#955, the subsidy bucket's cost per
+// unit with #957, and the α candidates' gate progress with #958 — until
+// then those buckets show their card count and their benchmark line
+// only, rather than a placeholder number.
+const bucketAggregateStats = (bucket, items) => {
+  if (bucket !== "beta") return [];
+  let equityTotal = 0;
+  let equityCount = 0;
+  let mtd = 0;
+  // Counted, not flagged: a delta that covers only the targets which
+  // happen to have a recorded baseline, presented beside an "Equity
+  // held" that covers all of them, is a number whose label is wrong
+  // (PR #36 review). MTD is shown only when every target contributing
+  // equity also contributes a baseline.
+  let baselineCount = 0;
+  const monthStartMs = currentUtcMonthStartMs();
+  items.forEach(({ target, index }) => {
+    const data = target.status;
+    if (!data) return;
+    const equity = snapshotEquityValue(data);
+    if (equity === null) return;
+    equityTotal += equity;
+    equityCount += 1;
+    // Both sides of the delta must come from snapshotEquityValue: the
+    // cached baseline is whatever it stored for this target.
+    const key = keyForTarget(target, index);
+    const baseline = baselineEquityAt(
+      historyByKey.get(key),
+      monthStartMs,
+      recordedHistoryKeys.has(key),
+    );
+    if (baseline !== null) {
+      mtd += equity - baseline;
+      baselineCount += 1;
+    }
+  });
+  const mtdAvail = equityCount > 0 && baselineCount === equityCount;
+  return [
+    {
+      label: "Equity held",
+      value: equityCount > 0 ? formatUsdc(equityTotal) : "-",
+      title:
+        "Mark-to-market value of the exposure these bots hold. A β bot's job is to hold it with discipline, so this is a balance, not a profit.",
+    },
+    {
+      label: "MTD change",
+      value: mtdAvail ? formatPnl(mtd) : "-",
+      signed: mtdAvail ? mtd : null,
+      title:
+        "Change in the held value since the most recent UTC month rollover, across every bot in this bucket. Shown only when all of them have a recorded month-start baseline. Meaningful only against the buy & hold benchmark (bot-strategy#955).",
+    },
+    {
+      label: "vs buy & hold",
+      value: "-",
+      title:
+        "Excess over holding the same exposure as spot. Wired up by bot-strategy#955, which anchors the benchmark to the verified startup snapshot.",
+    },
+  ];
+};
+
+const updateBucketAggregate = (group, bucket, items) => {
+  const el = group.container.querySelector('[data-field="bucket-aggregate"]');
+  if (!el) return;
+  const stats = bucketAggregateStats(bucket, items);
+  if (!stats.length) {
+    el.hidden = true;
+    el.replaceChildren();
+    return;
+  }
+  el.hidden = false;
+  el.replaceChildren();
+  stats.forEach((stat) => {
+    const wrap = document.createElement("div");
+    wrap.className = "bucket-stat";
+    if (stat.title) wrap.setAttribute("title", stat.title);
+    const label = document.createElement("span");
+    label.className = "bucket-stat-label";
+    label.textContent = stat.label;
+    const value = document.createElement("span");
+    value.className = "bucket-stat-value";
+    value.textContent = stat.value;
+    applySignedClass(value, stat.signed === undefined ? null : stat.signed);
+    wrap.appendChild(label);
+    wrap.appendChild(value);
+    el.appendChild(wrap);
+  });
+};
+
 // Equity at-or-just-before the given timestamp from a sorted history.
 // Returns the latest point with ts < anchorMs (preferred baseline), or
 // the earliest point in the array when the bot's history starts after
 // the anchor (e.g. bot was provisioned mid-month). Returns null when
 // the cache is empty.
-const baselineEquityAt = (history, anchorMs) => {
+const baselineEquityAt = (history, anchorMs, fromRecordedHistory = false) => {
   if (!history || history.length === 0) return null;
   let i = 0;
   while (i < history.length && history[i].ts < anchorMs) i++;
   if (i === 0) {
-    return history[0].equity;
+    // Nothing at or before the anchor: the series begins inside the
+    // month. That is a real baseline only when the series is the
+    // server's recorded history (a bot provisioned mid-month has no
+    // earlier point to offer). When it is points this page appended
+    // from live snapshots — every beta target without a server
+    // `equity_history`, bull-holder among them — `history[0]` is just
+    // "whatever the equity was when this tab opened", which would
+    // report an MTD of 0.0 on every reload and then change-since-load
+    // (PR #36 review). No baseline is the honest answer; the caller
+    // renders "-".
+    return fromRecordedHistory ? history[0].equity : null;
   }
   return history[i - 1].equity;
 };
@@ -208,62 +349,26 @@ const updateFleetSummary = (targets) => {
     fleetSummaryEl.hidden = true;
     return;
   }
-  let pnlToday = 0;
-  let pnlMonth = 0;
-  let pnlMonthAvail = false;
-  let monthStartEquityTotal = 0;
-  let equityTotal = 0;
-  // Kept apart from positionsTotal because that one is halved below.
-  let bookPositionsTotal = 0;
-  // Funding today is aggregated only when at least one target's status
-  // payload carries the field; targets on pre-#371 binaries leave it
-  // undefined and the fleet summary falls back to "-" rather than
-  // claiming a partial fleet-wide sum that double-omits the pre-upgrade
-  // bots. See bot-strategy#371.
-  let fundingToday = 0;
-  let fundingTodayAvail = false;
+  // Health counters only. Equity, PnL and return aggregates live in the
+  // per-bucket headers: summing a β bot's held asset value, a subsidy
+  // bot's deliberate cost and an α candidate's paper equity produces a
+  // number no decision can be made from (bot-strategy#959).
   let halts = 0;
   let killSwitches = 0;
   let servicesDown = 0;
   let halts24h = 0;
-  // Summed only over targets whose position snapshot is ready (mirrors
-  // the fundingTodayAvail pattern above) so a bot still waiting on its
-  // initial WS position sync (`positions_ready: false`) doesn't report
-  // as falsely flat.
+  // Summed only over targets whose position snapshot is ready so a bot
+  // still waiting on its initial WS position sync
+  // (`positions_ready: false`) doesn't report as falsely flat.
   let positionsTotal = 0;
+  // Kept apart from positionsTotal because that one is halved below.
+  let bookPositionsTotal = 0;
   const cutoff24hSec = Math.floor(Date.now() / 1000) - 86400;
-  const monthStartMs = currentUtcMonthStartMs();
-  targets.forEach((target, index) => {
+  targets.forEach((target) => {
     const data = target.status;
     if (isBullHolderStatus(data) && data.bull_holder.halted === true) halts += 1;
     if (isArcusStatus(data) && data.arcus.risk_halt) halts += 1;
-    // Accumulator equity is an asset balance, not trading PnL. Keep the HYPE
-    // target in fleet health/target counts while excluding it from every PnL,
-    // return, drawdown, and open-position aggregate.
     if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
-      if (typeof data.pnl_today === "number") pnlToday += data.pnl_today;
-      // snapshotEquityValue, not pnl_total: a book target's capital lives
-      // in book.equity_usd (pnl_total is PnL against the reference).
-      const equityValue = snapshotEquityValue(data);
-      if (equityValue !== null) equityTotal += equityValue;
-      if (typeof data.funding_carry_today === "number") {
-        fundingToday += data.funding_carry_today;
-        fundingTodayAvail = true;
-      }
-      if (equityValue !== null) {
-        // Both sides of the delta must be the same measure: the cached
-        // baseline is whatever snapshotEquityValue stored, so the current
-        // side has to come from it too. Reading pnl_total here would give
-        // a book target a ~-$1000 month (its PnL minus its equity).
-        const key = keyForTarget(target, index);
-        const history = historyByKey.get(key);
-        const baseline = baselineEquityAt(history, monthStartMs);
-        if (baseline !== null) {
-          pnlMonth += equityValue - baseline;
-          monthStartEquityTotal += baseline;
-          pnlMonthAvail = true;
-        }
-      }
       if (data.positions_ready !== false && typeof data.position_count === "number") {
         // A cross-sectional book holds one position per symbol; only
         // pairtrade's legs come in pairs (see the halving below).
@@ -290,64 +395,6 @@ const updateFleetSummary = (targets) => {
     if (isTargetUnhealthy(target)) servicesDown += 1;
   });
   setField("fleet-total", `${targets.length}`);
-  setField("fleet-pnl-today", formatPnl(pnlToday));
-  applySignedClass(
-    fleetSummaryEl.querySelector('[data-field="fleet-pnl-today"]'),
-    pnlToday,
-  );
-  if (fundingTodayAvail) {
-    setField("fleet-funding-today", formatPnl(fundingToday));
-    applySignedClass(
-      fleetSummaryEl.querySelector('[data-field="fleet-funding-today"]'),
-      fundingToday,
-    );
-  } else {
-    setField("fleet-funding-today", "-");
-    applySignedClass(
-      fleetSummaryEl.querySelector('[data-field="fleet-funding-today"]'),
-      null,
-    );
-  }
-  if (pnlMonthAvail) {
-    setField("fleet-pnl-month", formatPnl(pnlMonth));
-    applySignedClass(
-      fleetSummaryEl.querySelector('[data-field="fleet-pnl-month"]'),
-      pnlMonth,
-    );
-  } else {
-    setField("fleet-pnl-month", "-");
-    applySignedClass(
-      fleetSummaryEl.querySelector('[data-field="fleet-pnl-month"]'),
-      null,
-    );
-  }
-
-  // CAGR (month): annualized return implied by month-to-date PnL on the
-  // aggregated baseline equity. Gated at >= 1 day past the UTC month
-  // rollover because (1+r)^(365/days) explodes for sub-day windows.
-  // 1+monthlyReturn must be > 0 for Math.pow to be defined; severe
-  // drawdowns where total equity dropped to zero or below render as "-".
-  const daysSinceMonthStart = (Date.now() - monthStartMs) / 86400000;
-  const cagrMonthEl = fleetSummaryEl.querySelector('[data-field="fleet-cagr-month"]');
-  if (
-    pnlMonthAvail &&
-    monthStartEquityTotal > 0 &&
-    daysSinceMonthStart >= 1
-  ) {
-    const monthlyReturn = pnlMonth / monthStartEquityTotal;
-    if (1 + monthlyReturn > 0) {
-      const cagr = (Math.pow(1 + monthlyReturn, 365 / daysSinceMonthStart) - 1) * 100;
-      setField("fleet-cagr-month", `${cagr > 0 ? "+" : ""}${cagr.toFixed(0)}%`);
-      applySignedClass(cagrMonthEl, cagr);
-    } else {
-      setField("fleet-cagr-month", "-");
-      applySignedClass(cagrMonthEl, null);
-    }
-  } else {
-    setField("fleet-cagr-month", "-");
-    applySignedClass(cagrMonthEl, null);
-  }
-  setField("fleet-equity-total", formatUsdc(equityTotal));
   // Each pairtrade position is two legs (e.g. BTC+ETH); halve the raw leg
   // count so this reads as a pair count. A cross-sectional book's legs are
   // single-symbol and are counted whole.
@@ -401,6 +448,7 @@ const createCard = (key) => {
       <div class="card-header" data-field="header">
         <button class="card-collapse-toggle" type="button" data-field="collapse-toggle" aria-label="Toggle details" title="Click to collapse / expand">▾</button>
         <h2 class="card-title" data-field="name"></h2>
+        <span class="status-pill bucket" data-field="bucket"></span>
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
@@ -636,6 +684,17 @@ const updateCard = (card, target, pollSecs, index, key) => {
   nameEl.textContent = target.name || target.service || "debot";
   statusEl.textContent = displayStatus;
   statusEl.className = `status-pill ${statusClass}`;
+
+  // Bucket badge: the card sits inside its bucket group already, but the
+  // badge keeps the classification attached to the card when it is read
+  // on its own (collapsed list, screenshot, narrow screen).
+  const bucketEl = card.querySelector('[data-field="bucket"]');
+  if (bucketEl) {
+    const bucket = bucketOf(target);
+    bucketEl.textContent = BUCKET_LABELS[bucket];
+    bucketEl.title = BUCKET_BENCHMARKS[bucket];
+    bucketEl.className = `status-pill bucket bucket-${bucket}`;
+  }
 
   // Maintenance badge
   const maintEl = card.querySelector('[data-field="maintenance"]');
@@ -1652,6 +1711,10 @@ const updateHistoryCache = (key, data) => {
       }))
       .filter((point) => Number.isFinite(point.ts) && Number.isFinite(point.equity));
     historyByKey.set(key, history);
+    // Recorded by the server, so it can anchor a month-to-date figure.
+    // Sticky per key: a later poll without the field appends to this
+    // same series rather than downgrading it.
+    recordedHistoryKeys.add(key);
     return history;
   }
   const point = snapshotToPoint(data);
@@ -1679,6 +1742,15 @@ const snapshotEquityValue = (data) => {
   }
   if (data.arcus) {
     return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
+  }
+  // The accumulator reports a reconciled asset balance, not trading PnL.
+  // That balance is exactly what the β bucket aggregates (the bot's job
+  // is to hold the exposure), and its top-level pnl_total is a constant
+  // zero, which would otherwise win here. bot-strategy#959.
+  if (data.accumulator) {
+    return Number.isFinite(data.accumulator.total_equity_usdc)
+      ? Number(data.accumulator.total_equity_usdc)
+      : null;
   }
   // The book runtime reports the same shape: its top-level pnl_total is
   // PnL against the equity reference, while book.equity_usd is the
