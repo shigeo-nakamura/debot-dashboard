@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1677,4 +1677,57 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
   ]);
   assert.equal(dueStats.find((s) => s.label === "Nearest readout").value, "2026-09-11 — due");
   assert.equal(context.__test.alphaAggregateStats([{ target: {}, index: 0 }]).find((s) => s.label === "Nearest readout").value, "-");
+});
+
+test("accumulator keeps staking carry out of price beta", () => {
+  const accumulator = { hype_balance: 12, hype_price_usdc: 100, staking_rewards_hype: 2 };
+  const view = context.__test.accumulatorViewModel(accumulator, Date.now(), { spent_usdc: 700 });
+  // 10 purchased HYPE marked at 100 against 700 spent. Counting the two
+  // reward HYPE as price β would report 500 instead of 300.
+  assert.equal(view.unrealizedPnlUsdc, 300);
+  assert.equal(view.stakingRewards, "2 HYPE (200.0 USDC)");
+
+  // A bot that does not report staking yet: everything held is treated
+  // as purchased, and the carry row says nothing rather than zero.
+  const noStaking = context.__test.accumulatorViewModel(
+    { hype_balance: 12, hype_price_usdc: 100 },
+    Date.now(),
+    { spent_usdc: 700 },
+  );
+  assert.equal(noStaking.unrealizedPnlUsdc, 500);
+  assert.equal(noStaking.stakingRewards, null);
+});
+
+test("DCA benchmark row reports the edge in bps and withholds what it lacks", () => {
+  const card = benchmarkCard();
+  context.__test.renderAccumulatorDCA(card, {
+    accumulator_dca: {
+      window_start: "2026-09-01",
+      coin: "HYPE",
+      days: 2,
+      dca_price_usd: 80,
+      cost_basis_usd: 70,
+      edge_bps: 1250,
+    },
+  });
+  assert.equal(card.text("accumulator-basis"), "70.0 USDC");
+  assert.equal(card.text("accumulator-dca-price"), "80.0 USDC");
+  assert.equal(card.text("accumulator-edge"), "+1250 bps");
+  assert.equal(card.text("accumulator-dca-label"), "Naive DCA (2d from 2026-09-01)");
+  assert.equal(card.querySelector('[data-field="accumulator-dca-note"]').hidden, true);
+
+  // Benchmark priced but nothing bought yet: the naive schedule's price
+  // stands, the bot's does not get invented from the mark.
+  const partial = benchmarkCard();
+  context.__test.renderAccumulatorDCA(partial, {
+    accumulator_dca: { window_start: "2026-09-01", coin: "HYPE", days: 2, dca_price_usd: 80 },
+  });
+  assert.equal(partial.text("accumulator-basis"), "-");
+  assert.equal(partial.text("accumulator-edge"), "-");
+  assert.match(partial.text("accumulator-dca-note"), /purchase journal/);
+
+  const missing = benchmarkCard();
+  context.__test.renderAccumulatorDCA(missing, { accumulator_dca_error: "DCA window not configured" });
+  assert.equal(missing.text("accumulator-dca-price"), "-");
+  assert.equal(missing.text("accumulator-dca-note"), "DCA window not configured");
 });

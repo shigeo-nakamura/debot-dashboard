@@ -86,6 +86,9 @@ type TargetConfig struct {
 	// (bot-strategy#958). Only meaningful for a target in the
 	// alpha_candidate bucket.
 	Gate *GateConfig `yaml:"gate"`
+	// Accumulator carries the operator-verified DCA window for the HYPE
+	// accumulator (bot-strategy#956).
+	Accumulator *AccumulatorConfig `yaml:"accumulator"`
 }
 
 type StatusPosition struct {
@@ -129,6 +132,23 @@ type AccumulatorStatus struct {
 	TradeCadence      string  `json:"trade_cadence"`
 	Healthy           bool    `json:"healthy"`
 	HealthReason      *string `json:"health_reason,omitempty"`
+	// Staking (bot-strategy#847, live after 2026-09-18). Pointers so a
+	// bot that does not stake yet renders "-" rather than a zero yield.
+	// StakedHYPE is the delegated balance; StakingRewardsHYPE is the
+	// yield accrued so far, counted separately from price β: it is carry
+	// the bot earned, not HYPE it bought cheaply.
+	StakedHYPE         *float64 `json:"staked_hype,omitempty"`
+	StakingRewardsHYPE *float64 `json:"staking_rewards_hype,omitempty"`
+}
+
+// StakingRewards returns the accrued yield, or zero when the bot does
+// not report it. Used to keep carry out of the execution and price
+// figures, both of which are about HYPE the bot actually bought.
+func (a *AccumulatorStatus) StakingRewards() float64 {
+	if a == nil || a.StakingRewardsHYPE == nil {
+		return 0
+	}
+	return *a.StakingRewardsHYPE
 }
 
 // AccumulatorOperations is the subset of hype-accumulator's identifier-free
@@ -254,18 +274,23 @@ type StatusData struct {
 	Subsidy *SubsidyUnits `json:"subsidy,omitempty"`
 	// Gate is the α candidate's bot-reported sample count and machinery
 	// health (bot-strategy#958). Carries no PnL by design.
-	Gate           *GateStatus            `json:"gate,omitempty"`
-	Accumulator    *AccumulatorStatus     `json:"accumulator,omitempty"`
-	AccumulatorOps *AccumulatorOperations `json:"operations,omitempty"`
-	BullHolder     *BullHolderStatus      `json:"bull_holder,omitempty"`
-	HanBridge      *HanBridgeStatus       `json:"han_bridge,omitempty"`
-	Book           *BookStatus            `json:"book,omitempty"`
-	TradeStats     *TradeStats            `json:"trade_stats,omitempty"`
-	Maintenance    *string                `json:"maintenance,omitempty"`
-	Shutdown       *ShutdownStatus        `json:"shutdown,omitempty"`
-	ErrorSummary   *ErrorSummary          `json:"error_summary,omitempty"`
-	EquityHistory  []EquityPoint          `json:"equity_history,omitempty"`
-	Arcus          *arcusstatus.Status    `json:"arcus,omitempty"`
+	Gate *GateStatus `json:"gate,omitempty"`
+	// AccumulatorDCA is derived by the dashboard, never by the producer:
+	// see accumulatorDCABenchmark. AccumulatorDCAError explains why it is
+	// absent.
+	AccumulatorDCA      *DCABenchmark          `json:"accumulator_dca,omitempty"`
+	AccumulatorDCAError string                 `json:"accumulator_dca_error,omitempty"`
+	Accumulator         *AccumulatorStatus     `json:"accumulator,omitempty"`
+	AccumulatorOps      *AccumulatorOperations `json:"operations,omitempty"`
+	BullHolder          *BullHolderStatus      `json:"bull_holder,omitempty"`
+	HanBridge           *HanBridgeStatus       `json:"han_bridge,omitempty"`
+	Book                *BookStatus            `json:"book,omitempty"`
+	TradeStats          *TradeStats            `json:"trade_stats,omitempty"`
+	Maintenance         *string                `json:"maintenance,omitempty"`
+	Shutdown            *ShutdownStatus        `json:"shutdown,omitempty"`
+	ErrorSummary        *ErrorSummary          `json:"error_summary,omitempty"`
+	EquityHistory       []EquityPoint          `json:"equity_history,omitempty"`
+	Arcus               *arcusstatus.Status    `json:"arcus,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -600,6 +625,11 @@ func normalizeConfig(cfg *Config) error {
 		if err := resolveBucket(target); err != nil {
 			return fmt.Errorf("targets[%d]: %w", i, err)
 		}
+		if target.Accumulator != nil && target.Accumulator.DCA != nil {
+			if err := target.Accumulator.DCA.validate(); err != nil {
+				return fmt.Errorf("targets[%d]: %w", i, err)
+			}
+		}
 		if target.Gate != nil {
 			if target.Bucket != BucketAlphaCandidate {
 				return fmt.Errorf("targets[%d]: gate configured for a %s target", i, target.Bucket)
@@ -738,6 +768,7 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 				gate = results[i].Status.Gate
 			}
 			results[i].Gate = resolveGate(target.Gate, gate, time.Now())
+			applyAccumulatorDCA(ctx, results[i].Status, target.Accumulator, http.DefaultClient, time.Now())
 		}()
 	}
 	wg.Wait()

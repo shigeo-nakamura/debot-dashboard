@@ -74,6 +74,18 @@ targets:
 #    s3_bucket: debot-dashboard
 #    s3_region: eu-central-1
 #    s3_key: debot/status/hype-accumulator/status.json
+#    bucket: beta
+#    # DCA benchmark (bot-strategy#956): the card compares the bot's
+#    # realised cost basis with what the same budget would have paid on a
+#    # naive equal-USD daily schedule over the same window. The bot does
+#    # not report when it started buying, and guessing that date from a
+#    # snapshot would silently move the benchmark, so the operator
+#    # verifies it here. `coin` is the Hyperliquid market whose daily
+#    # closes stand in for the schedule's prices (default HYPE).
+#    accumulator:
+#      dca:
+#        window_start: "2026-09-11"
+#        coin: HYPE
 # Bull-holder uses its existing same-host status file and public read-only
 # balance APIs. Do not set s3_bucket/s3_key for this target. See
 # deploy/bull-holder.md for data meanings and rollout instructions.

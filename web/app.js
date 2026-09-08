@@ -748,7 +748,15 @@ const createCard = (key) => {
           <div>HYPE amount <span data-field="accumulator-hype"></span></div>
           <div>HYPE mark <span data-field="accumulator-mark"></span></div>
         </div>
-        <div class="row" data-field="accumulator-pnl-row" hidden><span>Unrealized PnL</span><strong data-field="accumulator-pnl"></strong></div>
+        <div class="benchmark-panel" data-field="accumulator-dca">
+          <div class="benchmark-title" title="A β accumulator's only execution question is whether it bought more cheaply than spending the same budget every day and not thinking about it (bot-strategy#956).">DCA benchmark</div>
+          <div class="row"><span>Cost basis</span><strong data-field="accumulator-basis"></strong></div>
+          <div class="row"><span data-field="accumulator-dca-label">Naive DCA</span><strong data-field="accumulator-dca-price"></strong></div>
+          <div class="row"><span>Execution edge</span><strong data-field="accumulator-edge"></strong></div>
+          <div class="benchmark-note" data-field="accumulator-dca-note" hidden></div>
+        </div>
+        <div class="row" data-field="accumulator-pnl-row" hidden><span>Price β (unrealized)</span><strong data-field="accumulator-pnl"></strong></div>
+        <div class="row" data-field="accumulator-staking-row"><span>Staking rewards (carry)</span><strong data-field="accumulator-staking"></strong></div>
         <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
         <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
         <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
@@ -1170,7 +1178,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     return;
   }
   if (accumulator) {
-    renderAccumulatorStatus(card, accumulator, data.operations || null);
+    renderAccumulatorStatus(card, accumulator, data.operations || null, data);
     if (target.error || accumulatorDegraded) {
       errorEl.hidden = false;
       errorEl.textContent = target.error || accumulator.health_reason || "Accumulator health check failed";
@@ -2324,10 +2332,24 @@ const accumulatorViewModel = (accumulator, nowMs = Date.now(), operations = null
   const spentUsdc = operations ? parseNumber(operations.spent_usdc) : null;
   const hypeBalance = parseNumber(accumulator.hype_balance);
   const hypePriceUsdc = parseNumber(accumulator.hype_price_usdc);
-  const unrealizedPnlUsdc = spentUsdc !== null && hypeBalance !== null && hypePriceUsdc !== null
-    ? hypeBalance * hypePriceUsdc - spentUsdc
+  // Staking yield is carry, not price β: it is HYPE the bot earned, not
+  // HYPE it bought, so it gets its own row and is taken out of the
+  // mark-to-market of what was purchased (bot-strategy#956 / #847).
+  const stakingRewardsHype = parseNumber(accumulator.staking_rewards_hype);
+  const purchasedHype = hypeBalance === null
+    ? null
+    : hypeBalance - (stakingRewardsHype === null ? 0 : stakingRewardsHype);
+  const unrealizedPnlUsdc = spentUsdc !== null && purchasedHype !== null && hypePriceUsdc !== null
+    ? purchasedHype * hypePriceUsdc - spentUsdc
+    : null;
+  const stakingRewardsUsdc = stakingRewardsHype !== null && hypePriceUsdc !== null
+    ? stakingRewardsHype * hypePriceUsdc
     : null;
   return {
+    stakingRewardsHype,
+    stakingRewards: stakingRewardsHype === null
+      ? null
+      : `${formatHype(stakingRewardsHype)}${stakingRewardsUsdc === null ? "" : ` (${formatUsdc(stakingRewardsUsdc)})`}`,
     total: formatUsdc(parseNumber(accumulator.total_equity_usdc)),
     usdc: formatUsdc(parseNumber(accumulator.usdc_balance)),
     hype: formatHype(accumulator.hype_balance),
@@ -2340,7 +2362,50 @@ const accumulatorViewModel = (accumulator, nowMs = Date.now(), operations = null
   };
 };
 
-const renderAccumulatorStatus = (card, accumulator, operations) => {
+// Price per unit is read against a mark of the same size, so it keeps
+// the card's money precision rather than the 4 decimals a cost-per-point
+// needs.
+const formatUnitPrice = (value) =>
+  Number.isFinite(value) ? `${groupedFixed(Number(value), MONEY_DIGITS)} USDC` : "-";
+
+const renderAccumulatorDCA = (card, data) => {
+  const panel = card.querySelector('[data-field="accumulator-dca"]');
+  if (!panel) return;
+  const dca = data && data.accumulator_dca ? data.accumulator_dca : null;
+  const set = (field, text, signed) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    el.textContent = text;
+    if (signed !== undefined) applySignedClass(el, signed);
+  };
+  const basis = dca && Number.isFinite(dca.cost_basis_usd) ? Number(dca.cost_basis_usd) : null;
+  const edge = dca && Number.isFinite(dca.edge_bps) ? Number(dca.edge_bps) : null;
+  set("accumulator-basis", formatUnitPrice(basis));
+  set("accumulator-dca-price", dca ? formatUnitPrice(dca.dca_price_usd) : "-");
+  set(
+    "accumulator-edge",
+    edge === null ? "-" : `${edge > 0 ? "+" : ""}${edge.toFixed(0)} bps`,
+    edge,
+  );
+  const labelEl = card.querySelector('[data-field="accumulator-dca-label"]');
+  if (labelEl) {
+    labelEl.textContent = dca && Number.isFinite(dca.days)
+      ? `Naive DCA (${dca.days}d from ${dca.window_start})`
+      : "Naive DCA";
+  }
+  const noteEl = card.querySelector('[data-field="accumulator-dca-note"]');
+  if (noteEl) {
+    const note = !dca
+      ? (data && data.accumulator_dca_error) || "DCA benchmark unavailable"
+      : basis === null
+        ? "No cost basis yet — it comes from the purchase journal's authoritative spend."
+        : "";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
+};
+
+const renderAccumulatorStatus = (card, accumulator, operations, data = null) => {
   const view = accumulatorViewModel(accumulator, Date.now(), operations);
   const fields = {
     "accumulator-total": view.total,
@@ -2359,6 +2424,16 @@ const renderAccumulatorStatus = (card, accumulator, operations) => {
   const pnlEl = card.querySelector('[data-field="accumulator-pnl"]');
   if (pnlRowEl) pnlRowEl.hidden = view.unrealizedPnl === null;
   if (pnlEl) pnlEl.textContent = view.unrealizedPnl || "";
+  // The carry row is always present: "-" says staking is not reported
+  // yet, which is different from a bot that stakes and earned nothing.
+  const stakingEl = card.querySelector('[data-field="accumulator-staking"]');
+  if (stakingEl) {
+    stakingEl.textContent = view.stakingRewards || "-";
+    stakingEl.title = view.stakingRewards
+      ? "Staking yield accrued, counted apart from price β and excluded from the mark-to-market above."
+      : "The bot does not report staking yet (bot-strategy#847, live after 2026-09-18).";
+  }
+  renderAccumulatorDCA(card, data);
 };
 
 const setupRangeToggle = () => {
