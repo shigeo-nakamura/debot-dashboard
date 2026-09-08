@@ -1506,6 +1506,37 @@ test("alpha candidate cards hide equity, PnL, win rate and CAGR", () => {
   }
 });
 
+test("blinding an alpha card also keeps the book's equity off it", () => {
+  const book = {
+    instance_id: "xsmom-695",
+    gross_usd: 2000,
+    net_usd: -50,
+    equity_usd: 1009.93,
+    signal_status: "applied:abc123",
+    last_decision: { key: "k", outcome: "applied", attempts: 1 },
+  };
+  // Equity against a known starting reference is the running result the
+  // blinding exists to hide; gross and net say whether the book is
+  // balanced, which is operational and stays.
+  const blinded = context.__test.bookViewModel(book, { blindResult: true });
+  assert.equal(/equity/.test(blinded.exposure), false);
+  assert.equal(/1,009|1009/.test(blinded.exposure), false);
+  assert.match(blinded.exposure, /gross/);
+  assert.match(blinded.exposure, /net/);
+  // Every other target keeps it.
+  assert.match(context.__test.bookViewModel(book).exposure, /equity/);
+});
+
+// The `hidden` attribute only sets `display: none` at the user-agent
+// level, so an author `display` on the same element beats it. The DOM
+// property assertions above cannot see that, so the stylesheet itself
+// has to be checked: without this rule the α blinding is a no-op in a
+// real browser.
+test("hidden elements are actually hidden by the stylesheet", () => {
+  const css = fs.readFileSync(`${__dirname}/../web/styles.css`, "utf8");
+  assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+});
+
 test("alpha bucket aggregates study count and the nearest readout, never performance", () => {
   const items = [
     { target: { bucket: "alpha_candidate", gate: { readout_on: "2026-10-02", days_to_readout: 24, readout_due: false } }, index: 0 },

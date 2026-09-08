@@ -1239,7 +1239,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const book = isBookStatus(data) ? data.book : null;
   if (bookViewEl) {
     bookViewEl.hidden = book === null;
-    if (book) renderBookStatus(card, book);
+    if (book) renderBookStatus(card, book, { blindResult: bucketOf(target) === "alpha_candidate" });
   }
 
   const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
@@ -2126,7 +2126,7 @@ const isBookHalted = (data) =>
 // "partial:<sha>" carry a hash, the rest carry a reason. `last_decision`
 // is the *previous* completed decision and can disagree with the window
 // in progress, so the two are shown separately rather than merged.
-const bookViewModel = (book) => {
+const bookViewModel = (book, { blindResult = false } = {}) => {
   const signal = String(book.signal_status || "");
   const [kind, detail = ""] = signal.split(":");
   let tone = "neutral";
@@ -2160,7 +2160,14 @@ const bookViewModel = (book) => {
     decision,
     signal: detail ? `${kind} ${detail}` : kind || "-",
     signalTone: tone,
-    exposure: `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
+    // Gross and net say whether the book is balanced, which is
+    // operational. Equity against a known starting reference is the
+    // running result, so it is left out for an α candidate — otherwise
+    // the one number the blinding exists to hide walks back in through
+    // this row (Codex, PR #39).
+    exposure: blindResult
+      ? `gross ${money(book.gross_usd)} · net ${money(book.net_usd)}`
+      : `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
     next: book.next_decision_at
       ? `${book.next_decision_key || "?"} @ ${book.next_decision_at}`
       : "Not scheduled",
@@ -2168,8 +2175,8 @@ const bookViewModel = (book) => {
   };
 };
 
-const renderBookStatus = (card, book) => {
-  const view = bookViewModel(book);
+const renderBookStatus = (card, book, options) => {
+  const view = bookViewModel(book, options);
   const set = (field, text) => {
     const el = card.querySelector(`[data-field="${field}"]`);
     if (el) el.textContent = text;
