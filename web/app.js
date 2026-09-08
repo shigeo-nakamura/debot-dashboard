@@ -415,7 +415,11 @@ const alphaAggregateStats = (items) => {
     // entries on a target that is otherwise reporting fine, and a study
     // that cannot enter is not accumulating samples (Codex, PR #39).
     const blocked = entryBlockingHalts(target, target.status).length > 0;
-    if (!isTargetUnhealthy(target) && !blocked) sampling += 1;
+    // A drifted spec means resolveGate withholds every sample, so none
+    // of what the bot is producing can count toward the registered study
+    // (Codex, PR #39).
+    const drifted = Boolean(target.gate && target.gate.spec_drift);
+    if (!isTargetUnhealthy(target) && !blocked && !drifted) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
@@ -983,8 +987,12 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (sr && sr.session_halted === true) {
       sessionDdEl.textContent = "SESSION DD";
       const reason = sr.halt_reason ? ` (${sr.halt_reason})` : "";
+      // A halt reason can embed the loss that caused it, so the blinded
+      // branch names the state only — quoting the reason while claiming
+      // the magnitude is withheld is the leak this branch exists to
+      // close (Codex, PR #40).
       sessionDdEl.title = blindResult
-        ? `Session DD halt active${reason}. The magnitude is withheld on an α candidate's card. ` +
+        ? `Session DD halt active. The reason and magnitude are withheld on an α candidate's card. ` +
           `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`
         : `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
           `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
@@ -1278,6 +1286,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
       renderHanBridgeStatus(card, hanBridge, {
         hasPosition: Boolean(data.has_position),
         killSwitchActive: target.kill_switch_active === true,
+        // Engine B is an α candidate, and this view copies the
+        // producer's halt reason verbatim (Codex, PR #40).
+        blindResult,
       });
     }
   }
@@ -1811,7 +1822,9 @@ const renderGatePanel = (card, target, data) => {
     const note = gate.spec_drift
       ? "The bot reports a different gate spec than the frozen one; the sample count is withheld until they agree."
       : valid === null
-        ? "The bot is not reporting a sample count yet — the decision journal feeds it (bot-strategy#937)."
+        ? gate.sample_source
+          ? `The bot is not reporting a sample count yet — ${gate.sample_source} feeds it.`
+          : "The bot is not reporting a sample count yet."
         : "";
     noteEl.textContent = note;
     noteEl.hidden = note === "";
@@ -2111,7 +2124,7 @@ const isHanBridgeHalted = (data) =>
 // pairtrade-specific `session_risk.session_halted`, which engine_b_live
 // never populates), so that param was always false in practice
 // (code-review finding on PR #23, second round).
-const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false } = {}) => {
+const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -2133,7 +2146,14 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
     pair: `${hanBridge.kr_primary_symbol || "?"} → ${hanBridge.us_primary_symbol || "?"}`,
     today,
     reasons,
-    sessionHaltReason: hanBridge.session_halt_reason || null,
+    // Engine B is an α candidate, and a producer's halt reason can embed
+    // the loss that caused it. A blinded card names the state; every
+    // other card keeps the reason (Codex, PR #40).
+    sessionHaltReason: hanBridge.session_halt_reason
+      ? blindResult
+        ? "session halt"
+        : hanBridge.session_halt_reason
+      : null,
   };
 };
 

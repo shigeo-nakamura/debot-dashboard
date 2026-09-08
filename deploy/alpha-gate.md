@@ -54,9 +54,12 @@ The generic trading view's equity headline, PnL rows, lifetime stats and equity
 chart are hidden for these targets, along with the risk progress panel (its bars
 state the live drawdown in bps against its threshold) and the book panel's
 equity term. The halt pills stay in the header — halt state is safety, not
-performance — but their tooltips withhold the magnitudes, and the book panel's
-note row names a halt rather than quoting its reason. The bucket header counts
-as running only the targets that are reporting *and* able to enter. The numbers stay in `status.json` and in
+performance — but their tooltips withhold the reason and the magnitudes, and
+the book panel's note row and Engine B's halt row name a halt rather than
+quoting its reason. A producer's reason can embed the loss that caused it, so
+no path on a blinded card copies one verbatim. The bucket header counts
+as running only the targets that are reporting, able to enter, and running the
+registered spec — a drifted spec produces no countable samples. The numbers stay in `status.json` and in
 `/api/status` so the readout script can still read them; the frontend simply
 does not render them.
 

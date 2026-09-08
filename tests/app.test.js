@@ -1539,6 +1539,21 @@ test("a blinded card names a halt without quoting the number that caused it", ()
   assert.equal(context.__test.entryBlockingHalts({}, {}).length, 0);
 });
 
+test("the Engine B halt row names the state on a blinded card", () => {
+  const reason = "session loss $160.00 > limit $150.00";
+  const hanBridge = { kr_primary_symbol: "SKHYNIXUSD", us_primary_symbol: "MU", session_halt_reason: reason };
+  assert.equal(context.__test.hanBridgeViewModel(hanBridge).sessionHaltReason, reason);
+  assert.equal(
+    context.__test.hanBridgeViewModel(hanBridge, { blindResult: true }).sessionHaltReason,
+    "session halt",
+  );
+  // A card with no halt still shows nothing rather than a label.
+  assert.equal(
+    context.__test.hanBridgeViewModel({ session_halt_reason: null }, { blindResult: true }).sessionHaltReason,
+    null,
+  );
+});
+
 test("an alpha card withholds the risk panel and the magnitudes in its halt tooltips", () => {
   const card = benchmarkCard();
   const data = {
@@ -1637,6 +1652,21 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
     { target: { ...items[1].target, service_status: "active", kill_switch_active: true, status: {} }, index: 1 },
   ]);
   assert.equal(withKillSwitch.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A drifted spec means every sample is withheld, so nothing the bot
+  // produces can count toward the registered study.
+  const withDrift = context.__test.alphaAggregateStats([
+    items[0],
+    {
+      target: {
+        ...items[1].target,
+        service_status: "active",
+        status: {},
+        gate: { ...items[1].target.gate, spec_drift: true },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(withDrift.find((s) => s.label === "Studies running").value, "1 of 2");
   assert.equal(stat("Nearest readout").value, "2026-09-11 (3d)");
   // No money or performance figure may appear in this bucket's header.
   for (const entry of stats) {
