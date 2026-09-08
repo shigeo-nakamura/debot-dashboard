@@ -1834,6 +1834,44 @@ test("a withheld deadline clears the tooltip a reused card was showing", () => {
   assert.equal(bad.querySelector('[data-field="gate-health"]').title, "");
 });
 
+test("a producer that follows a study is not itself a study", () => {
+  // The XSMOM rollout puts both in the alpha bucket, and the book runtime
+  // has no `gate:` on purpose — the readout is computed from the shadow
+  // ledger, not from its decisions. Counting it reported two running
+  // studies for the one that is registered.
+  const shadow = {
+    target: {
+      bucket: "alpha_candidate",
+      service_status: "active",
+      status: {},
+      gate: { readout_on: "2026-10-02", days_to_readout: 24 },
+    },
+    index: 0,
+  };
+  const follower = {
+    target: { bucket: "alpha_candidate", service_status: "active", status: {} },
+    index: 1,
+  };
+  const running = context.__test
+    .alphaAggregateStats([shadow, follower])
+    .find((s) => s.label === "Studies running");
+  assert.equal(running.value, "1");
+  assert.match(running.title, /1 target\(s\) in this bucket follow a study/);
+
+  // A failing follower does not drag the count down either.
+  const withStalledFollower = context.__test
+    .alphaAggregateStats([shadow, { target: { ...follower.target, service_status: "stale" }, index: 1 }])
+    .find((s) => s.label === "Studies running");
+  assert.equal(withStalledFollower.value, "1");
+
+  // A bucket with no registered study says so rather than reporting "0".
+  const noneRegistered = context.__test
+    .alphaAggregateStats([follower])
+    .find((s) => s.label === "Studies running");
+  assert.equal(noneRegistered.value, "-");
+  assert.match(noneRegistered.title, /No pre-registered study/);
+});
+
 test("an overdue sample is not a running study", () => {
   // The card already labels this target "sample overdue"; a header that
   // still counts it as running contradicts the row underneath it.

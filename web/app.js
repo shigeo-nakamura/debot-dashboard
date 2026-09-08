@@ -413,7 +413,14 @@ const alphaAggregateStats = (items) => {
   // running study overstates the count exactly when an experiment has
   // stopped — the moment that matters (Codex, PR #39).
   let sampling = 0;
-  items.forEach(({ target }) => {
+  // Only a target carrying a gate is a registered study. The bucket also
+  // holds producers that follow one: the XSMOM book runtime has no `gate:`
+  // on purpose, because the 2026-10-02 readout is computed from the shadow
+  // ledger rather than from that runtime's decisions. Counting it made the
+  // header report two running studies for the one registered study
+  // (Codex, PR #44).
+  const studies = items.filter(({ target }) => Boolean(target && target.gate));
+  studies.forEach(({ target }) => {
     // isTargetUnhealthy covers the book runtime's halts only. A kill
     // switch, a DD or circuit halt, or an Engine B halt all block new
     // entries on a target that is otherwise reporting fine, and a study
@@ -434,14 +441,25 @@ const alphaAggregateStats = (items) => {
     if (gate.readout_due) due += 1;
     if (nearest === null || gate.readout_on < nearest.readout_on) nearest = gate;
   });
+  const followers = items.length - studies.length;
+  const followerNote = followers > 0
+    ? ` ${followers} target(s) in this bucket follow a study rather than registering one, and are not counted.`
+    : "";
   return [
     {
       label: "Studies running",
-      value: sampling === items.length ? `${sampling}` : `${sampling} of ${items.length}`,
+      value:
+        studies.length === 0
+          ? "-"
+          : sampling === studies.length
+            ? `${sampling}`
+            : `${sampling} of ${studies.length}`,
       title:
-        sampling === items.length
-          ? "Studies whose target is currently reporting."
-          : `${items.length - sampling} target(s) stale or failing: their studies are not accumulating samples.`,
+        studies.length === 0
+          ? `No pre-registered study in this bucket yet.${followerNote}`
+          : sampling === studies.length
+            ? `Studies whose target is currently reporting.${followerNote}`
+            : `${studies.length - sampling} target(s) stale or failing: their studies are not accumulating samples.${followerNote}`,
     },
     {
       label: "Nearest readout",
