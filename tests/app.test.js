@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1804,6 +1804,68 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
   ]);
   assert.equal(dueStats.find((s) => s.label === "Nearest readout").value, "2026-09-11 — due");
   assert.equal(context.__test.alphaAggregateStats([{ target: {}, index: 0 }]).find((s) => s.label === "Nearest readout").value, "-");
+});
+
+test("a withheld deadline clears the tooltip a reused card was showing", () => {
+  // Cards are reused across polling ticks. After a spec drift resolveGate
+  // deliberately withholds the deadline, and the health row kept showing
+  // the previous one as if it still applied.
+  const card = benchmarkCard();
+  const base = { spec_hash: "a1b2c3d4e5f6a1b2", required_samples: 60, valid_samples: 12, readout_on: "2026-10-02" };
+  context.__test.renderGatePanel(
+    card,
+    { gate: { ...base, next_sample_due_at: Date.UTC(2026, 8, 15, 12, 30) / 1000 }, status: {} },
+    {},
+  );
+  const health = card.querySelector('[data-field="gate-health"]');
+  assert.match(health.title, /Next sample due 2026-09-15 12:30 UTC/);
+
+  context.__test.renderGatePanel(card, { gate: { ...base, spec_drift: true }, status: {} }, {});
+  assert.equal(health.title, "");
+
+  // An out-of-range deadline is withheld the same way, rather than taking
+  // the render down.
+  const bad = benchmarkCard();
+  context.__test.renderGatePanel(
+    bad,
+    { gate: { ...base, next_sample_due_at: 1757942400123456789 }, status: {} },
+    {},
+  );
+  assert.equal(bad.querySelector('[data-field="gate-health"]').title, "");
+});
+
+test("an overdue sample is not a running study", () => {
+  // The card already labels this target "sample overdue"; a header that
+  // still counts it as running contradicts the row underneath it.
+  const items = [
+    { target: { bucket: "alpha_candidate", gate: { readout_on: "2026-10-02", days_to_readout: 24 } }, index: 0 },
+    {
+      target: {
+        bucket: "alpha_candidate",
+        service_status: "active",
+        status: {},
+        gate: { readout_on: "2026-09-11", days_to_readout: 3, sample_overdue: true },
+      },
+      index: 1,
+    },
+  ];
+  const running = context.__test.alphaAggregateStats(items).find((s) => s.label === "Studies running");
+  assert.equal(running.value, "1 of 2");
+});
+
+test("an out-of-range gate deadline never reaches toISOString", () => {
+  // A producer can emit a nanosecond timestamp or math.MaxInt64 and the Go
+  // decoder accepts it; toISOString throws a RangeError on one, and this
+  // runs in the shared render loop, so one malformed gate would stop every
+  // later card from refreshing.
+  const { gateDeadlineText } = context.__test;
+  assert.equal(gateDeadlineText(Date.UTC(2026, 8, 15, 12, 30) / 1000), "2026-09-15 12:30");
+  for (const bad of [1757942400123456789, 9223372036854775807, -1, 0, NaN, Infinity, null, undefined, "soon"]) {
+    assert.equal(gateDeadlineText(bad), null, `${bad} must not be formatted`);
+  }
+  // And the guard is not so tight it rejects a real forward-looking
+  // deadline: this one is a year out.
+  assert.ok(gateDeadlineText(Date.now() / 1000 + 365 * 86400));
 });
 
 test("accumulator keeps staking carry out of price beta", () => {

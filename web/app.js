@@ -423,7 +423,12 @@ const alphaAggregateStats = (items) => {
     // of what the bot is producing can count toward the registered study
     // (Codex, PR #39).
     const drifted = Boolean(target.gate && target.gate.spec_drift);
-    if (!isTargetUnhealthy(target) && !blocked && !drifted) sampling += 1;
+    // The card already says "sample overdue" for this target; a header
+    // that still counts it as running contradicts the row underneath it,
+    // and overdue is the same thing the other three conditions are --
+    // the study has stopped accumulating (Codex, PR #44).
+    const overdue = Boolean(target.gate && target.gate.sample_overdue);
+    if (!isTargetUnhealthy(target) && !blocked && !drifted && !overdue) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
@@ -1758,6 +1763,23 @@ const entryBlockingHalts = (target, data) => {
 // Sample cadence for the tooltip: whole days read better than 86400 s
 // for a daily mark, and every α candidate's cadence so far is a whole
 // number of hours or days.
+// A producer can emit an out-of-range epoch that is still a valid int64 on
+// the wire -- a nanosecond timestamp, or math.MaxInt64 -- and the Go status
+// decoder accepts it. `new Date(...).toISOString()` throws a RangeError on
+// one, and this runs inside the shared render loop, so a single malformed
+// gate would stop every later card and the bucket aggregates from
+// refreshing (Codex, PR #44). Same treatment the subsidy ledger's own
+// timestamp already gets, with bounds that suit a forward-looking deadline
+// rather than a past write.
+const GATE_DEADLINE_TS_MIN = Date.UTC(2020, 0, 1) / 1000;
+const GATE_DEADLINE_TS_MAX = Date.UTC(2100, 0, 1) / 1000;
+const gateDeadlineText = (value) => {
+  if (!Number.isFinite(value)) return null;
+  const ts = Number(value);
+  if (ts < GATE_DEADLINE_TS_MIN || ts > GATE_DEADLINE_TS_MAX) return null;
+  return new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 16);
+};
+
 const formatCadence = (secs) => {
   if (!Number.isFinite(secs) || secs <= 0) return "";
   if (secs % 86400 === 0) return secs === 86400 ? "day" : `${secs / 86400} days`;
@@ -1824,7 +1846,12 @@ const renderGatePanel = (card, target, data) => {
     const el = card.querySelector(`[data-field="${field}"]`);
     if (!el) return;
     el.textContent = text;
+    // Cards are reused across polling ticks, so a title that is no longer
+    // supplied has to be removed rather than left standing: after a spec
+    // drift resolveGate deliberately withholds the deadline, and the row
+    // kept showing the previous one (Codex, PR #44).
     if (title) el.title = title;
+    else el.removeAttribute("title");
   };
 
   const required = Number.isFinite(gate.required_samples) ? Number(gate.required_samples) : null;
@@ -1853,11 +1880,14 @@ const renderGatePanel = (card, target, data) => {
   set(
     "gate-health",
     gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined, target),
-    gate.next_sample_due_at
-      ? `Next sample due ${new Date(gate.next_sample_due_at * 1000).toISOString().replace("T", " ").slice(0, 16)} UTC${
-          gate.sample_cadence_secs ? ` (every ${formatCadence(gate.sample_cadence_secs)})` : ""
-        }.`
-      : undefined,
+    (() => {
+      const due = gateDeadlineText(gate.next_sample_due_at);
+      return due
+        ? `Next sample due ${due} UTC${
+            gate.sample_cadence_secs ? ` (every ${formatCadence(gate.sample_cadence_secs)})` : ""
+          }.`
+        : undefined;
+    })(),
   );
 
   const noteEl = card.querySelector('[data-field="gate-note"]');
