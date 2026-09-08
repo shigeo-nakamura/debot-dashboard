@@ -936,6 +936,23 @@ test("benchmark rows compare bot and buy & hold, and say nothing when the anchor
   assert.equal(bare.text("holder-bench-calmar"), "-");
   assert.equal(bare.text("holder-bench-costs"), "-");
   assert.equal(bare.text("holder-bench-note"), "Buy & hold anchor not configured");
+
+  // A target that had a benchmark and lost it (a producer config_fp
+  // change makes the snapshot unverifiable) keeps a cached benchmark
+  // series while its own equity keeps growing. Comparing them would put
+  // two windows with different ends side by side and show stale
+  // benchmark statistics next to the "unavailable" note.
+  const lost = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    lost,
+    { total_equity_usdc: 1100, benchmark: null, benchmark_error: "Startup investment snapshot does not match producer configuration" },
+    1100,
+    botHistory,
+    benchHistory,
+  );
+  assert.equal(lost.text("holder-bench-dd"), "5.0% / -");
+  assert.equal(lost.text("holder-bench-excess"), "-");
+  assert.equal(lost.text("holder-bench-note"), "Startup investment snapshot does not match producer configuration");
   assert.equal(bare.querySelector('[data-field="holder-bench-note"]').hidden, false);
 });
 

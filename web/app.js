@@ -1259,8 +1259,17 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
     applySignedClass(excessEl, excessValue);
   }
 
+  // When the current snapshot has no benchmark — a producer config_fp
+  // change makes the investment snapshot unverifiable, or a leg goes
+  // unpriced — the bot's series keeps growing while the cached benchmark
+  // series stops. Comparing them then puts two windows with different
+  // ends side by side and shows stale benchmark statistics next to a
+  // "benchmark unavailable" note. Suppress the comparison instead of
+  // discarding the cached series, so a transient outage costs one tick
+  // rather than the whole history (Codex, PR #37).
+  const comparable = benchmarkEquity === null ? [] : benchmarkHistory;
   const botDd = maxDrawdownPct(history);
-  const benchDd = maxDrawdownPct(benchmarkHistory);
+  const benchDd = maxDrawdownPct(comparable);
   if (ddEl) {
     ddEl.textContent =
       botDd === null && benchDd === null
@@ -1272,7 +1281,7 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   }
   if (calmarEl) {
     const botCalmar = calmarRatio(history);
-    const benchCalmar = calmarRatio(benchmarkHistory);
+    const benchCalmar = calmarRatio(comparable);
     calmarEl.textContent =
       botCalmar === null && benchCalmar === null
         ? "-"
@@ -1306,7 +1315,7 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   }
 
   if (noteEl) {
-    const note = benchmark
+    const note = benchmarkEquity !== null
       ? benchmarkHistory && benchmarkHistory.length >= 2
         ? ""
         : "Drawdown and Calmar start filling in once this page has watched both series for a while."
