@@ -72,6 +72,12 @@ type TargetConfig struct {
 	// deployment) or reports none at all. Empty leaves the bot's
 	// self-reported `status.dex` untouched.
 	Dex string `yaml:"dex"`
+	// Bucket is the target's return source (docs/buckets.md, mirroring
+	// bot-strategy docs/return-source-taxonomy.md §3): alpha_candidate,
+	// beta or subsidy. Optional — an empty value inherits the taxonomy's
+	// classification for `service`, and a service the taxonomy does not
+	// know becomes "unclassified". See resolveBucket in buckets.go.
+	Bucket string `yaml:"bucket"`
 }
 
 type StatusPosition struct {
@@ -398,11 +404,16 @@ type EquityPoint struct {
 }
 
 type TargetStatus struct {
-	StaleAfterSecs   int         `json:"stale_after_secs"`
-	Name             string      `json:"name"`
-	InstanceID       string      `json:"instance_id"`
-	Service          string      `json:"service"`
-	Region           string      `json:"region"`
+	StaleAfterSecs int    `json:"stale_after_secs"`
+	Name           string `json:"name"`
+	InstanceID     string `json:"instance_id"`
+	Service        string `json:"service"`
+	Region         string `json:"region"`
+	// Bucket is the return-source classification resolved from config +
+	// docs/buckets.md. Always populated ("unclassified" when unknown) so
+	// the frontend, error-watch and any other API reader can group and
+	// filter by it (bot-strategy#959).
+	Bucket           string      `json:"bucket"`
 	ServiceStatus    string      `json:"service_status"`
 	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
 	Status           *StatusData `json:"status,omitempty"`
@@ -565,6 +576,9 @@ func normalizeConfig(cfg *Config) error {
 		if target.Region == "" {
 			return fmt.Errorf("targets[%d] missing region", i)
 		}
+		if err := resolveBucket(target); err != nil {
+			return fmt.Errorf("targets[%d]: %w", i, err)
+		}
 		if target.BullHolder != nil {
 			if target.S3Bucket != "" || target.S3Key != "" {
 				return fmt.Errorf("targets[%d]: choose bull_holder or S3", i)
@@ -678,6 +692,8 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			if target.Dex != "" && results[i].Status != nil {
 				results[i].Status.Dex = target.Dex
 			}
+			// Set last: both fetchers rebuild the TargetStatus wholesale.
+			results[i].Bucket = target.Bucket
 		}()
 	}
 	wg.Wait()

@@ -19,8 +19,18 @@ poll_interval_secs: 20
 # `status.json`'s `dex` field; set it when that value is bare/ambiguous
 # (e.g. a Lighter-connector bot reports "lighter" whether it's running
 # against zkLighter mainnet or a different chain's Lighter deployment)
-# or when the bot doesn't report `dex` at all. `name:` doesn't need a
-# region suffix — the FE already groups cards under a region header.
+# or when the bot doesn't report `dex` at all.
+#
+# Optional per-target `bucket:` declares the return source
+# (`alpha_candidate` / `beta` / `subsidy`) that decides which benchmark
+# the card is judged against. Leave it unset to inherit the
+# classification the taxonomy already records for the service
+# (docs/buckets.md, mirroring bot-strategy docs/return-source-taxonomy.md
+# §3); a service the taxonomy doesn't list renders as "unclassified" and
+# stays out of every aggregate. Setting it to something the taxonomy
+# contradicts is a startup error — re-bucketing a bot is a change to the
+# ledger first. `name:` doesn't need a region or bucket suffix — the FE
+# groups cards under a bucket header and shows the region on the card.
 targets:
   # Example S3-backed target (a pairtrade instance mirroring status.json).
   # The Frankfurt BTC/ETH pairtrade fleet was sunset on 2026-09-06; the
@@ -33,6 +43,8 @@ targets:
     s3_region: eu-central-1
     s3_key: debot/status/robinhood-lighter/debot-pair-robinhood-lighter-freq.json
     dex: "Lighter (Robinhood Chain)"
+    # Optional: inherited from docs/buckets.md when omitted.
+    bucket: subsidy
 # HYPE accumulator targets use the same freshness/health path but render the
 # nested accumulator balance/activity view instead of PnL statistics — it
 # also shows an "Unrealized PnL" row when the S3 object was written by the
