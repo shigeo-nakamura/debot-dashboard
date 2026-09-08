@@ -92,13 +92,15 @@ investment:
         price_usd: 4300
 ```
 
-The anchor must list every leg the bot trades. The whole spot allocation is
+The anchor must list every leg the bot trades, checked against the producer's
+`configured_symbols` (its running config's universe, pairtrade#295) and falling
+back to the open `legs` for a producer that does not report it yet. The
+configured universe is what matters: `legs` is empty until a tranche fills, and
+before ARM is exactly when a misconfigured anchor sits unnoticed. The whole spot allocation is
 split across the legs it does list, so an anchor missing one spends that leg's
 budget on the others — not a partial benchmark but a different portfolio,
 beating or losing to the bot by the spread between the legs. The dashboard
-compares the anchor's symbols against the producer's reported `legs` and
-suppresses the benchmark on a mismatch; before the bot arms it reports no legs,
-and the benchmark stands.
+suppresses the benchmark on a mismatch.
 
 Verify `ts` and each `price_usd` the same way as the rest of the snapshot, and
 against the same `config_fp`: a fingerprint mismatch hides the benchmark along

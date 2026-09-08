@@ -48,22 +48,27 @@ func (c BullHolderConfig) validate() error {
 
 // Explicit producer allowlist: never forward account identity or signing data.
 type BullHolderStatus struct {
-	ConfigFP          string                   `json:"config_fp"`
-	Investment        *HolderInvestment        `json:"investment"`
-	InvestmentError   string                   `json:"investment_error,omitempty"`
-	UnrealizedPnL     *float64                 `json:"unrealized_pnl_usdc"`
-	Mode              string                   `json:"mode"`
-	ArmedAt           *int64                   `json:"armed_at"`
-	ExitedAt          *int64                   `json:"exited_at"`
-	ExitReason        *string                  `json:"exit_reason"`
-	Halted            bool                     `json:"halted"`
-	HaltReason        *string                  `json:"halt_reason"`
-	KillSwitch        bool                     `json:"kill_switch"`
-	TranchesDone      uint32                   `json:"tranches_done"`
-	TranchesRemaining uint32                   `json:"tranches_remaining"`
-	TrancheSpotUSD    float64                  `json:"tranche_spot_usd"`
-	TranchePerpUSD    float64                  `json:"tranche_perp_usd"`
-	LastTrancheDate   *string                  `json:"last_tranche_date"`
+	ConfigFP          string            `json:"config_fp"`
+	Investment        *HolderInvestment `json:"investment"`
+	InvestmentError   string            `json:"investment_error,omitempty"`
+	UnrealizedPnL     *float64          `json:"unrealized_pnl_usdc"`
+	Mode              string            `json:"mode"`
+	ArmedAt           *int64            `json:"armed_at"`
+	ExitedAt          *int64            `json:"exited_at"`
+	ExitReason        *string           `json:"exit_reason"`
+	Halted            bool              `json:"halted"`
+	HaltReason        *string           `json:"halt_reason"`
+	KillSwitch        bool              `json:"kill_switch"`
+	TranchesDone      uint32            `json:"tranches_done"`
+	TranchesRemaining uint32            `json:"tranches_remaining"`
+	TrancheSpotUSD    float64           `json:"tranche_spot_usd"`
+	TranchePerpUSD    float64           `json:"tranche_perp_usd"`
+	LastTrancheDate   *string           `json:"last_tranche_date"`
+	// ConfiguredSymbols is the book the bot is configured to trade, which
+	// Legs only describes once a tranche has filled. The benchmark's leg
+	// check uses it so a misconfigured anchor is caught before ARM, the
+	// window where it is most likely to sit unnoticed (bot-strategy#963).
+	ConfiguredSymbols []string                 `json:"configured_symbols"`
 	Legs              map[string]BullHolderLeg `json:"legs"`
 	Pending           map[string]bool          `json:"pending"`
 	PendingAdd        *uint32                  `json:"pending_add"`
@@ -174,7 +179,7 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	// Same rule for the benchmark: clear anything the payload carried
 	// before deriving it here from the verified snapshot and public marks.
 	b.Benchmark, b.BenchmarkError = nil, ""
-	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, b.Legs)
+	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, holderBook(b))
 	b.UnrealizedPnL = sumHolderPnL(b.HL, b.Lighter)
 	// Clear any value a future producer might supply before deriving the total.
 	b.TotalEquity = nil
