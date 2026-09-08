@@ -52,8 +52,15 @@ func (c DCAConfig) validate() error {
 	if start.After(time.Now().UTC()) {
 		return errors.New("accumulator.dca.window_start is in the future")
 	}
-	if strings.TrimSpace(c.Symbol) == "" {
-		return errors.New("accumulator.dca.symbol is required")
+	// The cost basis is read from the accumulator's HYPE balance and its
+	// HYPE spend, so benchmarking any other symbol would compare HYPE
+	// purchases against an unrelated market and call the difference an
+	// execution edge (Codex, PR #40). The field exists so the market
+	// resolution below is explicit, not so the asset can be changed:
+	// generalising it needs the status and ledger fields to name their
+	// asset first.
+	if strings.TrimSpace(c.Symbol) != "HYPE" {
+		return errors.New(`accumulator.dca.symbol must be "HYPE" (the cost basis is read from the HYPE balance and spend)`)
 	}
 	switch c.market() {
 	case marketSpot, marketPerp:

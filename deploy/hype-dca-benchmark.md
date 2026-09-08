@@ -15,9 +15,16 @@ every day and not thinking about it (bot-strategy#956, taxonomy §4.1).
     accumulator:
       dca:
         window_start: "2026-09-11" # first purchase date, UTC
-        symbol: HYPE               # the asset being accumulated
+        symbol: HYPE               # the asset being accumulated (must be HYPE)
         market: spot               # spot (default) or perp
 ```
+
+`symbol` has to be `HYPE`: the cost basis is read from the accumulator's HYPE
+balance and its HYPE spend, so benchmarking another symbol would compare HYPE
+purchases against an unrelated market and report the difference as an execution
+edge. The field exists to make the market resolution below explicit, not to
+change the asset — generalising it needs the status and ledger fields to name
+their asset first.
 
 `market` is not cosmetic. `candleSnapshot` reads a bare symbol as the
 **perpetual**; a spot market is addressed by its own pair id (HYPE spot is

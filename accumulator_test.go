@@ -110,6 +110,12 @@ func TestDCAWindowValidation(t *testing.T) {
 	if err := (DCAConfig{WindowStart: "2026-09-01"}).validate(); err == nil {
 		t.Fatal("missing symbol accepted")
 	}
+	// The cost basis comes from the accumulator's HYPE balance and HYPE
+	// spend, so another symbol would compare HYPE purchases against an
+	// unrelated market and report the difference as an execution edge.
+	if err := (DCAConfig{WindowStart: "2026-09-01", Symbol: "SOL"}).validate(); err == nil {
+		t.Fatal("a symbol the cost basis cannot describe was accepted")
+	}
 	// Spot and perp are not interchangeable, so a typo must not silently
 	// pick one of them.
 	if err := (DCAConfig{WindowStart: "2026-09-01", Symbol: "HYPE", Market: "Spot"}).validate(); err == nil {
@@ -139,7 +145,7 @@ func TestApplyAccumulatorDCADiscardsProducerSuppliedBenchmarks(t *testing.T) {
 	})}
 	// Distinct coin so this test does not share the process-wide cache
 	// with any other.
-	cfg := &AccumulatorConfig{DCA: &DCAConfig{WindowStart: "2026-09-01", Symbol: "TESTCOIN", Market: marketPerp}}
+	cfg := &AccumulatorConfig{DCA: &DCAConfig{WindowStart: "2026-09-01", Symbol: "HYPE", Market: marketPerp}}
 	fake := 99999.0
 	status := &StatusData{
 		Accumulator:         &AccumulatorStatus{HYPEBalance: 10},
