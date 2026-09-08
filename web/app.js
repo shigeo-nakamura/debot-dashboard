@@ -1272,13 +1272,15 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   // "benchmark unavailable" note. Suppress the comparison instead of
   // discarding the cached series, so a transient outage costs one tick
   // rather than the whole history (Codex, PR #37).
-  // The same asymmetry runs the other way: a failed account query
-  // (Lighter down) leaves the bot's equity null while Hyperliquid marks
-  // still price the benchmark, so the benchmark series advances alone
-  // (Codex, PR #41). Either side missing suppresses the comparison.
-  const comparable = benchmarkEquity === null || equity === null ? [] : benchmarkHistory;
-  const botDd = maxDrawdownPct(history);
-  const benchDd = maxDrawdownPct(comparable);
+  // Both windows come from the observations the two series share, so a
+  // one-sided outage (Lighter down while Hyperliquid marks still price
+  // the benchmark, or the reverse) drops those ticks from both rather
+  // than shifting one window against the other.
+  const [botSeries, benchmarkSeries] = benchmarkEquity === null
+    ? [history, []]
+    : pairedSeries(history, benchmarkHistory);
+  const botDd = maxDrawdownPct(botSeries);
+  const benchDd = maxDrawdownPct(benchmarkSeries);
   if (ddEl) {
     ddEl.textContent =
       botDd === null && benchDd === null
@@ -1289,8 +1291,8 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
       "The bot's claim is a shallower drawdown for the same exposure, so this is the row that claim lives or dies on.";
   }
   if (calmarEl) {
-    const botCalmar = calmarRatio(history);
-    const benchCalmar = calmarRatio(comparable);
+    const botCalmar = calmarRatio(botSeries);
+    const benchCalmar = calmarRatio(benchmarkSeries);
     calmarEl.textContent =
       botCalmar === null && benchCalmar === null
         ? "-"
@@ -1895,7 +1897,35 @@ const updateHistoryCache = (key, data) => {
 // how much. Two series are only comparable when these agree.
 const benchmarkAnchorId = (data) => {
   const benchmark = data && data.bull_holder ? data.bull_holder.benchmark : null;
-  return benchmark ? `${benchmark.anchor_ts}|${benchmark.cost_usd}|${benchmark.cash_usd}` : null;
+  if (!benchmark) return null;
+  // The whole book, not just its timestamp and size: correcting an
+  // anchor price or a leg's spot symbol leaves those unchanged while
+  // revaluing every point, and appending the new book to the old series
+  // renders that step as return and drawdown (Codex, PR #41).
+  const assets = Array.isArray(benchmark.assets)
+    ? benchmark.assets.map((a) => `${a.symbol}@${a.anchor_price_usd}`).join(",")
+    : "";
+  return `${benchmark.anchor_ts}|${benchmark.cost_usd}|${benchmark.cash_usd}|${assets}`;
+};
+
+// The two series are compared only over the observations they share.
+// Anything else -- an outage that stalls one side, a reset that lands
+// between this tick's two cache calls -- silently shifts one window
+// against the other, and a drawdown computed across that shift is an
+// artifact. Intersecting by timestamp makes the alignment a property of
+// the comparison rather than something every cache path has to preserve
+// (Codex, PR #41).
+const pairedSeries = (history, benchmarkHistory) => {
+  const byTs = new Map();
+  for (const point of benchmarkHistory || []) byTs.set(point.ts, point.equity);
+  const bot = [];
+  const benchmark = [];
+  for (const point of history || []) {
+    if (!byTs.has(point.ts)) continue;
+    bot.push(point);
+    benchmark.push({ ts: point.ts, equity: byTs.get(point.ts) });
+  }
+  return [bot, benchmark];
 };
 
 const updateBenchmarkCache = (key, data) => {

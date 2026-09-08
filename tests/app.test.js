@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1033,28 +1033,64 @@ test("a changed benchmark anchor restarts both series instead of splicing books"
   // A later rollout re-anchors the book under the same target key.
   // Appending its values to the old book's series would show a jump that
   // never happened, so both series restart together.
+  // Correcting an anchor price without touching its timestamp or the
+  // allocation is also a different book, and the old series must not
+  // carry into it.
+  const priced = context.__test.updateBenchmarkCache(key, {
+    ts: 1_700_000_090,
+    bull_holder: {
+      total_equity_usdc: 1000,
+      benchmark: {
+        anchor_ts: 1000,
+        cost_usd: 900,
+        cash_usd: 100,
+        equity_usd: 1050,
+        assets: [{ symbol: "BTC", anchor_price_usd: 51000 }],
+      },
+      hyperliquid: { observed_at: 1_700_000_090 },
+      lighter: { observed_at: 1_700_000_090 },
+    },
+  });
+  assert.equal(priced.length, 1);
+
   const after = context.__test.updateBenchmarkCache(key, book(2000, 400, 1_700_000_120));
   assert.equal(after.length, 1);
   assert.equal(after[0].equity, 400);
   assert.equal(context.__test.historyByKey.get(key), undefined);
 });
 
-test("benchmark comparison is suppressed when either side is currently unavailable", () => {
+test("drawdowns are compared only over observations both series share", () => {
   const botHistory = series([1000, 950, 1100]);
-  const benchHistory = series([1000, 800, 1000]);
-  // The bot's own equity is unavailable (an account query failed) while
-  // Hyperliquid marks still price the benchmark, so the benchmark series
-  // advances alone and the two windows no longer end together.
+  // The benchmark kept being priced through an outage that stalled the
+  // bot's own equity: it carries a fourth sample the bot never recorded,
+  // and a 50% collapse inside it. Counting that tick on one side only
+  // would attribute an outage-period move to the benchmark alone.
+  const benchHistory = [
+    ...series([1000, 800, 1000]),
+    { ts: Date.UTC(2026, 0, 1) + 3 * 24 * 60 * 60 * 1000, equity: 500 },
+  ];
   const card = benchmarkCard();
   context.__test.renderHolderBenchmark(
     card,
+    { total_equity_usdc: 1100, benchmark: { anchor_ts: 1, cost_usd: 900, cash_usd: 100, equity_usd: 1000 } },
+    1100,
+    botHistory,
+    benchHistory,
+  );
+  assert.equal(card.text("holder-bench-dd"), "5.0% / 20.0%");
+
+  // The current excess still needs both current values; the historical
+  // comparison over shared points stays valid without them.
+  const noEquity = benchmarkCard();
+  context.__test.renderHolderBenchmark(
+    noEquity,
     { total_equity_usdc: null, benchmark: { anchor_ts: 1, cost_usd: 900, cash_usd: 100, equity_usd: 1000 } },
     null,
     botHistory,
     benchHistory,
   );
-  assert.equal(card.text("holder-bench-excess"), "-");
-  assert.equal(card.text("holder-bench-dd"), "5.0% / -");
+  assert.equal(noEquity.text("holder-bench-excess"), "-");
+  assert.equal(noEquity.text("holder-bench-dd"), "5.0% / 20.0%");
 });
 
 test("beta aggregate sums excess only over targets that actually have a benchmark", () => {
