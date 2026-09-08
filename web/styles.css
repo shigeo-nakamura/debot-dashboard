@@ -100,6 +100,18 @@ body::after {
   box-shadow: none;
 }
 
+/* The `hidden` attribute only sets `display: none` at the user-agent
+   level, so any author `display` on the same element wins and the
+   element stays visible. Several blocks the frontend hides with
+   `el.hidden = true` do declare one (.equity-headline, .kv, .row,
+   .benchmark-panel, the card sections), which made hiding them a no-op —
+   including the α-candidate blinding, whose whole job is to keep a
+   running result off the screen (Codex, PR #39). One rule for the whole
+   page, so a future hidden element cannot reintroduce the bug. */
+[hidden] {
+  display: none !important;
+}
+
 .grid {
   display: grid;
   gap: 20px;
@@ -227,6 +239,12 @@ body::after {
   background: rgba(214, 158, 46, 0.16);
   color: var(--warning);
   border: 1px solid rgba(214, 158, 46, 0.4);
+}
+
+.status-pill.readout-due {
+  background: rgba(56, 161, 105, 0.16);
+  color: var(--success);
+  border: 1px solid rgba(56, 161, 105, 0.4);
 }
 
 .benchmark-note {
@@ -671,9 +689,6 @@ body::after {
   letter-spacing: 0.04em;
 }
 
-.status-pill[hidden] {
-  display: none;
-}
 
 .row {
   display: flex;
@@ -684,19 +699,12 @@ body::after {
   color: var(--muted);
 }
 
-.row[hidden] {
-  display: none;
-}
 
 .row strong {
   color: var(--ink);
   font-weight: 600;
 }
 
-.accumulator-view[hidden],
-[data-field="trading-view"][hidden] {
-  display: none;
-}
 
 .han-bridge-view {
   margin-top: 12px;
@@ -704,9 +712,6 @@ body::after {
   border-top: 1px solid var(--border);
 }
 
-.han-bridge-view[hidden] {
-  display: none;
-}
 
 .han-bridge-header {
   font-size: 12px;

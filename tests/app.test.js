@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -800,8 +800,11 @@ test("beta bucket totals held value across bot shapes and never sums across buck
   // Other buckets get their aggregates from their own issues (#957/#958);
   // until then they must render no numbers at all rather than a total
   // borrowed from another bucket.
-  assert.equal(context.__test.bucketAggregateStats("alpha_candidate", items).length, 0);
   assert.equal(context.__test.bucketAggregateStats("unclassified", items).length, 0);
+  // The α bucket reports study progress, never a figure borrowed from
+  // another bucket's equity.
+  const asAlpha = context.__test.bucketAggregateStats("alpha_candidate", items);
+  assert.equal(asAlpha.find((s) => s.label === "Nearest readout").value, "-");
   // β-shaped payloads carry no subsidy cost, so the subsidy aggregate
   // reports nothing rather than borrowing their equity.
   const asSubsidy = context.__test.bucketAggregateStats("subsidy", items);
@@ -1407,4 +1410,271 @@ test("units the server treats as one unit are aggregated as one row", () => {
   assert.equal(unitRows.length, 1);
   assert.equal(unitRows[0].value, "20,000.00 points");
   assert.equal(stats.find((s) => s.label === "Cost / points").value, "0.0075 USDC / points");
+});
+
+test("alpha candidate card shows gate progress and nothing that could be peeked at", () => {
+  const card = benchmarkCard();
+  const target = {
+    bucket: "alpha_candidate",
+    gate: {
+      spec_hash: "a1b2c3d4e5f6a1b2",
+      required_samples: 60,
+      readout_on: "2026-10-02",
+      days_to_readout: 24,
+      readout_due: false,
+      valid_samples: 12,
+      sample_source: "book decision journal",
+      spec_drift: false,
+    },
+    status: {},
+  };
+  const data = {
+    gate: { spec_hash: "a1b2c3d4e5f6a1b2", valid_samples: 12 },
+    book: { last_decision: { key: "2026-09-08T00:30Z", outcome: "applied" } },
+  };
+  context.__test.renderGatePanel(card, target, data);
+  assert.equal(card.querySelector('[data-field="gate-panel"]').hidden, false);
+  assert.equal(card.text("gate-samples"), "12 / 60");
+  assert.equal(card.text("gate-readout"), "2026-10-02 (24d)");
+  // The spec hash is shown truncated, like every other hash on the card.
+  assert.equal(card.text("gate-spec"), "a1b2c3d4e5f6");
+  assert.equal(card.text("gate-health"), "Sampling normally");
+  assert.equal(card.querySelector('[data-field="readout-due"]').hidden, true);
+  assert.equal(card.querySelector('[data-field="gate-note"]').hidden, true);
+
+  // Readout day: the card says so, and so does the header pill.
+  const due = benchmarkCard();
+  context.__test.renderGatePanel(
+    due,
+    { bucket: "alpha_candidate", gate: { ...target.gate, days_to_readout: 0, readout_due: true } },
+    data,
+  );
+  assert.equal(due.text("gate-readout"), "2026-10-02 — readout due");
+  assert.equal(due.querySelector('[data-field="readout-due"]').hidden, false);
+
+  // A target that isn't a configured study keeps the panel away.
+  const other = benchmarkCard();
+  context.__test.renderGatePanel(other, { bucket: "beta" }, {});
+  assert.equal(other.querySelector('[data-field="gate-panel"]').hidden, true);
+});
+
+test("gate panel refuses to fill in a sample count it does not have", () => {
+  const base = {
+    spec_hash: "a1b2c3d4e5f6",
+    required_samples: 60,
+    readout_on: "2026-10-02",
+    days_to_readout: 24,
+    readout_due: false,
+    spec_drift: false,
+  };
+  const pending = benchmarkCard();
+  context.__test.renderGatePanel(pending, { gate: base }, {});
+  assert.equal(pending.text("gate-samples"), "- / 60");
+  assert.equal(pending.text("gate-health"), "-");
+  assert.match(pending.text("gate-note"), /not reporting a sample count/);
+
+  // Spec drift: the study running is not the study registered, so its
+  // samples are withheld rather than counted toward the frozen gate.
+  const drift = benchmarkCard();
+  context.__test.renderGatePanel(drift, { gate: { ...base, spec_drift: true } }, {});
+  assert.equal(drift.text("gate-samples"), "- / 60");
+  assert.match(drift.text("gate-note"), /different gate spec/);
+});
+
+test("gate health reports the machinery, not the result", () => {
+  const health = context.__test.gateHealthText;
+  assert.equal(health({ decision_on_time: true, signal_hash_matched: true }, {}), "Sampling normally");
+  assert.equal(health({ decision_on_time: false }, {}), "decision late");
+  assert.equal(health({ signal_hash_matched: false }, {}), "signal hash mismatch");
+  assert.equal(health(null, { book: { last_decision: { outcome: "rejected" } } }), "last decision rejected");
+  assert.equal(health(null, { book: { daily_halted: true, last_decision: { outcome: "applied" } } }), "daily loss halt");
+  assert.equal(health(null, { book: { equity_ready: false, last_decision: { outcome: "applied" } } }), "venue equity unavailable");
+  // Nothing observed at all is "-", never a green "normal".
+  assert.equal(health(null, {}), "-");
+  // Engine B's halt lives under han_bridge, not book.
+  // The label, never the producer's reason: a reason can embed the
+  // number that caused it, and this text only ever renders on an α card.
+  assert.equal(
+    health(null, { han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } }),
+    "session halt",
+  );
+  assert.equal(health(null, { han_bridge: { session_halt_reason: null } }), "Sampling normally");
+  // A stale target is not sampling, whatever its last payload claimed
+  // before it stopped arriving.
+  assert.equal(
+    health({ decision_on_time: true, signal_hash_matched: true }, {}, "stale"),
+    "Not sampling (stale)",
+  );
+  assert.equal(health({ decision_on_time: true }, {}, "active"), "Sampling normally");
+});
+
+test("a blinded card names a halt without quoting the number that caused it", () => {
+  const reason = "session loss $160.00 > limit $150.00";
+  // Sampling health is only ever rendered for an α candidate, so it
+  // labels the state and never copies the producer's reason.
+  assert.equal(
+    context.__test.gateHealthText(null, { han_bridge: { session_halt_reason: reason } }, "active", {}),
+    "session halt",
+  );
+  assert.equal(
+    context.__test.gateHealthText(null, { book: { session_halted: true, session_halt_reason: reason, last_decision: { outcome: "applied" } } }, "active", {}),
+    "session halt",
+  );
+  // The book panel's own note row carries the reason for every other
+  // target and the label for a blinded one.
+  const book = { session_halted: true, session_halt_reason: reason, signal_status: "applied:abc", gross_usd: 1, net_usd: 1, equity_usd: 1 };
+  assert.match(context.__test.bookViewModel(book).note, /\$160/);
+  assert.equal(/\$160/.test(context.__test.bookViewModel(book, { blindResult: true }).note), false);
+
+  // Every entry-blocking state counts, not only the book's and Engine
+  // B's: a kill switch or a generic DD halt stops sampling too.
+  assert.deepEqual(
+    context.__test.entryBlockingHalts({ kill_switch_active: true }, { daily_risk: { risk_halted: true } }).join("; "),
+    "kill switch engaged; daily DD halt",
+  );
+  assert.equal(
+    context.__test.gateHealthText({ decision_on_time: true }, { session_risk: { session_halted: true } }, "active", {}),
+    "session DD halt",
+  );
+  assert.equal(context.__test.entryBlockingHalts({}, {}).length, 0);
+});
+
+test("the Engine B halt row names the state on a blinded card", () => {
+  const reason = "session loss $160.00 > limit $150.00";
+  const hanBridge = { kr_primary_symbol: "SKHYNIXUSD", us_primary_symbol: "MU", session_halt_reason: reason };
+  assert.equal(context.__test.hanBridgeViewModel(hanBridge).sessionHaltReason, reason);
+  assert.equal(
+    context.__test.hanBridgeViewModel(hanBridge, { blindResult: true }).sessionHaltReason,
+    "session halt",
+  );
+  // A card with no halt still shows nothing rather than a label.
+  assert.equal(
+    context.__test.hanBridgeViewModel({ session_halt_reason: null }, { blindResult: true }).sessionHaltReason,
+    null,
+  );
+});
+
+test("an alpha card withholds the risk panel and the magnitudes in its halt tooltips", () => {
+  const card = benchmarkCard();
+  const data = {
+    daily_risk: { daily_pnl: -12, daily_pnl_bps: -120, effective_max_daily_loss_bps: 200, risk_halted: true },
+    session_risk: { dd_bps: 150, effective_max_session_loss_bps: 300, session_halted: true },
+  };
+  // Blinded: the panel is not rendered at all. The bars state the live
+  // drawdown in bps against its threshold, which is the running result.
+  context.__test.renderRiskPanel(card, data, { blindResult: true });
+  assert.equal(card.querySelector('[data-field="risk-panel"]').hidden, true);
+  assert.equal(card.text("daily-dd-text"), "");
+  assert.equal(card.text("session-dd-text"), "");
+});
+
+test("alpha candidate cards hide equity, PnL, win rate and CAGR", () => {
+  const card = benchmarkCard();
+  const blinded = ["trading-headline", "trading-kv", "trading-stats-header", "trading-stats", "trading-chart"];
+  context.__test.blindAlphaCandidate(card, true);
+  for (const field of blinded) {
+    assert.equal(card.querySelector(`[data-field="${field}"]`).hidden, true, field);
+  }
+  context.__test.blindAlphaCandidate(card, false);
+  for (const field of blinded) {
+    assert.equal(card.querySelector(`[data-field="${field}"]`).hidden, false, field);
+  }
+});
+
+test("blinding an alpha card also keeps the book's equity off it", () => {
+  const book = {
+    instance_id: "xsmom-695",
+    gross_usd: 2000,
+    net_usd: -50,
+    equity_usd: 1009.93,
+    signal_status: "applied:abc123",
+    last_decision: { key: "k", outcome: "applied", attempts: 1 },
+  };
+  // Equity against a known starting reference is the running result the
+  // blinding exists to hide; gross and net say whether the book is
+  // balanced, which is operational and stays.
+  const blinded = context.__test.bookViewModel(book, { blindResult: true });
+  assert.equal(/equity/.test(blinded.exposure), false);
+  assert.equal(/1,009|1009/.test(blinded.exposure), false);
+  assert.match(blinded.exposure, /gross/);
+  assert.match(blinded.exposure, /net/);
+  // Every other target keeps it.
+  assert.match(context.__test.bookViewModel(book).exposure, /equity/);
+});
+
+// The `hidden` attribute only sets `display: none` at the user-agent
+// level, so an author `display` on the same element beats it. The DOM
+// property assertions above cannot see that, so the stylesheet itself
+// has to be checked: without this rule the α blinding is a no-op in a
+// real browser.
+test("hidden elements are actually hidden by the stylesheet", () => {
+  // Strip comments first: the rule is explained in prose right above
+  // itself, and a regex over the raw file would happily match the
+  // explanation instead of the declaration.
+  const css = fs.readFileSync(`${__dirname}/../web/styles.css`, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+});
+
+test("alpha bucket aggregates study count and the nearest readout, never performance", () => {
+  const items = [
+    { target: { bucket: "alpha_candidate", gate: { readout_on: "2026-10-02", days_to_readout: 24, readout_due: false } }, index: 0 },
+    { target: { bucket: "alpha_candidate", gate: { readout_on: "2026-09-11", days_to_readout: 3, readout_due: false } }, index: 1 },
+  ];
+  const stats = context.__test.alphaAggregateStats(items);
+  const stat = (label) => stats.find((s) => s.label === label);
+  assert.equal(stat("Studies running").value, "2");
+  // A stale target is still in the bucket but is not accumulating
+  // samples; counting it as running overstates the experiment exactly
+  // when it has stopped.
+  const withStalled = context.__test.alphaAggregateStats([
+    items[0],
+    { target: { ...items[1].target, service_status: "stale" }, index: 1 },
+  ]);
+  assert.equal(withStalled.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A halted Engine B reports fine and takes no trades: healthy by the
+  // fetch's standard, not sampling by the study's.
+  const withHalted = context.__test.alphaAggregateStats([
+    items[0],
+    {
+      target: {
+        ...items[1].target,
+        service_status: "active",
+        status: { han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(withHalted.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A kill switch blocks entries on a target that is otherwise
+  // reporting fine, so it is not sampling either.
+  const withKillSwitch = context.__test.alphaAggregateStats([
+    items[0],
+    { target: { ...items[1].target, service_status: "active", kill_switch_active: true, status: {} }, index: 1 },
+  ]);
+  assert.equal(withKillSwitch.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A drifted spec means every sample is withheld, so nothing the bot
+  // produces can count toward the registered study.
+  const withDrift = context.__test.alphaAggregateStats([
+    items[0],
+    {
+      target: {
+        ...items[1].target,
+        service_status: "active",
+        status: {},
+        gate: { ...items[1].target.gate, spec_drift: true },
+      },
+      index: 1,
+    },
+  ]);
+  assert.equal(withDrift.find((s) => s.label === "Studies running").value, "1 of 2");
+  assert.equal(stat("Nearest readout").value, "2026-09-11 (3d)");
+  // No money or performance figure may appear in this bucket's header.
+  for (const entry of stats) {
+    assert.equal(/USDC|PnL|CAGR|Calmar/.test(entry.value), false);
+  }
+  const dueStats = context.__test.alphaAggregateStats([
+    { target: { gate: { readout_on: "2026-09-11", days_to_readout: 0, readout_due: true } }, index: 0 },
+  ]);
+  assert.equal(dueStats.find((s) => s.label === "Nearest readout").value, "2026-09-11 — due");
+  assert.equal(context.__test.alphaAggregateStats([{ target: {}, index: 0 }]).find((s) => s.label === "Nearest readout").value, "-");
 });

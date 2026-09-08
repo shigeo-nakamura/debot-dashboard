@@ -231,11 +231,9 @@ const reconcileBucketOrder = () => {
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
 //
-// The α candidates' gate progress arrives with bot-strategy#958; until
-// then that bucket shows its card count and its benchmark line only,
-// rather than a placeholder number.
 const bucketAggregateStats = (bucket, items) => {
   if (bucket === "subsidy") return subsidyAggregateStats(items);
+  if (bucket === "alpha_candidate") return alphaAggregateStats(items);
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
@@ -399,6 +397,58 @@ const subsidyAggregateStats = (items) => {
     });
   }
   return stats;
+};
+
+// The α bucket aggregates nothing about performance — that is the whole
+// point. What it can usefully say is how many studies are running and
+// when the next decision is owed.
+const alphaAggregateStats = (items) => {
+  let nearest = null;
+  let due = 0;
+  // A stale or failing target is still in the bucket, but calling it a
+  // running study overstates the count exactly when an experiment has
+  // stopped — the moment that matters (Codex, PR #39).
+  let sampling = 0;
+  items.forEach(({ target }) => {
+    // isTargetUnhealthy covers the book runtime's halts only. A kill
+    // switch, a DD or circuit halt, or an Engine B halt all block new
+    // entries on a target that is otherwise reporting fine, and a study
+    // that cannot enter is not accumulating samples (Codex, PR #39).
+    const blocked = entryBlockingHalts(target, target.status).length > 0;
+    // A drifted spec means resolveGate withholds every sample, so none
+    // of what the bot is producing can count toward the registered study
+    // (Codex, PR #39).
+    const drifted = Boolean(target.gate && target.gate.spec_drift);
+    if (!isTargetUnhealthy(target) && !blocked && !drifted) sampling += 1;
+    const gate = target.gate;
+    if (!gate || !gate.readout_on) return;
+    if (gate.readout_due) due += 1;
+    if (nearest === null || gate.readout_on < nearest.readout_on) nearest = gate;
+  });
+  return [
+    {
+      label: "Studies running",
+      value: sampling === items.length ? `${sampling}` : `${sampling} of ${items.length}`,
+      title:
+        sampling === items.length
+          ? "Studies whose target is currently reporting."
+          : `${items.length - sampling} target(s) stale or failing: their studies are not accumulating samples.`,
+    },
+    {
+      label: "Nearest readout",
+      value: nearest
+        ? nearest.readout_due
+          ? `${nearest.readout_on} — due`
+          : Number.isFinite(nearest.days_to_readout)
+            ? `${nearest.readout_on} (${nearest.days_to_readout}d)`
+            : nearest.readout_on
+        : "-",
+      title:
+        due > 0
+          ? `${due} readout${due === 1 ? "" : "s"} due. Run the pre-registered script and post the result on the issue.`
+          : "The earliest pre-registered readout date across this bucket's studies.",
+    },
+  ];
 };
 
 const updateBucketAggregate = (group, bucket, items) => {
@@ -570,6 +620,7 @@ const createCard = (key) => {
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
         <span class="status-pill kpi-stale" data-field="kpi-stale" hidden></span>
+        <span class="status-pill readout-due" data-field="readout-due" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
@@ -623,6 +674,14 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="benchmark-panel" data-field="gate-panel" hidden aria-label="Pre-registered gate progress">
+        <div class="benchmark-title" title="An α candidate is judged by a gate frozen before anyone looked at the data (taxonomy §4.3). Its running PnL, equity curve, win rate and CAGR are hidden here on purpose: reading them is peeking, and peeking is how a pre-registered study stops being one.">Pre-registered gate</div>
+        <div class="row"><span>Valid samples</span><strong data-field="gate-samples"></strong></div>
+        <div class="row"><span>Next readout</span><strong data-field="gate-readout"></strong></div>
+        <div class="row"><span>Frozen spec</span><strong data-field="gate-spec"></strong></div>
+        <div class="row"><span>Sampling health</span><strong data-field="gate-health"></strong></div>
+        <div class="benchmark-note" data-field="gate-note" hidden></div>
+      </section>
       <section class="benchmark-panel" data-field="subsidy-panel" hidden aria-label="Subsidy KPI">
         <div class="benchmark-title" title="A subsidy bot buys points or qualifying activity with fees, slippage and adverse selection. Its PnL is the price paid, so it is judged on the price per unit, not on the PnL (bot-strategy#938, taxonomy §4.2).">Cost per unit of subsidy</div>
         <div class="row"><span data-field="subsidy-cpu-7d-label">Cost / unit (7d)</span><strong data-field="subsidy-cpu-7d"></strong></div>
@@ -695,22 +754,22 @@ const createCard = (key) => {
         <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
       </div>
       <div data-field="trading-view">
-      <div class="equity-headline">
+      <div class="equity-headline" data-field="trading-headline">
         <div class="equity-headline-label"><span>Total equity</span></div>
         <strong data-field="pnl-total"></strong>
       </div>
-      <div class="kv">
+      <div class="kv" data-field="trading-kv">
         <div><span data-field="pnl-today-label">PnL today</span> <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
       </div>
-      <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
-      <div class="kv kv-stats">
+      <div class="kv-stats-header" data-field="trading-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
+      <div class="kv kv-stats" data-field="trading-stats">
         <div>Max DD <span data-field="max-dd"></span></div>
         <div>Win Rate <span data-field="win-rate"></span></div>
         <div>Trades <span data-field="num-trades"></span></div>
         <div>CAGR <span data-field="cagr"></span></div>
       </div>
-      <div class="chart">
+      <div class="chart" data-field="trading-chart">
         <div class="chart-title">Equity trend</div>
         <svg class="sparkline" data-field="equity-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
@@ -763,6 +822,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // without this the card stays green and "active" while the fleet
   // summary already counts it under halts.
   const bookDegraded = isBookHalted(data);
+  // An α candidate's card must not carry a running result anywhere
+  // (taxonomy §4.3), including the halt pills' tooltips and the risk
+  // panel's drawdown bars, which state it in bps and dollars (Codex,
+  // PR #39). Halt *state* stays: it is safety, not performance.
+  const blindResult = bucketOf(target) === "alpha_candidate";
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
     : status === "active" && (holderDegraded || arcusDegraded || bookDegraded) ? "degraded" : status;
@@ -923,9 +987,15 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (sr && sr.session_halted === true) {
       sessionDdEl.textContent = "SESSION DD";
       const reason = sr.halt_reason ? ` (${sr.halt_reason})` : "";
-      sessionDdEl.title =
-        `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
-        `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
+      // A halt reason can embed the loss that caused it, so the blinded
+      // branch names the state only — quoting the reason while claiming
+      // the magnitude is withheld is the leak this branch exists to
+      // close (Codex, PR #40).
+      sessionDdEl.title = blindResult
+        ? `Session DD halt active. The reason and magnitude are withheld on an α candidate's card. ` +
+          `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`
+        : `Session DD halt active${reason}: dd_bps=${sr.dd_bps.toFixed(1)} ≥ effective threshold ${sr.effective_max_session_loss_bps.toFixed(0)} bps. ` +
+          `Sticky — clear with: sudo touch /opt/debot/RISK_ACK (writing a JSON ack reason inside is recommended for the audit log).`;
       sessionDdEl.hidden = false;
     } else {
       sessionDdEl.hidden = true;
@@ -939,9 +1009,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
     const dr = data.daily_risk;
     if (dr && dr.risk_halted === true) {
       dailyDdEl.textContent = "DAILY DD";
-      dailyDdEl.title =
-        `Daily DD halt active: realized loss ${(-dr.daily_pnl).toFixed(2)} (${(-dr.daily_pnl_bps).toFixed(0)} bps) ≥ effective threshold ${dr.effective_max_daily_loss_bps.toFixed(0)} bps. ` +
-        `Auto-clears at next UTC midnight; existing positions exit normally.`;
+      dailyDdEl.title = blindResult
+        ? "Daily DD halt active. The magnitude is withheld on an α candidate's card. " +
+          "Auto-clears at next UTC midnight; existing positions exit normally."
+        : `Daily DD halt active: realized loss ${(-dr.daily_pnl).toFixed(2)} (${(-dr.daily_pnl_bps).toFixed(0)} bps) ≥ effective threshold ${dr.effective_max_daily_loss_bps.toFixed(0)} bps. ` +
+          `Auto-clears at next UTC midnight; existing positions exit normally.`;
       dailyDdEl.hidden = false;
     } else {
       dailyDdEl.hidden = true;
@@ -956,8 +1028,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (cb && cb.active === true && cb.cooldown_remaining_secs) {
       const remaining = formatAge(cb.cooldown_remaining_secs * 1000);
       circuitBreakerEl.textContent = `CIRCUIT (${remaining})`;
-      circuitBreakerEl.title =
-        `Circuit breaker active after ${cb.consecutive_losses} consecutive losses ` +
+      circuitBreakerEl.title = blindResult
+        ? `Circuit breaker active. The loss count is withheld on an α candidate's card. ` +
+          `Auto-clears in ${remaining}; a winning trade also resets, but new entries are blocked while active.`
+        : `Circuit breaker active after ${cb.consecutive_losses} consecutive losses ` +
         `(tier1=${cb.tier1_threshold} / tier2=${cb.tier2_threshold}). ` +
         `Auto-clears in ${remaining}; a winning trade also resets, but new entries are blocked while active.`;
       circuitBreakerEl.hidden = false;
@@ -974,7 +1048,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // threshold so a glance at the panel ranks the bot's distance to
   // halt without the operator doing arithmetic. Hidden when all three
   // gates are disabled or unset.
-  renderRiskPanel(card, data);
+  renderRiskPanel(card, data, { blindResult });
 
   // Auto-expand on halt (#231 Phase A3). A card with any active halt
   // ignores the operator's previous collapse choice and opens — the
@@ -1068,6 +1142,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // the KPI panel is the headline for a subsidy bot whatever shape its
   // status payload has (pairtrade-like for Robinhood, Arcus for Arcus).
   renderSubsidyPanel(card, target, data);
+  renderGatePanel(card, target, data);
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
@@ -1105,6 +1180,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
     return;
   }
+  blindAlphaCandidate(card, blindResult);
+
   // On a subsidy bot the daily PnL is the day's price paid, not a
   // result to improve; the KPI panel above is what the bot is judged on
   // (bot-strategy#957).
@@ -1198,7 +1275,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const book = isBookStatus(data) ? data.book : null;
   if (bookViewEl) {
     bookViewEl.hidden = book === null;
-    if (book) renderBookStatus(card, book);
+    if (book) renderBookStatus(card, book, { blindResult });
   }
 
   const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
@@ -1209,6 +1286,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
       renderHanBridgeStatus(card, hanBridge, {
         hasPosition: Boolean(data.has_position),
         killSwitchActive: target.kill_switch_active === true,
+        // Engine B is an α candidate, and this view copies the
+        // producer's halt reason verbatim (Codex, PR #40).
+        blindResult,
       });
     }
   }
@@ -1628,6 +1708,152 @@ const renderSubsidyPanel = (card, target, data) => {
   }
 };
 
+// Whether the machinery is producing samples, from what the bot reports
+// and, for a book runtime, from the decision it actually took. This is
+// the only "how is it doing" the card answers for an α candidate: it is
+// about the study still being valid, not about the result.
+// Non-numeric labels for every state that blocks new entries. A halt
+// reason from a producer can embed the number that caused it ("session
+// loss $160.00 > limit $150.00"), which is exactly the running result an
+// α candidate's card must not carry, so a blinded card names the state
+// and never quotes the reason (Codex, PR #39).
+const entryBlockingHalts = (target, data) => {
+  const labels = [];
+  if (!data) return labels;
+  if (target && target.kill_switch_active === true) labels.push("kill switch engaged");
+  if (data.session_risk && data.session_risk.session_halted === true) labels.push("session DD halt");
+  if (data.daily_risk && data.daily_risk.risk_halted === true) labels.push("daily DD halt");
+  if (data.circuit_breaker && data.circuit_breaker.active === true) labels.push("circuit breaker");
+  if (isHanBridgeHalted(data)) labels.push("session halt");
+  const book = data.book || null;
+  if (book) {
+    if (book.session_halted) labels.push("session halt");
+    if (book.daily_halted) labels.push("daily loss halt");
+    if (book.equity_ready === false) labels.push("venue equity unavailable");
+  }
+  return labels;
+};
+
+const gateHealthText = (gate, data, serviceStatus, target) => {
+  // A stale or failing target is not sampling, whatever its last status
+  // object said before it stopped arriving; deriving "normal" from that
+  // frozen payload is exactly the case an operator needs told (Codex,
+  // PR #39).
+  if (serviceStatus && serviceStatus !== "active") {
+    return `Not sampling (${serviceStatus})`;
+  }
+  const parts = [];
+  if (gate && gate.decision_on_time === false) parts.push("decision late");
+  if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
+  // Every entry-blocking state, by label: a kill switch or a generic
+  // daily/session/circuit halt stops the study sampling just as surely
+  // as a book or Engine B halt does, and none of the labels carries a
+  // number (Codex, PR #39).
+  parts.push(...entryBlockingHalts(target, data));
+  const hanBridge = data && data.han_bridge ? data.han_bridge : null;
+  const book = data && data.book ? data.book : null;
+  if (book) {
+    const outcome = book.last_decision ? book.last_decision.outcome : null;
+    if (outcome && outcome !== "applied" && outcome !== "partial") parts.push(`last decision ${outcome}`);
+  }
+  if (parts.length > 0) return [...new Set(parts)].join("; ");
+  const known =
+    (gate && (gate.decision_on_time === true || gate.signal_hash_matched === true)) ||
+    Boolean(book && book.last_decision) ||
+    Boolean(hanBridge);
+  return known ? "Sampling normally" : "-";
+};
+
+// Gate progress for an α candidate (bot-strategy#958). Everything here
+// is about whether the pre-registration still holds; the result waits
+// for the readout date and is posted on the issue, not here.
+const renderGatePanel = (card, target, data) => {
+  const panel = card.querySelector('[data-field="gate-panel"]');
+  const dueEl = card.querySelector('[data-field="readout-due"]');
+  const gate = target ? target.gate : null;
+  if (!panel) return;
+  if (!gate) {
+    panel.hidden = true;
+    if (dueEl) {
+      dueEl.hidden = true;
+      dueEl.textContent = "";
+      dueEl.removeAttribute("title");
+    }
+    return;
+  }
+  panel.hidden = false;
+  const set = (field, text, title) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    el.textContent = text;
+    if (title) el.title = title;
+  };
+
+  const required = Number.isFinite(gate.required_samples) ? Number(gate.required_samples) : null;
+  const valid = Number.isFinite(gate.valid_samples) ? Number(gate.valid_samples) : null;
+  set(
+    "gate-samples",
+    valid === null
+      ? required === null ? "-" : `- / ${groupedFixed(required, 0)}`
+      : `${groupedFixed(valid, 0)} / ${groupedFixed(required, 0)}`,
+    gate.sample_source ? `Counted from ${gate.sample_source}.` : undefined,
+  );
+  set(
+    "gate-readout",
+    gate.readout_due
+      ? `${gate.readout_on} — readout due`
+      : Number.isFinite(gate.days_to_readout)
+        ? `${gate.readout_on} (${gate.days_to_readout}d)`
+        : gate.readout_on || "-",
+    "On this date the operator runs the pre-registered script. The result is posted on the issue, not on the dashboard.",
+  );
+  set(
+    "gate-spec",
+    gate.spec_hash ? gate.spec_hash.slice(0, 12) : "-",
+    "Hash of the frozen pre-registration this sample count is being counted against.",
+  );
+  set(
+    "gate-health",
+    gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined, target),
+  );
+
+  const noteEl = card.querySelector('[data-field="gate-note"]');
+  if (noteEl) {
+    const note = gate.spec_drift
+      ? "The bot reports a different gate spec than the frozen one; the sample count is withheld until they agree."
+      : valid === null
+        ? gate.sample_source
+          ? `The bot is not reporting a sample count yet — ${gate.sample_source} feeds it.`
+          : "The bot is not reporting a sample count yet."
+        : "";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
+
+  if (dueEl) {
+    if (gate.readout_due) {
+      dueEl.textContent = "READOUT DUE";
+      dueEl.title = `The pre-registered readout date (${gate.readout_on}) has arrived. Run the frozen script and post the result on the issue.`;
+      dueEl.hidden = false;
+    } else {
+      dueEl.hidden = true;
+      dueEl.textContent = "";
+      dueEl.removeAttribute("title");
+    }
+  }
+};
+
+// Hide the result-bearing parts of the generic trading view for an α
+// candidate. The numbers stay in status.json and in /api/status for the
+// readout script; the card simply does not render them, so an operator
+// cannot form an opinion from a running PnL before the gate fires.
+const blindAlphaCandidate = (card, blind) => {
+  for (const field of ["trading-headline", "trading-kv", "trading-stats-header", "trading-stats", "trading-chart"]) {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (el) el.hidden = blind;
+  }
+};
+
 const renderBullHolderStatus = (container, b, dryRun) => {
   if (!container) return;
   container.replaceChildren();
@@ -1898,7 +2124,7 @@ const isHanBridgeHalted = (data) =>
 // pairtrade-specific `session_risk.session_halted`, which engine_b_live
 // never populates), so that param was always false in practice
 // (code-review finding on PR #23, second round).
-const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false } = {}) => {
+const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -1920,7 +2146,14 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
     pair: `${hanBridge.kr_primary_symbol || "?"} → ${hanBridge.us_primary_symbol || "?"}`,
     today,
     reasons,
-    sessionHaltReason: hanBridge.session_halt_reason || null,
+    // Engine B is an α candidate, and a producer's halt reason can embed
+    // the loss that caused it. A blinded card names the state; every
+    // other card keeps the reason (Codex, PR #40).
+    sessionHaltReason: hanBridge.session_halt_reason
+      ? blindResult
+        ? "session halt"
+        : hanBridge.session_halt_reason
+      : null,
   };
 };
 
@@ -1977,7 +2210,7 @@ const isBookHalted = (data) =>
 // "partial:<sha>" carry a hash, the rest carry a reason. `last_decision`
 // is the *previous* completed decision and can disagree with the window
 // in progress, so the two are shown separately rather than merged.
-const bookViewModel = (book) => {
+const bookViewModel = (book, { blindResult = false } = {}) => {
   const signal = String(book.signal_status || "");
   const [kind, detail = ""] = signal.split(":");
   let tone = "neutral";
@@ -2001,7 +2234,9 @@ const bookViewModel = (book) => {
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
   const notes = [];
-  if (book.session_halted) notes.push(book.session_halt_reason || "session halt");
+  // A producer's halt reason can embed the number that caused it, so a
+  // blinded card names the state instead (Codex, PR #39).
+  if (book.session_halted) notes.push(blindResult ? "session halt" : book.session_halt_reason || "session halt");
   if (book.daily_halted) notes.push("daily loss halt");
   if (book.equity_ready === false) notes.push("venue equity unavailable, opens blocked");
   if (book.pending_residual) notes.push("residual pending");
@@ -2011,7 +2246,14 @@ const bookViewModel = (book) => {
     decision,
     signal: detail ? `${kind} ${detail}` : kind || "-",
     signalTone: tone,
-    exposure: `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
+    // Gross and net say whether the book is balanced, which is
+    // operational. Equity against a known starting reference is the
+    // running result, so it is left out for an α candidate — otherwise
+    // the one number the blinding exists to hide walks back in through
+    // this row (Codex, PR #39).
+    exposure: blindResult
+      ? `gross ${money(book.gross_usd)} · net ${money(book.net_usd)}`
+      : `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
     next: book.next_decision_at
       ? `${book.next_decision_key || "?"} @ ${book.next_decision_at}`
       : "Not scheduled",
@@ -2019,8 +2261,8 @@ const bookViewModel = (book) => {
   };
 };
 
-const renderBookStatus = (card, book) => {
-  const view = bookViewModel(book);
+const renderBookStatus = (card, book, options) => {
+  const view = bookViewModel(book, options);
   const set = (field, text) => {
     const el = card.querySelector(`[data-field="${field}"]`);
     if (el) el.textContent = text;
@@ -2478,9 +2720,18 @@ const renderEquityChart = (chartEl, emptyEl, history) => {
 // (effective threshold ≤ 0) so a clean steady-state has no bars at
 // all. The whole panel collapses to hidden when no bar is visible —
 // keeps disabled-everywhere cards looking the same as before.
-const renderRiskPanel = (card, data) => {
+const renderRiskPanel = (card, data, { blindResult = false } = {}) => {
   const panel = card.querySelector('[data-field="risk-panel"]');
   if (!panel) return;
+  // The bars state the live drawdown in bps against its threshold, and
+  // the halt-history strip states how often it has happened. Both are
+  // the running result of a pre-registered study, so the whole panel is
+  // withheld on an α candidate's card; the halt pills in the header keep
+  // the state visible (Codex, PR #39).
+  if (blindResult) {
+    panel.hidden = true;
+    return;
+  }
   let anyVisible = false;
 
   // Daily DD bar.
