@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, renderRiskPanel };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -1492,9 +1492,11 @@ test("gate health reports the machinery, not the result", () => {
   // Nothing observed at all is "-", never a green "normal".
   assert.equal(health(null, {}), "-");
   // Engine B's halt lives under han_bridge, not book.
+  // The label, never the producer's reason: a reason can embed the
+  // number that caused it, and this text only ever renders on an α card.
   assert.equal(
     health(null, { han_bridge: { session_halt_reason: "max_session_loss_bps exceeded" } }),
-    "max_session_loss_bps exceeded",
+    "session halt",
   );
   assert.equal(health(null, { han_bridge: { session_halt_reason: null } }), "Sampling normally");
   // A stale target is not sampling, whatever its last payload claimed
@@ -1504,6 +1506,37 @@ test("gate health reports the machinery, not the result", () => {
     "Not sampling (stale)",
   );
   assert.equal(health({ decision_on_time: true }, {}, "active"), "Sampling normally");
+});
+
+test("a blinded card names a halt without quoting the number that caused it", () => {
+  const reason = "session loss $160.00 > limit $150.00";
+  // Sampling health is only ever rendered for an α candidate, so it
+  // labels the state and never copies the producer's reason.
+  assert.equal(
+    context.__test.gateHealthText(null, { han_bridge: { session_halt_reason: reason } }, "active", {}),
+    "session halt",
+  );
+  assert.equal(
+    context.__test.gateHealthText(null, { book: { session_halted: true, session_halt_reason: reason, last_decision: { outcome: "applied" } } }, "active", {}),
+    "session halt",
+  );
+  // The book panel's own note row carries the reason for every other
+  // target and the label for a blinded one.
+  const book = { session_halted: true, session_halt_reason: reason, signal_status: "applied:abc", gross_usd: 1, net_usd: 1, equity_usd: 1 };
+  assert.match(context.__test.bookViewModel(book).note, /\$160/);
+  assert.equal(/\$160/.test(context.__test.bookViewModel(book, { blindResult: true }).note), false);
+
+  // Every entry-blocking state counts, not only the book's and Engine
+  // B's: a kill switch or a generic DD halt stops sampling too.
+  assert.deepEqual(
+    context.__test.entryBlockingHalts({ kill_switch_active: true }, { daily_risk: { risk_halted: true } }).join("; "),
+    "kill switch engaged; daily DD halt",
+  );
+  assert.equal(
+    context.__test.gateHealthText({ decision_on_time: true }, { session_risk: { session_halted: true } }, "active", {}),
+    "session DD halt",
+  );
+  assert.equal(context.__test.entryBlockingHalts({}, {}).length, 0);
 });
 
 test("an alpha card withholds the risk panel and the magnitudes in its halt tooltips", () => {
@@ -1597,6 +1630,13 @@ test("alpha bucket aggregates study count and the nearest readout, never perform
     },
   ]);
   assert.equal(withHalted.find((s) => s.label === "Studies running").value, "1 of 2");
+  // A kill switch blocks entries on a target that is otherwise
+  // reporting fine, so it is not sampling either.
+  const withKillSwitch = context.__test.alphaAggregateStats([
+    items[0],
+    { target: { ...items[1].target, service_status: "active", kill_switch_active: true, status: {} }, index: 1 },
+  ]);
+  assert.equal(withKillSwitch.find((s) => s.label === "Studies running").value, "1 of 2");
   assert.equal(stat("Nearest readout").value, "2026-09-11 (3d)");
   // No money or performance figure may appear in this bucket's header.
   for (const entry of stats) {

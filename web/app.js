@@ -410,12 +410,12 @@ const alphaAggregateStats = (items) => {
   // stopped — the moment that matters (Codex, PR #39).
   let sampling = 0;
   items.forEach(({ target }) => {
-    // isTargetUnhealthy covers the book runtime's halts but not Engine
-    // B's, which lives under han_bridge: a halted Engine B is reporting
-    // fine and taking no trades, so it is not accumulating samples
-    // either (Codex, PR #39).
-    const halted = isHanBridgeHalted(target.status);
-    if (!isTargetUnhealthy(target) && !halted) sampling += 1;
+    // isTargetUnhealthy covers the book runtime's halts only. A kill
+    // switch, a DD or circuit halt, or an Engine B halt all block new
+    // entries on a target that is otherwise reporting fine, and a study
+    // that cannot enter is not accumulating samples (Codex, PR #39).
+    const blocked = entryBlockingHalts(target, target.status).length > 0;
+    if (!isTargetUnhealthy(target) && !blocked) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
@@ -1701,7 +1701,29 @@ const renderSubsidyPanel = (card, target, data) => {
 // and, for a book runtime, from the decision it actually took. This is
 // the only "how is it doing" the card answers for an α candidate: it is
 // about the study still being valid, not about the result.
-const gateHealthText = (gate, data, serviceStatus) => {
+// Non-numeric labels for every state that blocks new entries. A halt
+// reason from a producer can embed the number that caused it ("session
+// loss $160.00 > limit $150.00"), which is exactly the running result an
+// α candidate's card must not carry, so a blinded card names the state
+// and never quotes the reason (Codex, PR #39).
+const entryBlockingHalts = (target, data) => {
+  const labels = [];
+  if (!data) return labels;
+  if (target && target.kill_switch_active === true) labels.push("kill switch engaged");
+  if (data.session_risk && data.session_risk.session_halted === true) labels.push("session DD halt");
+  if (data.daily_risk && data.daily_risk.risk_halted === true) labels.push("daily DD halt");
+  if (data.circuit_breaker && data.circuit_breaker.active === true) labels.push("circuit breaker");
+  if (isHanBridgeHalted(data)) labels.push("session halt");
+  const book = data.book || null;
+  if (book) {
+    if (book.session_halted) labels.push("session halt");
+    if (book.daily_halted) labels.push("daily loss halt");
+    if (book.equity_ready === false) labels.push("venue equity unavailable");
+  }
+  return labels;
+};
+
+const gateHealthText = (gate, data, serviceStatus, target) => {
   // A stale or failing target is not sampling, whatever its last status
   // object said before it stopped arriving; deriving "normal" from that
   // frozen payload is exactly the case an operator needs told (Codex,
@@ -1712,19 +1734,18 @@ const gateHealthText = (gate, data, serviceStatus) => {
   const parts = [];
   if (gate && gate.decision_on_time === false) parts.push("decision late");
   if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
-  // Engine B's halt lives under han_bridge, not book: without this the
-  // panel could say "Sampling normally" for a halted study (Codex, PR #39).
+  // Every entry-blocking state, by label: a kill switch or a generic
+  // daily/session/circuit halt stops the study sampling just as surely
+  // as a book or Engine B halt does, and none of the labels carries a
+  // number (Codex, PR #39).
+  parts.push(...entryBlockingHalts(target, data));
   const hanBridge = data && data.han_bridge ? data.han_bridge : null;
-  if (hanBridge && hanBridge.session_halt_reason) parts.push(hanBridge.session_halt_reason);
   const book = data && data.book ? data.book : null;
   if (book) {
-    if (book.session_halted) parts.push(book.session_halt_reason || "session halt");
-    if (book.daily_halted) parts.push("daily loss halt");
-    if (book.equity_ready === false) parts.push("venue equity unavailable");
     const outcome = book.last_decision ? book.last_decision.outcome : null;
     if (outcome && outcome !== "applied" && outcome !== "partial") parts.push(`last decision ${outcome}`);
   }
-  if (parts.length > 0) return parts.join("; ");
+  if (parts.length > 0) return [...new Set(parts)].join("; ");
   const known =
     (gate && (gate.decision_on_time === true || gate.signal_hash_matched === true)) ||
     Boolean(book && book.last_decision) ||
@@ -1780,7 +1801,10 @@ const renderGatePanel = (card, target, data) => {
     gate.spec_hash ? gate.spec_hash.slice(0, 12) : "-",
     "Hash of the frozen pre-registration this sample count is being counted against.",
   );
-  set("gate-health", gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined));
+  set(
+    "gate-health",
+    gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined, target),
+  );
 
   const noteEl = card.querySelector('[data-field="gate-note"]');
   if (noteEl) {
@@ -2190,7 +2214,9 @@ const bookViewModel = (book, { blindResult = false } = {}) => {
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
   const notes = [];
-  if (book.session_halted) notes.push(book.session_halt_reason || "session halt");
+  // A producer's halt reason can embed the number that caused it, so a
+  // blinded card names the state instead (Codex, PR #39).
+  if (book.session_halted) notes.push(blindResult ? "session halt" : book.session_halt_reason || "session halt");
   if (book.daily_halted) notes.push("daily loss halt");
   if (book.equity_ready === false) notes.push("venue equity unavailable, opens blocked");
   if (book.pending_residual) notes.push("residual pending");

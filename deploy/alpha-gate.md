@@ -38,8 +38,13 @@ independently of the process being observed.
 - **Sampling health** — whether the machinery is producing samples: a late
   decision, a signal-hash mismatch, a halt, or a last decision that was
   rejected or skipped — for a book runtime derived from the decision it actually
-  took, for Engine B from its `han_bridge` session halt. Nothing observed at all
-  reads "-", never a green "normal".
+  took, for Engine B from its `han_bridge` session halt. It covers every state
+  that blocks new entries (kill switch, daily or session DD halt, circuit
+  breaker, book or Engine B halt, venue equity unavailable): a study that cannot
+  enter is not accumulating samples. Each is named by a fixed label, never by
+  the producer's halt reason, which can embed the number that caused it
+  ("session loss $160.00 > limit $150.00") — the running result the blinding
+  exists to withhold. Nothing observed at all reads "-", never a green "normal".
 
 - **Sampling health** also reports "Not sampling (stale)" when the target's own
   status has stopped arriving: a frozen payload's last `decision_on_time: true`
@@ -49,8 +54,9 @@ The generic trading view's equity headline, PnL rows, lifetime stats and equity
 chart are hidden for these targets, along with the risk progress panel (its bars
 state the live drawdown in bps against its threshold) and the book panel's
 equity term. The halt pills stay in the header — halt state is safety, not
-performance — but their tooltips withhold the magnitudes. The bucket header
-counts only the targets currently reporting as running studies. The numbers stay in `status.json` and in
+performance — but their tooltips withhold the magnitudes, and the book panel's
+note row names a halt rather than quoting its reason. The bucket header counts
+as running only the targets that are reporting *and* able to enter. The numbers stay in `status.json` and in
 `/api/status` so the readout script can still read them; the frontend simply
 does not render them.
 
