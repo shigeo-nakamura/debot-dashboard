@@ -229,6 +229,12 @@ body::after {
   border: 1px solid rgba(214, 158, 46, 0.4);
 }
 
+.status-pill.readout-due {
+  background: rgba(56, 161, 105, 0.16);
+  color: var(--success);
+  border: 1px solid rgba(56, 161, 105, 0.4);
+}
+
 .benchmark-note {
   font-size: 12px;
   color: var(--muted);

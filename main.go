@@ -82,6 +82,10 @@ type TargetConfig struct {
 	// for a subsidy bot (bot-strategy#938/#957). Only meaningful for a
 	// target in the subsidy bucket.
 	Subsidy *SubsidyConfig `yaml:"subsidy"`
+	// Gate carries the frozen pre-registration for an α candidate
+	// (bot-strategy#958). Only meaningful for a target in the
+	// alpha_candidate bucket.
+	Gate *GateConfig `yaml:"gate"`
 }
 
 type StatusPosition struct {
@@ -247,7 +251,10 @@ type StatusData struct {
 	// Subsidy is the bot-reported units/cost ledger behind the
 	// cost-per-unit KPI (bot-strategy#938). Absent until the bot emits
 	// it; the card then shows what it can source and "-" for the rest.
-	Subsidy        *SubsidyUnits          `json:"subsidy,omitempty"`
+	Subsidy *SubsidyUnits `json:"subsidy,omitempty"`
+	// Gate is the α candidate's bot-reported sample count and machinery
+	// health (bot-strategy#958). Carries no PnL by design.
+	Gate           *GateStatus            `json:"gate,omitempty"`
 	Accumulator    *AccumulatorStatus     `json:"accumulator,omitempty"`
 	AccumulatorOps *AccumulatorOperations `json:"operations,omitempty"`
 	BullHolder     *BullHolderStatus      `json:"bull_holder,omitempty"`
@@ -424,10 +431,13 @@ type TargetStatus struct {
 	Bucket string `json:"bucket"`
 	// SubsidyKPI is the configured cost-per-unit KPI plus its staleness
 	// verdict; nil for a target that is not a configured subsidy bot.
-	SubsidyKPI       *SubsidyKPI `json:"subsidy_kpi,omitempty"`
-	ServiceStatus    string      `json:"service_status"`
-	ServiceStartedAt *time.Time  `json:"service_started_at,omitempty"`
-	Status           *StatusData `json:"status,omitempty"`
+	SubsidyKPI *SubsidyKPI `json:"subsidy_kpi,omitempty"`
+	// Gate is the α candidate's pre-registered gate and its progress;
+	// nil for a target that is not a configured α candidate.
+	Gate             *GateProgress `json:"gate,omitempty"`
+	ServiceStatus    string        `json:"service_status"`
+	ServiceStartedAt *time.Time    `json:"service_started_at,omitempty"`
+	Status           *StatusData   `json:"status,omitempty"`
 	// WsReset24h is the count of `Connection reset without closing handshake`
 	// WebSocket events over the last 24 hours, self-reported by the bot
 	// via `WsReset24hCount` in status.json (bot-strategy#343). Alerting
@@ -590,6 +600,14 @@ func normalizeConfig(cfg *Config) error {
 		if err := resolveBucket(target); err != nil {
 			return fmt.Errorf("targets[%d]: %w", i, err)
 		}
+		if target.Gate != nil {
+			if target.Bucket != BucketAlphaCandidate {
+				return fmt.Errorf("targets[%d]: gate configured for a %s target", i, target.Bucket)
+			}
+			if err := target.Gate.validate(); err != nil {
+				return fmt.Errorf("targets[%d]: %w", i, err)
+			}
+		}
 		if target.Subsidy != nil {
 			if target.Bucket != BucketSubsidy {
 				return fmt.Errorf("targets[%d]: subsidy KPI configured for a %s target", i, target.Bucket)
@@ -714,9 +732,12 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			// Set last: both fetchers rebuild the TargetStatus wholesale.
 			results[i].Bucket = target.Bucket
 			results[i].SubsidyKPI = resolveSubsidyKPI(target.Subsidy)
+			var gate *GateStatus
 			if results[i].Status != nil {
 				results[i].Status.Subsidy = usableSubsidyUnits(results[i].Status.Subsidy, target.Subsidy)
+				gate = results[i].Status.Gate
 			}
+			results[i].Gate = resolveGate(target.Gate, gate, time.Now())
 		}()
 	}
 	wg.Wait()

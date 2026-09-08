@@ -231,11 +231,9 @@ const reconcileBucketOrder = () => {
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
 //
-// The α candidates' gate progress arrives with bot-strategy#958; until
-// then that bucket shows its card count and its benchmark line only,
-// rather than a placeholder number.
 const bucketAggregateStats = (bucket, items) => {
   if (bucket === "subsidy") return subsidyAggregateStats(items);
+  if (bucket === "alpha_candidate") return alphaAggregateStats(items);
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
@@ -399,6 +397,37 @@ const subsidyAggregateStats = (items) => {
     });
   }
   return stats;
+};
+
+// The α bucket aggregates nothing about performance — that is the whole
+// point. What it can usefully say is how many studies are running and
+// when the next decision is owed.
+const alphaAggregateStats = (items) => {
+  let nearest = null;
+  let due = 0;
+  items.forEach(({ target }) => {
+    const gate = target.gate;
+    if (!gate || !gate.readout_on) return;
+    if (gate.readout_due) due += 1;
+    if (nearest === null || gate.readout_on < nearest.readout_on) nearest = gate;
+  });
+  return [
+    { label: "Studies running", value: `${items.length}` },
+    {
+      label: "Nearest readout",
+      value: nearest
+        ? nearest.readout_due
+          ? `${nearest.readout_on} — due`
+          : Number.isFinite(nearest.days_to_readout)
+            ? `${nearest.readout_on} (${nearest.days_to_readout}d)`
+            : nearest.readout_on
+        : "-",
+      title:
+        due > 0
+          ? `${due} readout${due === 1 ? "" : "s"} due. Run the pre-registered script and post the result on the issue.`
+          : "The earliest pre-registered readout date across this bucket's studies.",
+    },
+  ];
 };
 
 const updateBucketAggregate = (group, bucket, items) => {
@@ -570,6 +599,7 @@ const createCard = (key) => {
         <span class="status-pill" data-field="status"></span>
         <span class="status-pill maintenance" data-field="maintenance" hidden></span>
         <span class="status-pill kpi-stale" data-field="kpi-stale" hidden></span>
+        <span class="status-pill readout-due" data-field="readout-due" hidden></span>
         <span class="status-pill errors" data-field="errors" hidden></span>
         <span class="status-pill ws-reset" data-field="ws-reset" hidden></span>
         <span class="status-pill kill-switch" data-field="kill-switch" hidden></span>
@@ -623,6 +653,14 @@ const createCard = (key) => {
       <div class="row"><span>Started</span><strong data-field="started"></strong></div>
       <div class="row"><span>Last update</span><strong data-field="age"></strong></div>
       <div class="row shutdown-row" data-field="shutdown-row" hidden><span>Shutdown</span><strong data-field="shutdown-eta"></strong></div>
+      <section class="benchmark-panel" data-field="gate-panel" hidden aria-label="Pre-registered gate progress">
+        <div class="benchmark-title" title="An α candidate is judged by a gate frozen before anyone looked at the data (taxonomy §4.3). Its running PnL, equity curve, win rate and CAGR are hidden here on purpose: reading them is peeking, and peeking is how a pre-registered study stops being one.">Pre-registered gate</div>
+        <div class="row"><span>Valid samples</span><strong data-field="gate-samples"></strong></div>
+        <div class="row"><span>Next readout</span><strong data-field="gate-readout"></strong></div>
+        <div class="row"><span>Frozen spec</span><strong data-field="gate-spec"></strong></div>
+        <div class="row"><span>Sampling health</span><strong data-field="gate-health"></strong></div>
+        <div class="benchmark-note" data-field="gate-note" hidden></div>
+      </section>
       <section class="benchmark-panel" data-field="subsidy-panel" hidden aria-label="Subsidy KPI">
         <div class="benchmark-title" title="A subsidy bot buys points or qualifying activity with fees, slippage and adverse selection. Its PnL is the price paid, so it is judged on the price per unit, not on the PnL (bot-strategy#938, taxonomy §4.2).">Cost per unit of subsidy</div>
         <div class="row"><span data-field="subsidy-cpu-7d-label">Cost / unit (7d)</span><strong data-field="subsidy-cpu-7d"></strong></div>
@@ -695,22 +733,22 @@ const createCard = (key) => {
         <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
       </div>
       <div data-field="trading-view">
-      <div class="equity-headline">
+      <div class="equity-headline" data-field="trading-headline">
         <div class="equity-headline-label"><span>Total equity</span></div>
         <strong data-field="pnl-total"></strong>
       </div>
-      <div class="kv">
+      <div class="kv" data-field="trading-kv">
         <div><span data-field="pnl-today-label">PnL today</span> <span data-field="pnl-today"></span></div>
         <div title="Sum of funding_carry_usd across cycles closed today (UTC). Same window as PnL today, so PnL today = price PnL + funding today. From pairtrade since bot-strategy#371; pre-371 binaries render as '-' until restart.">Funding today <span data-field="funding-today"></span></div>
       </div>
-      <div class="kv-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
-      <div class="kv kv-stats">
+      <div class="kv-stats-header" data-field="trading-stats-header" title="Lifetime counters since the bot's risk_state was last reset. The 1D/1W/1M/ALL toggle only filters the equity chart, not these stats.">Stats <small>(lifetime)</small></div>
+      <div class="kv kv-stats" data-field="trading-stats">
         <div>Max DD <span data-field="max-dd"></span></div>
         <div>Win Rate <span data-field="win-rate"></span></div>
         <div>Trades <span data-field="num-trades"></span></div>
         <div>CAGR <span data-field="cagr"></span></div>
       </div>
-      <div class="chart">
+      <div class="chart" data-field="trading-chart">
         <div class="chart-title">Equity trend</div>
         <svg class="sparkline" data-field="equity-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
         <div class="chart-empty" data-field="equity-empty" hidden>No history yet</div>
@@ -1068,6 +1106,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // the KPI panel is the headline for a subsidy bot whatever shape its
   // status payload has (pairtrade-like for Robinhood, Arcus for Arcus).
   renderSubsidyPanel(card, target, data);
+  renderGatePanel(card, target, data);
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
@@ -1105,6 +1144,8 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
     return;
   }
+  blindAlphaCandidate(card, bucketOf(target) === "alpha_candidate");
+
   // On a subsidy bot the daily PnL is the day's price paid, not a
   // result to improve; the KPI panel above is what the bot is judged on
   // (bot-strategy#957).
@@ -1625,6 +1666,114 @@ const renderSubsidyPanel = (card, target, data) => {
       staleEl.textContent = "";
       staleEl.removeAttribute("title");
     }
+  }
+};
+
+// Whether the machinery is producing samples, from what the bot reports
+// and, for a book runtime, from the decision it actually took. This is
+// the only "how is it doing" the card answers for an α candidate: it is
+// about the study still being valid, not about the result.
+const gateHealthText = (gate, data) => {
+  const parts = [];
+  if (gate && gate.decision_on_time === false) parts.push("decision late");
+  if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
+  const book = data && data.book ? data.book : null;
+  if (book) {
+    if (book.session_halted) parts.push(book.session_halt_reason || "session halt");
+    if (book.daily_halted) parts.push("daily loss halt");
+    if (book.equity_ready === false) parts.push("venue equity unavailable");
+    const outcome = book.last_decision ? book.last_decision.outcome : null;
+    if (outcome && outcome !== "applied" && outcome !== "partial") parts.push(`last decision ${outcome}`);
+  }
+  if (parts.length > 0) return parts.join("; ");
+  const known =
+    (gate && (gate.decision_on_time === true || gate.signal_hash_matched === true)) ||
+    Boolean(book && book.last_decision);
+  return known ? "Sampling normally" : "-";
+};
+
+// Gate progress for an α candidate (bot-strategy#958). Everything here
+// is about whether the pre-registration still holds; the result waits
+// for the readout date and is posted on the issue, not here.
+const renderGatePanel = (card, target, data) => {
+  const panel = card.querySelector('[data-field="gate-panel"]');
+  const dueEl = card.querySelector('[data-field="readout-due"]');
+  const gate = target ? target.gate : null;
+  if (!panel) return;
+  if (!gate) {
+    panel.hidden = true;
+    if (dueEl) {
+      dueEl.hidden = true;
+      dueEl.textContent = "";
+      dueEl.removeAttribute("title");
+    }
+    return;
+  }
+  panel.hidden = false;
+  const set = (field, text, title) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    el.textContent = text;
+    if (title) el.title = title;
+  };
+
+  const required = Number.isFinite(gate.required_samples) ? Number(gate.required_samples) : null;
+  const valid = Number.isFinite(gate.valid_samples) ? Number(gate.valid_samples) : null;
+  set(
+    "gate-samples",
+    valid === null
+      ? required === null ? "-" : `- / ${groupedFixed(required, 0)}`
+      : `${groupedFixed(valid, 0)} / ${groupedFixed(required, 0)}`,
+    gate.sample_source ? `Counted from ${gate.sample_source}.` : undefined,
+  );
+  set(
+    "gate-readout",
+    gate.readout_due
+      ? `${gate.readout_on} — readout due`
+      : Number.isFinite(gate.days_to_readout)
+        ? `${gate.readout_on} (${gate.days_to_readout}d)`
+        : gate.readout_on || "-",
+    "On this date the operator runs the pre-registered script. The result is posted on the issue, not on the dashboard.",
+  );
+  set(
+    "gate-spec",
+    gate.spec_hash ? gate.spec_hash.slice(0, 12) : "-",
+    "Hash of the frozen pre-registration this sample count is being counted against.",
+  );
+  set("gate-health", gateHealthText(data && data.gate ? data.gate : null, data));
+
+  const noteEl = card.querySelector('[data-field="gate-note"]');
+  if (noteEl) {
+    const note = gate.spec_drift
+      ? "The bot reports a different gate spec than the frozen one; the sample count is withheld until they agree."
+      : valid === null
+        ? "The bot is not reporting a sample count yet — the decision journal feeds it (bot-strategy#937)."
+        : "";
+    noteEl.textContent = note;
+    noteEl.hidden = note === "";
+  }
+
+  if (dueEl) {
+    if (gate.readout_due) {
+      dueEl.textContent = "READOUT DUE";
+      dueEl.title = `The pre-registered readout date (${gate.readout_on}) has arrived. Run the frozen script and post the result on the issue.`;
+      dueEl.hidden = false;
+    } else {
+      dueEl.hidden = true;
+      dueEl.textContent = "";
+      dueEl.removeAttribute("title");
+    }
+  }
+};
+
+// Hide the result-bearing parts of the generic trading view for an α
+// candidate. The numbers stay in status.json and in /api/status for the
+// readout script; the card simply does not render them, so an operator
+// cannot form an opinion from a running PnL before the gate fires.
+const blindAlphaCandidate = (card, blind) => {
+  for (const field of ["trading-headline", "trading-kv", "trading-stats-header", "trading-stats", "trading-chart"]) {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (el) el.hidden = blind;
   }
 };
 

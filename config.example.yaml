@@ -129,6 +129,17 @@ targets:
 #    s3_region: eu-central-1
 #    s3_key: debot/status/book-xsmom-695/status.json
 #    dex: "Lighter (zkLighter mainnet)"
+#    # Pre-registered gate for an α candidate (bot-strategy#958). Only
+#    # valid on a target in the alpha_candidate bucket. The card shows
+#    # the sample count against `required_samples`, the readout date and
+#    # this frozen `spec_hash`, and hides PnL / equity curve / win rate /
+#    # CAGR — reading those before the readout is peeking. When the bot
+#    # reports a different spec hash, the sample count is withheld.
+#    gate:
+#      spec_hash: "000000000000"
+#      required_samples: 60
+#      readout_on: "2026-10-02"
+#      sample_source: "book runtime decision journal (bot-strategy#937)"
 
 # Arcus: independent read-only exporter; see deploy/arcus-status.md.
 #  - name: Arcus SPY/QQQ
