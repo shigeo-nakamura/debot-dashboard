@@ -80,12 +80,17 @@ targets:
 #    # naive equal-USD daily schedule over the same window. The bot does
 #    # not report when it started buying, and guessing that date from a
 #    # snapshot would silently move the benchmark, so the operator
-#    # verifies it here. `coin` is the Hyperliquid market whose daily
-#    # closes stand in for the schedule's prices (default HYPE).
+#    # verifies it here. `market` picks which of the venue's two markets
+#    # prices the schedule — `spot` (the default, and what the
+#    # accumulator actually buys) or `perp`. They are not
+#    # interchangeable: candleSnapshot reads a bare symbol as the
+#    # perpetual, so pricing spot accumulation against perp closes would
+#    # measure the execution edge against the basis.
 #    accumulator:
 #      dca:
 #        window_start: "2026-09-11"
-#        coin: HYPE
+#        symbol: HYPE
+#        market: spot
 # Bull-holder uses its existing same-host status file and public read-only
 # balance APIs. Do not set s3_bucket/s3_key for this target. See
 # deploy/bull-holder.md for data meanings and rollout instructions.

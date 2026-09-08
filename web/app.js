@@ -2392,6 +2392,9 @@ const renderAccumulatorDCA = (card, data) => {
     labelEl.textContent = dca && Number.isFinite(dca.days)
       ? `Naive DCA (${dca.days}d from ${dca.window_start})`
       : "Naive DCA";
+    if (dca && dca.symbol) {
+      labelEl.title = `Priced from ${dca.symbol} ${dca.market} daily closes. The current day's candle is still open and is not counted.`;
+    }
   }
   const noteEl = card.querySelector('[data-field="accumulator-dca-note"]');
   if (noteEl) {

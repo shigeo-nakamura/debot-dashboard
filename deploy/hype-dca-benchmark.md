@@ -15,8 +15,17 @@ every day and not thinking about it (bot-strategy#956, taxonomy §4.1).
     accumulator:
       dca:
         window_start: "2026-09-11" # first purchase date, UTC
-        coin: HYPE                 # Hyperliquid market for the daily closes
+        symbol: HYPE               # the asset being accumulated
+        market: spot               # spot (default) or perp
 ```
+
+`market` is not cosmetic. `candleSnapshot` reads a bare symbol as the
+**perpetual**; a spot market is addressed by its own pair id (HYPE spot is
+`@107`), which the dashboard looks up from the public spot metadata. Pricing
+spot accumulation against perp closes would measure the execution edge against
+the basis rather than against the naive schedule, so `spot` is the default and
+an asset with no spot market is reported as such rather than silently falling
+back.
 
 The bot does not report when it started buying, and inferring that date from a
 status snapshot would silently move the benchmark, so the operator verifies it
@@ -46,7 +55,11 @@ here the same way as the bull-holder's anchor.
 
 Daily closes come from the public `candleSnapshot` info endpoint — no account
 identity, no signing material — and are cached for 30 minutes, since they change
-once a day while the dashboard polls every 20 seconds. The benchmark is derived
+once a day while the dashboard polls every 20 seconds. A failed read is cached
+for one minute instead: a timeout or a rate limit is transient, and holding it
+for the full TTL would blank the benchmark for half an hour over one bad
+request. The current UTC day's candle is still open, so its close is the latest
+intraday price rather than a daily close; it is excluded from the window. The benchmark is derived
 by the dashboard and any `accumulator_dca` in the producer payload is discarded
 before it is computed.
 

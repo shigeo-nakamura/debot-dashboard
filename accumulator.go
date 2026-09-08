@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,9 +27,17 @@ import (
 type DCAConfig struct {
 	// WindowStart is the first purchase date, UTC, YYYY-MM-DD.
 	WindowStart string `yaml:"window_start" json:"window_start"`
-	// Coin is the Hyperliquid market whose daily closes stand in for the
-	// naive schedule's prices. Defaults to HYPE.
-	Coin string `yaml:"coin" json:"coin"`
+	// Symbol is the asset being accumulated, as the venue names it
+	// (HYPE). Required.
+	Symbol string `yaml:"symbol" json:"symbol"`
+	// Market selects which of the venue's two markets prices the naive
+	// schedule: "spot" (the default, and what the accumulator actually
+	// buys) or "perp". They are not interchangeable — candleSnapshot
+	// reads a bare symbol as the perpetual, while a spot market is
+	// addressed by its own pair id, so pricing spot accumulation against
+	// perp closes measures the execution edge against the basis (Codex,
+	// PR #40).
+	Market string `yaml:"market" json:"market"`
 }
 
 type AccumulatorConfig struct {
@@ -43,14 +52,31 @@ func (c DCAConfig) validate() error {
 	if start.After(time.Now().UTC()) {
 		return errors.New("accumulator.dca.window_start is in the future")
 	}
+	if strings.TrimSpace(c.Symbol) == "" {
+		return errors.New("accumulator.dca.symbol is required")
+	}
+	switch c.market() {
+	case marketSpot, marketPerp:
+	default:
+		return fmt.Errorf("accumulator.dca.market %q (want spot or perp)", c.Market)
+	}
 	return nil
 }
 
-func (c DCAConfig) coin() string {
-	if c.Coin != "" {
-		return c.Coin
+const (
+	marketSpot = "spot"
+	marketPerp = "perp"
+)
+
+func (c DCAConfig) market() string {
+	if c.Market == "" {
+		return marketSpot
 	}
-	return "HYPE"
+	return c.Market
+}
+
+func (c DCAConfig) symbol() string {
+	return strings.TrimSpace(c.Symbol)
 }
 
 // DCABenchmark is the dashboard-derived comparison: what one unit would
@@ -58,7 +84,8 @@ func (c DCAConfig) coin() string {
 // against what the bot actually paid.
 type DCABenchmark struct {
 	WindowStart string `json:"window_start"`
-	Coin        string `json:"coin"`
+	Symbol      string `json:"symbol"`
+	Market      string `json:"market"`
 	Days        int    `json:"days"`
 	// DCAPriceUSD is the average unit cost of spending the same amount
 	// every day: the harmonic mean of the daily closes, not their
@@ -75,7 +102,107 @@ type DCABenchmark struct {
 	AsOf    int64    `json:"as_of"`
 }
 
-const hypeDailyCloseTTL = 30 * time.Minute
+const (
+	hypeDailyCloseTTL = 30 * time.Minute
+	// A failed read is cached far more briefly than a good one: closes
+	// change once a day, but a timeout or a rate limit is transient and
+	// holding it for the full TTL blanks the benchmark for half an hour
+	// over one bad request (Codex, PR #40).
+	priceErrorTTL = time.Minute
+)
+
+// spotPairNames maps a spot token name to the market id candleSnapshot
+// wants for it (HYPE → "@107"). Read from the same public metadata the
+// bull-holder card uses.
+type spotPairCache struct {
+	mu        sync.Mutex
+	names     map[string]string
+	fetchedAt time.Time
+	err       string
+}
+
+var spotPairs = &spotPairCache{}
+
+func (c *spotPairCache) get(ctx context.Context, client *http.Client, now time.Time) (map[string]string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ttl := hypeDailyCloseTTL
+	if c.err != "" {
+		ttl = priceErrorTTL
+	}
+	if !c.fetchedAt.IsZero() && now.Sub(c.fetchedAt) < ttl {
+		return c.names, c.err
+	}
+	names, err := fetchSpotPairNames(ctx, client)
+	c.fetchedAt = now
+	c.names, c.err = names, ""
+	if err != nil {
+		c.err = err.Error()
+	}
+	return c.names, c.err
+}
+
+func fetchSpotPairNames(ctx context.Context, client *http.Client) (map[string]string, error) {
+	var raw []json.RawMessage
+	if err := holderJSON(ctx, client, hlInfoURL, map[string]string{"type": "spotMetaAndAssetCtxs"}, &raw); err != nil {
+		return nil, errors.New("spot market metadata unavailable")
+	}
+	var meta struct {
+		Tokens []struct {
+			Index int    `json:"index"`
+			Name  string `json:"name"`
+		} `json:"tokens"`
+		Universe []struct {
+			Tokens []int  `json:"tokens"`
+			Name   string `json:"name"`
+		} `json:"universe"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw[0], &meta) != nil {
+		return nil, errors.New("invalid spot market metadata")
+	}
+	usdcID := -1
+	byIndex := map[int]string{}
+	for _, token := range meta.Tokens {
+		byIndex[token.Index] = token.Name
+		if token.Name == "USDC" {
+			usdcID = token.Index
+		}
+	}
+	if usdcID < 0 {
+		return nil, errors.New("invalid spot market metadata")
+	}
+	names := map[string]string{}
+	for _, pair := range meta.Universe {
+		if len(pair.Tokens) == 2 && pair.Tokens[1] == usdcID {
+			if name, ok := byIndex[pair.Tokens[0]]; ok {
+				names[name] = pair.Name
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, errors.New("invalid spot market metadata")
+	}
+	return names, nil
+}
+
+// candleMarket resolves the market id candleSnapshot should be asked
+// for. A perp is its bare symbol; a spot market is its pair id, which
+// has to be looked up — asking for the bare symbol would silently return
+// the perpetual's candles instead.
+func candleMarket(ctx context.Context, client *http.Client, cfg DCAConfig, now time.Time) (string, string) {
+	if cfg.market() == marketPerp {
+		return cfg.symbol(), ""
+	}
+	names, err := spotPairs.get(ctx, client, now)
+	if err != "" {
+		return "", err
+	}
+	pair, ok := names[cfg.symbol()]
+	if !ok {
+		return "", "No spot market for " + cfg.symbol()
+	}
+	return pair, ""
+}
 
 // dailyCloseCache keeps the public candle read off the poll loop: daily
 // closes change once a day, and the dashboard polls every 20 seconds.
@@ -97,7 +224,11 @@ func (c *dailyCloseCache) get(ctx context.Context, client *http.Client, coin str
 	c.mu.Lock()
 	entry, ok := c.entries[key]
 	c.mu.Unlock()
-	if ok && now.Sub(entry.fetchedAt) < hypeDailyCloseTTL {
+	ttl := hypeDailyCloseTTL
+	if ok && entry.err != "" {
+		ttl = priceErrorTTL
+	}
+	if ok && now.Sub(entry.fetchedAt) < ttl {
 		return entry.closes, entry.err
 	}
 	closes, err := fetchDailyCloses(ctx, client, coin, start, now)
@@ -142,12 +273,20 @@ func fetchDailyCloses(ctx context.Context, client *http.Client, coin string, sta
 	}
 	var candles []struct {
 		Close string `json:"c"`
+		End   int64  `json:"T"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&candles); err != nil {
 		return nil, errors.New("invalid price history response")
 	}
 	closes := make([]float64, 0, len(candles))
 	for _, candle := range candles {
+		// The current UTC day's candle is still open: its `c` is the
+		// latest intraday price, not a daily close. Counting it as a full
+		// day of the naive schedule prices today's purchase at a tick
+		// (Codex, PR #40).
+		if candle.End >= now.UnixMilli() {
+			continue
+		}
 		value, err := strconv.ParseFloat(candle.Close, 64)
 		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 			return nil, errors.New("invalid price history close")
@@ -207,7 +346,8 @@ func accumulatorDCABenchmark(
 	}
 	b := &DCABenchmark{
 		WindowStart: cfg.WindowStart,
-		Coin:        cfg.coin(),
+		Symbol:      cfg.symbol(),
+		Market:      cfg.market(),
 		Days:        len(closes),
 		DCAPriceUSD: price,
 		AsOf:        now.Unix(),
@@ -259,7 +399,12 @@ func applyAccumulatorDCA(ctx context.Context, status *StatusData, cfg *Accumulat
 	// price endpoint must not stall the target's goroutine.
 	fetchCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	closes, closesErr := dailyCloses.get(fetchCtx, client, cfg.DCA.coin(), start, now)
+	market, marketErr := candleMarket(fetchCtx, client, *cfg.DCA, now)
+	if marketErr != "" {
+		status.AccumulatorDCAError = marketErr
+		return
+	}
+	closes, closesErr := dailyCloses.get(fetchCtx, client, market, start, now)
 	status.AccumulatorDCA, status.AccumulatorDCAError = accumulatorDCABenchmark(
 		status.Accumulator, status.AccumulatorOps, cfg.DCA, closes, closesErr, now,
 	)
