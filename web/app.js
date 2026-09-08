@@ -16,6 +16,11 @@ const recordedHistoryKeys = new Set();
 // historyByKey so drawdown and Calmar compare the bot and its buy & hold
 // benchmark over exactly the same window (bot-strategy#955).
 const benchmarkByKey = new Map();
+// Which benchmark book each cached series belongs to. A later rollout
+// can change the anchor under an unchanged target key, and appending the
+// new book's values to the old book's series would read as a drawdown
+// that never happened (Codex, PR #41).
+const benchmarkAnchorByKey = new Map();
 const bucketMap = new Map(); // bucket key -> { container, grid }
 let hasRendered = false;
 
@@ -1267,7 +1272,11 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory) =>
   // "benchmark unavailable" note. Suppress the comparison instead of
   // discarding the cached series, so a transient outage costs one tick
   // rather than the whole history (Codex, PR #37).
-  const comparable = benchmarkEquity === null ? [] : benchmarkHistory;
+  // The same asymmetry runs the other way: a failed account query
+  // (Lighter down) leaves the bot's equity null while Hyperliquid marks
+  // still price the benchmark, so the benchmark series advances alone
+  // (Codex, PR #41). Either side missing suppresses the comparison.
+  const comparable = benchmarkEquity === null || equity === null ? [] : benchmarkHistory;
   const botDd = maxDrawdownPct(history);
   const benchDd = maxDrawdownPct(comparable);
   if (ddEl) {
@@ -1882,7 +1891,26 @@ const updateHistoryCache = (key, data) => {
 // this cache only spans the time this page has been open: the producer
 // writes no equity_history file for a local target, so a fresh page has
 // no past to compare against and the window-dependent rows say so.
+// Identity of the benchmark book: which anchor it was bought at and for
+// how much. Two series are only comparable when these agree.
+const benchmarkAnchorId = (data) => {
+  const benchmark = data && data.bull_holder ? data.bull_holder.benchmark : null;
+  return benchmark ? `${benchmark.anchor_ts}|${benchmark.cost_usd}|${benchmark.cash_usd}` : null;
+};
+
 const updateBenchmarkCache = (key, data) => {
+  const anchor = benchmarkAnchorId(data);
+  if (anchor !== null && benchmarkAnchorByKey.get(key) !== anchor) {
+    // A different book. Both series restart together rather than the
+    // benchmark alone, so the drawdown comparison stays aligned and the
+    // old book's curve is not attributed to the new one.
+    if (benchmarkAnchorByKey.has(key)) {
+      historyByKey.delete(key);
+      recordedHistoryKeys.delete(key);
+    }
+    benchmarkByKey.delete(key);
+    benchmarkAnchorByKey.set(key, anchor);
+  }
   const point = snapshotToBenchmarkPoint(data);
   if (!point) {
     return benchmarkByKey.get(key) || [];
