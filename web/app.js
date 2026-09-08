@@ -232,7 +232,12 @@ const bucketAggregateStats = (bucket, items) => {
   let equityTotal = 0;
   let equityCount = 0;
   let mtd = 0;
-  let mtdAvail = false;
+  // Counted, not flagged: a delta that covers only the targets which
+  // happen to have a recorded baseline, presented beside an "Equity
+  // held" that covers all of them, is a number whose label is wrong
+  // (PR #36 review). MTD is shown only when every target contributing
+  // equity also contributes a baseline.
+  let baselineCount = 0;
   const monthStartMs = currentUtcMonthStartMs();
   items.forEach(({ target, index }) => {
     const data = target.status;
@@ -251,9 +256,10 @@ const bucketAggregateStats = (bucket, items) => {
     );
     if (baseline !== null) {
       mtd += equity - baseline;
-      mtdAvail = true;
+      baselineCount += 1;
     }
   });
+  const mtdAvail = equityCount > 0 && baselineCount === equityCount;
   return [
     {
       label: "Equity held",
@@ -266,7 +272,7 @@ const bucketAggregateStats = (bucket, items) => {
       value: mtdAvail ? formatPnl(mtd) : "-",
       signed: mtdAvail ? mtd : null,
       title:
-        "Change in the held value since the most recent UTC month rollover. Meaningful only against the buy & hold benchmark (bot-strategy#955).",
+        "Change in the held value since the most recent UTC month rollover, across every bot in this bucket. Shown only when all of them have a recorded month-start baseline. Meaningful only against the buy & hold benchmark (bot-strategy#955).",
     },
     {
       label: "vs buy & hold",

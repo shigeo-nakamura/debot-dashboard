@@ -846,6 +846,19 @@ test("MTD stays unavailable until a recorded month-start baseline exists", () =>
   const items2 = [{ target: { ...target, name: "holder2", status: data }, index: 1 }];
   assert.equal(stat(context.__test.bucketAggregateStats("beta", items2), "MTD change").signed, 50.5);
 
+  // A bucket where only some targets have a baseline must not show a
+  // partial delta beside an "Equity held" that counts them all
+  // (PR #36 review round 2).
+  const mixed = [
+    { target: { ...target, name: "holder2", status: data }, index: 1 },   // recorded
+    { target: { ...target, name: "holder3", status: data }, index: 2 },   // snapshot only
+  ];
+  context.__test.updateHistoryCache(context.__test.keyForTarget({ ...target, name: "holder3" }, 2), data);
+  const partial = context.__test.bucketAggregateStats("beta", mixed);
+  assert.equal(stat(partial, "Equity held").value, "2,501.0 USDC");
+  assert.equal(stat(partial, "MTD change").value, "-");
+  assert.equal(stat(partial, "MTD change").signed, null);
+
   // The predicate itself: identical series, opposite answers.
   const inMonth = [{ ts: monthStart + 1000, equity: 42 }];
   assert.equal(context.__test.baselineEquityAt(inMonth, monthStart, true), 42);
