@@ -190,6 +190,10 @@ func TestActiveExecutionHealthDependsOnPhaseAndAge(t *testing.T) {
 		{"rejected", "2026-09-05T15:19:59Z", "Execution needs operator resolution: rejected"},
 		{"operator_hold", "2026-09-05T15:19:59Z", "Execution needs operator resolution: operator_hold"},
 		{"teleported", "2026-09-05T15:19:59Z", "Execution phase unrecognised: teleported"},
+		// Codex P2 follow-up: a future timestamp cannot buy an in-flight
+		// grace period. 30s of skew is tolerated, an hour is not.
+		{"submitted", "2026-09-05T15:20:29Z", ""},
+		{"submitted", "2026-09-05T16:20:00Z", "Active execution timestamp is in the future"},
 	} {
 		t.Run(tc.phase+"@"+tc.updatedAt, func(t *testing.T) {
 			dir := fixture(t)
@@ -232,6 +236,52 @@ func TestNoActiveExecutionHasNoTimestamp(t *testing.T) {
 	}
 	if !s.Healthy {
 		t.Fatalf("flat ledger reported unhealthy: %v", s.HealthReasons)
+	}
+}
+
+// bot-strategy#981 (Codex P2 follow-up). A halt shows up as a fault *and* as
+// frozen bot clocks at the same time; reporting only `stale` is what let the
+// three-hour bot-strategy#979 outage hide from degraded-only monitoring. The
+// exporter's own heartbeat is the exception: if this payload is old, its
+// verdict is not current evidence of anything.
+func TestExecutionFaultsOutrankStaleBotClocks(t *testing.T) {
+	fresh := testNow.Format(time.RFC3339)
+	frozen := testNow.Add(-3 * time.Hour).Format(time.RFC3339)
+	for _, tc := range []struct {
+		name                                  string
+		healthy                               bool
+		exportedAt, lastTickAt, observationAt string
+		want                                  string
+	}{
+		{"fault with frozen bot clocks", false, fresh, frozen, frozen, "degraded"},
+		{"fault with fresh clocks", false, fresh, fresh, fresh, "degraded"},
+		{"frozen bot clocks, nothing else wrong", true, fresh, frozen, frozen, "stale"},
+		{"stale exporter heartbeat outranks the fault", false, testNow.Add(-181 * time.Second).Format(time.RFC3339), fresh, fresh, "stale"},
+		{"all fresh and healthy", true, fresh, fresh, fresh, "active"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Status{Healthy: tc.healthy, ExportedAt: tc.exportedAt, LastTickAt: tc.lastTickAt, LastObservationAt: tc.observationAt}
+			if got := s.ServiceStatus(testNow, 1920); got != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// The shape of the bot-strategy#979 halt, end to end: an attempt stranded in
+// sticky UNKNOWN while the bot's observation clock stopped advancing. Before
+// bot-strategy#981 this reported `stale`, and degraded-only monitoring missed
+// it for three hours.
+func TestStrandedAttemptWithFrozenClocksIsDegraded(t *testing.T) {
+	dir := fixture(t)
+	put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"unknown","updated_at":"2026-09-05T12:20:00Z"}}`)
+	s := collect(t, dir, testUnits()).Arcus
+	// Three hours without a fresh observation, exactly like the incident.
+	s.LastObservationAt = testNow.Add(-3 * time.Hour).Format(time.RFC3339)
+	s.LastTickAt = testNow.Add(-3 * time.Hour).Format(time.RFC3339)
+
+	if got := s.ServiceStatus(testNow, 1920); got != "degraded" {
+		t.Fatalf("stranded attempt reported %s", got)
 	}
 }
 

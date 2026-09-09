@@ -384,6 +384,15 @@ func (s *Status) readLedger(dir, configPath string, now time.Time) {
 // however recent. Anything else is unrecognised and fails closed: a phase
 // this exporter has never heard of is not evidence of health.
 func (s *Status) judgeActiveExecution(phase string, at, now time.Time) {
+	// A timestamp ahead of this exporter's clock cannot testify to freshness:
+	// skew or a corrupt ledger would otherwise buy an attempt an in-flight
+	// grace period starting from a future instant -- unbounded for a
+	// far-future value. Matches the 30-second future tolerance ServiceStatus
+	// already applies to its own clocks (Codex P2 follow-up).
+	if at.After(now.Add(30 * time.Second)) {
+		s.problem("Active execution timestamp is in the future")
+		return
+	}
 	switch phase {
 	case "unknown", "failed", "rejected", "operator_hold":
 		s.problem("Execution needs operator resolution: " + phase)

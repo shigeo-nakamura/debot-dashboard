@@ -35,14 +35,22 @@ read-only. There are no trading controls in the dashboard.
   ledger attempts whose `updated_at` falls on today's UTC date, including
   rejections. The active attempt is not included in this counter. It is
   not a filled-swap counter.
+- Status precedence: an unreadable or future clock is `unknown`; a stale
+  exporter heartbeat is `stale` (an old payload's verdict is not current
+  evidence); otherwise a recorded fault or risk halt is `degraded` **even
+  when the bot's own tick/observation clocks are also stale**, because a
+  real halt freezes those clocks and strands an execution at the same time;
+  stale bot clocks with nothing else wrong remain `stale`.
 - An active attempt is judged by phase and age, not by phase alone: the
   executor dispatches on one tick and reconciles on the next, so
   `prepared`/`dispatching`/`submitted`/`confirmed`/`reconciled` are what a
   healthy trade looks like for up to `InFlightSecs` (1920s, two tick
   intervals plus jitter) after its last phase change, and are degraded past
   that. `unknown`/`failed`/`rejected`/`operator_hold` are degraded
-  immediately, and an unrecognised phase fails closed. `active_execution_at`
-  carries the attempt's last phase change so a reader can see for itself.
+  immediately, an unrecognised phase fails closed, and a phase-change
+  timestamp more than 30s in the future is refused rather than granting an
+  in-flight grace period. `active_execution_at` carries the attempt's last
+  phase change so a reader can see for itself.
 - Gas is the most recent reconciled ledger balance snapshot, shown with its
   own observation timestamp. It is **not a live RPC gas balance**. Missing
   balances/limits/losses display unknown rather than zero. Quote time is
