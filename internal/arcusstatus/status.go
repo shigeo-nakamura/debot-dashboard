@@ -10,6 +10,18 @@ const SchemaVersion = 1
 const HeartbeatSecs = 180
 const DefaultStaleSecs = 1920 // Two missed 15-minute ticks plus scheduling jitter.
 
+// InFlightSecs is how long an execution attempt may sit in a phase that is
+// still being carried forward before that stops being normal.
+//
+// A swap is dispatched by one tick and reconciled by the *next* one, so
+// every trade leaves an attempt mid-flight for up to a full tick interval
+// by design; calling that degraded made the dashboard cry wolf on each
+// trade while the real three-hour halt of bot-strategy#979 reported as
+// stale, never degraded. Two tick intervals plus jitter -- the same budget
+// DefaultStaleSecs gives the bot's own clocks -- is past any healthy
+// hand-off and into "this is not moving".
+const InFlightSecs = DefaultStaleSecs
+
 type Inventory struct {
 	Symbol            string   `json:"symbol"`
 	Amount            *float64 `json:"amount"`
@@ -67,9 +79,14 @@ type Status struct {
 	DailyBudgetUsed        *int     `json:"daily_budget_used"`
 	MaxSwapsPerDay         *int     `json:"max_swaps_per_day"`
 	ActiveExecutionPhase   string   `json:"active_execution_phase"`
-	LastSwapAt             string   `json:"last_swap_at"`
-	GasBalanceETH          *float64 `json:"gas_balance_eth"`
-	GasObservedAt          string   `json:"gas_observed_at"`
+	// ActiveExecutionAt is when the active attempt last changed phase, so a
+	// reader can tell a normal in-flight swap from a stuck one without
+	// re-deriving it from the health reasons (bot-strategy#981). Empty when
+	// no attempt is active.
+	ActiveExecutionAt string   `json:"active_execution_at"`
+	LastSwapAt        string   `json:"last_swap_at"`
+	GasBalanceETH     *float64 `json:"gas_balance_eth"`
+	GasObservedAt     string   `json:"gas_observed_at"`
 }
 
 type Payload struct {

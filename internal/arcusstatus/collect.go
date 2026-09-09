@@ -364,14 +364,38 @@ func (s *Status) readLedger(dir, configPath string, now time.Time) {
 	s.ActiveExecutionPhase = "none"
 	if l.Active != nil {
 		s.ActiveExecutionPhase = l.Active.Phase
-		if !validTime(l.Active.UpdatedAt) {
+		at, err := time.Parse(time.RFC3339Nano, l.Active.UpdatedAt)
+		if err != nil {
 			s.problem("Active execution ledger timestamp invalid")
 			return
 		}
+		s.ActiveExecutionAt = at.UTC().Format(time.RFC3339Nano)
 		s.readAttempt(*l.Active)
-		if l.Active.Phase != "reconciled" {
-			s.problem("Execution requires reconciliation: " + l.Active.Phase)
+		s.judgeActiveExecution(l.Active.Phase, at, now)
+	}
+}
+
+// judgeActiveExecution separates a swap still being carried forward from one
+// that has stopped moving (bot-strategy#981).
+//
+// The executor dispatches on one tick and reconciles on the next, so an
+// attempt mid-flight is the normal shape of a trade, not a fault -- while a
+// phase only an operator can clear is a fault the moment it appears,
+// however recent. Anything else is unrecognised and fails closed: a phase
+// this exporter has never heard of is not evidence of health.
+func (s *Status) judgeActiveExecution(phase string, at, now time.Time) {
+	switch phase {
+	case "unknown", "failed", "rejected", "operator_hold":
+		s.problem("Execution needs operator resolution: " + phase)
+	case "prepared", "dispatching", "submitted", "confirmed", "reconciled":
+		// `reconciled` is included deliberately: an active attempt reaches it
+		// once the chain agrees, and the next tick commits the fill and
+		// archives it. Left there, it is as stuck as any other phase.
+		if age := now.Sub(at); age > InFlightSecs*time.Second {
+			s.problem(fmt.Sprintf("Execution stalled in %s for %d minutes", phase, int(age.Minutes())))
 		}
+	default:
+		s.problem("Execution phase unrecognised: " + phase)
 	}
 }
 func (s *Status) readAttempt(a attempt) {

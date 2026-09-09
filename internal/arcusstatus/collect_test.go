@@ -117,7 +117,7 @@ func TestCollectFailedTickWithFreshCheckpointAndPendingDecision(t *testing.T) {
 	}
 }
 func TestCollectMissingCorruptAndUnmatchedSources(t *testing.T) {
-	for _, kind := range []string{"missing_checkpoint", "missing_ledger", "missing_config", "old_event", "partial_event", "bad_hash", "wrong_pair", "disabled_timer", "unknown_systemd", "pending_execution"} {
+	for _, kind := range []string{"missing_checkpoint", "missing_ledger", "missing_config", "old_event", "partial_event", "bad_hash", "wrong_pair", "disabled_timer", "unknown_systemd", "stalled_execution", "operator_execution", "unrecognised_execution"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := fixture(t)
 			u := testUnits()
@@ -140,8 +140,16 @@ func TestCollectMissingCorruptAndUnmatchedSources(t *testing.T) {
 				u.Timer["UnitFileState"] = "disabled"
 			case "unknown_systemd":
 				u.Error = true
-			case "pending_execution":
-				put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"submitted","updated_at":"2026-09-05T15:17:28Z"}}`)
+			// A swap dispatched by one tick is reconciled by the next, so
+			// only an attempt that stopped moving is a fault -- see
+			// TestActiveExecutionHealthDependsOnPhaseAndAge for the healthy
+			// in-flight side of this contract (bot-strategy#981).
+			case "stalled_execution":
+				put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"submitted","updated_at":"2026-09-05T14:30:00Z"}}`)
+			case "operator_execution":
+				put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"unknown","updated_at":"2026-09-05T15:19:59Z"}}`)
+			case "unrecognised_execution":
+				put(t, dir, "ledger.json", `{"schema_version":2,"history":[],"active":{"phase":"teleported","updated_at":"2026-09-05T15:19:59Z"}}`)
 			}
 			s := collect(t, dir, u).Arcus
 			if s.Healthy || s.ServiceStatus(testNow, 1920) == "active" {
@@ -158,6 +166,75 @@ func TestCollectMissingCorruptAndUnmatchedSources(t *testing.T) {
 		})
 	}
 }
+
+// bot-strategy#981. The executor dispatches on one tick and reconciles on
+// the next, so a mid-flight attempt is what a healthy trade looks like for
+// up to a tick interval; a phase only an operator can clear is a fault
+// immediately, and one nobody recognises is a fault by default.
+func TestActiveExecutionHealthDependsOnPhaseAndAge(t *testing.T) {
+	for _, tc := range []struct {
+		phase, updatedAt, wantReason string
+	}{
+		{"submitted", "2026-09-05T15:17:28Z", ""},
+		{"confirmed", "2026-09-05T15:17:28Z", ""},
+		{"prepared", "2026-09-05T15:17:28Z", ""},
+		{"dispatching", "2026-09-05T15:17:28Z", ""},
+		{"reconciled", "2026-09-05T15:17:28Z", ""},
+		// 32 minutes is the in-flight budget; 33 is past it.
+		{"submitted", "2026-09-05T14:48:01Z", ""},
+		{"submitted", "2026-09-05T14:47:00Z", "Execution stalled in submitted for 33 minutes"},
+		{"reconciled", "2026-09-05T14:47:00Z", "Execution stalled in reconciled for 33 minutes"},
+		// Terminal phases are faults however fresh -- one second old here.
+		{"unknown", "2026-09-05T15:19:59Z", "Execution needs operator resolution: unknown"},
+		{"failed", "2026-09-05T15:19:59Z", "Execution needs operator resolution: failed"},
+		{"rejected", "2026-09-05T15:19:59Z", "Execution needs operator resolution: rejected"},
+		{"operator_hold", "2026-09-05T15:19:59Z", "Execution needs operator resolution: operator_hold"},
+		{"teleported", "2026-09-05T15:19:59Z", "Execution phase unrecognised: teleported"},
+	} {
+		t.Run(tc.phase+"@"+tc.updatedAt, func(t *testing.T) {
+			dir := fixture(t)
+			put(t, dir, "ledger.json", fmt.Sprintf(
+				`{"schema_version":2,"history":[],"active":{"phase":%q,"updated_at":%q}}`,
+				tc.phase, tc.updatedAt))
+			s := collect(t, dir, testUnits()).Arcus
+
+			if s.ActiveExecutionAt != tc.updatedAt {
+				t.Fatalf("active_execution_at = %q, want %q", s.ActiveExecutionAt, tc.updatedAt)
+			}
+			if tc.wantReason == "" {
+				if !s.Healthy || s.ServiceStatus(testNow, 1920) != "active" {
+					t.Fatalf("%s in flight reported unhealthy: %v", tc.phase, s.HealthReasons)
+				}
+				return
+			}
+			if s.Healthy || s.ServiceStatus(testNow, 1920) != "degraded" {
+				t.Fatalf("%s reported healthy: %v", tc.phase, s.HealthReasons)
+			}
+			var found bool
+			for _, reason := range s.HealthReasons {
+				found = found || reason == tc.wantReason
+			}
+			if !found {
+				t.Fatalf("health reasons %v do not contain %q", s.HealthReasons, tc.wantReason)
+			}
+		})
+	}
+}
+
+// No active attempt at all leaves the timestamp empty rather than inventing
+// one, and stays healthy (bot-strategy#981).
+func TestNoActiveExecutionHasNoTimestamp(t *testing.T) {
+	dir := fixture(t)
+	put(t, dir, "ledger.json", `{"schema_version":2,"history":[]}`)
+	s := collect(t, dir, testUnits()).Arcus
+	if s.ActiveExecutionPhase != "none" || s.ActiveExecutionAt != "" {
+		t.Fatalf("phase=%q at=%q", s.ActiveExecutionPhase, s.ActiveExecutionAt)
+	}
+	if !s.Healthy {
+		t.Fatalf("flat ledger reported unhealthy: %v", s.HealthReasons)
+	}
+}
+
 func TestIndependentFreshnessClocks(t *testing.T) {
 	base := Status{Healthy: true, ExportedAt: testNow.Format(time.RFC3339), LastTickAt: testNow.Add(-15 * time.Minute).Format(time.RFC3339), LastObservationAt: testNow.Add(-15 * time.Minute).Format(time.RFC3339)}
 	if got := base.ServiceStatus(testNow, 1920); got != "active" {
