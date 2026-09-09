@@ -151,17 +151,37 @@ targets:
 #    s3_region: eu-central-1
 #    s3_key: debot/status/book-xsmom-695/status.json
 #    dex: "Lighter (zkLighter mainnet)"
+#    # No `gate:` here on purpose: this runtime follows the XSMOM shadow
+#    # track, and the 2026-10-02 readout is computed from the shadow
+#    # ledger below, not from the runtime's decisions (bot-strategy#964).
+
+# The XSMOM shadow-paper track (bot-strategy#695): the zero-capital watcher
+# whose daily marks the readout is computed from. It publishes only the
+# blinded gate block — no equity, PnL or drawdown reaches this object.
+#  - name: XSMOM shadow track
+#    instance_id: local
+#    service: xsmom-695-shadow
+#    region: eu-central-1
+#    s3_bucket: debot-dashboard
+#    s3_key: debot/status/xsmom-695-shadow/status.json
+#    # The watcher publishes hourly; the 180 s default would read stale.
+#    stale_after_secs: 7200
+#    dex: "Lighter (paper)"
 #    # Pre-registered gate for an α candidate (bot-strategy#958). Only
 #    # valid on a target in the alpha_candidate bucket. The card shows
 #    # the sample count against `required_samples`, the readout date and
 #    # this frozen `spec_hash`, and hides PnL / equity curve / win rate /
 #    # CAGR — reading those before the readout is peeking. When the bot
 #    # reports a different spec hash, the sample count is withheld.
+#    # A sample here is one daily mark (gates S1-S4 are all computed from
+#    # them); 91 of them span 2026-07-03..2026-10-01. `spec_hash` is the
+#    # sha256 of bot-strategy's
+#    # scripts/strategy_probes/xsmom_695/preregistration.md.
 #    gate:
-#      spec_hash: "000000000000"
-#      required_samples: 60
+#      spec_hash: "b33440bde55908f2"
+#      required_samples: 91
 #      readout_on: "2026-10-02"
-#      sample_source: "book runtime decision journal (bot-strategy#937)"
+#      sample_source: "daily marks in the shadow-paper ledger (bot-strategy#695)"
 
 # Arcus: independent read-only exporter; see deploy/arcus-status.md.
 #  - name: Arcus SPY/QQQ

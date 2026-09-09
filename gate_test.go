@@ -125,3 +125,74 @@ func TestNormalizeConfigRejectsGateOutsideTheAlphaCandidateBucket(t *testing.T) 
 		t.Fatal("invalid gate accepted at startup")
 	}
 }
+
+func TestGateProgressFlagsAnOverdueSample(t *testing.T) {
+	cfg := gateConfig()
+	samples := 61
+	due := time.Date(2026, 9, 8, 1, 30, 0, 0, time.UTC).Unix()
+	status := func() *GateStatus {
+		return &GateStatus{
+			SpecHash:          cfg.SpecHash,
+			ValidSamples:      &samples,
+			NextSampleDueAt:   due,
+			SampleCadenceSecs: 86400,
+		}
+	}
+	at := func(s string) time.Time {
+		ts, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatalf("bad time %q: %v", s, err)
+		}
+		return ts
+	}
+
+	// On the producer's own deadline the sample is still on time.
+	if got := resolveGate(&cfg, status(), at("2026-09-08T01:30:00Z")); got.SampleOverdue {
+		t.Fatalf("sample_overdue at the deadline itself")
+	}
+	overdue := resolveGate(&cfg, status(), at("2026-09-08T01:30:01Z"))
+	if !overdue.SampleOverdue {
+		t.Fatalf("sample_overdue = false past the deadline")
+	}
+	// The deadline is echoed so the card can say when it was expected,
+	// and the sample count is not withheld: an overdue mark is a gap in
+	// the series, not a reason to hide what the study did collect.
+	if overdue.NextSampleDueAt != due || overdue.SampleCadenceSecs != 86400 {
+		t.Fatalf("deadline not echoed: %+v", overdue)
+	}
+	if overdue.ValidSamples == nil || *overdue.ValidSamples != samples {
+		t.Fatalf("valid samples withheld: %+v", overdue)
+	}
+
+	// Past the readout the study is done accumulating; a deadline that
+	// keeps sliding by is not a problem to report -- and is not echoed
+	// either, or the card would go on saying "next sample due" beside a
+	// health state that is deliberately not overdue, forever.
+	after := resolveGate(&cfg, status(), at("2026-10-02T12:00:00Z"))
+	if after.SampleOverdue {
+		t.Fatalf("sample_overdue after the readout")
+	}
+	if after.NextSampleDueAt != 0 || after.SampleCadenceSecs != 0 {
+		t.Fatalf("deadline still echoed after the readout: %+v", after)
+	}
+	// What the study did collect is still reported: the readout is the
+	// point of the count, not a reason to hide it.
+	if after.ValidSamples == nil || *after.ValidSamples != samples {
+		t.Fatalf("valid samples withheld after the readout: %+v", after)
+	}
+
+	// A producer that declares no cadence gets no verdict either way.
+	silent := status()
+	silent.NextSampleDueAt = 0
+	if got := resolveGate(&cfg, silent, at("2027-01-01T00:00:00Z")); got.SampleOverdue {
+		t.Fatalf("sample_overdue without a declared deadline")
+	}
+
+	// A drifted spec withholds everything, including the deadline.
+	drifted := status()
+	drifted.SpecHash = "ffffffffffff"
+	got := resolveGate(&cfg, drifted, at("2026-09-08T02:00:00Z"))
+	if !got.SpecDrift || got.SampleOverdue || got.NextSampleDueAt != 0 || got.ValidSamples != nil {
+		t.Fatalf("drifted gate leaked state: %+v", got)
+	}
+}

@@ -413,7 +413,14 @@ const alphaAggregateStats = (items) => {
   // running study overstates the count exactly when an experiment has
   // stopped — the moment that matters (Codex, PR #39).
   let sampling = 0;
-  items.forEach(({ target }) => {
+  // Only a target carrying a gate is a registered study. The bucket also
+  // holds producers that follow one: the XSMOM book runtime has no `gate:`
+  // on purpose, because the 2026-10-02 readout is computed from the shadow
+  // ledger rather than from that runtime's decisions. Counting it made the
+  // header report two running studies for the one registered study
+  // (Codex, PR #44).
+  const studies = items.filter(({ target }) => Boolean(target && target.gate));
+  studies.forEach(({ target }) => {
     // isTargetUnhealthy covers the book runtime's halts only. A kill
     // switch, a DD or circuit halt, or an Engine B halt all block new
     // entries on a target that is otherwise reporting fine, and a study
@@ -423,20 +430,36 @@ const alphaAggregateStats = (items) => {
     // of what the bot is producing can count toward the registered study
     // (Codex, PR #39).
     const drifted = Boolean(target.gate && target.gate.spec_drift);
-    if (!isTargetUnhealthy(target) && !blocked && !drifted) sampling += 1;
+    // The card already says "sample overdue" for this target; a header
+    // that still counts it as running contradicts the row underneath it,
+    // and overdue is the same thing the other three conditions are --
+    // the study has stopped accumulating (Codex, PR #44).
+    const overdue = Boolean(target.gate && target.gate.sample_overdue);
+    if (!isTargetUnhealthy(target) && !blocked && !drifted && !overdue) sampling += 1;
     const gate = target.gate;
     if (!gate || !gate.readout_on) return;
     if (gate.readout_due) due += 1;
     if (nearest === null || gate.readout_on < nearest.readout_on) nearest = gate;
   });
+  const followers = items.length - studies.length;
+  const followerNote = followers > 0
+    ? ` ${followers} target(s) in this bucket follow a study rather than registering one, and are not counted.`
+    : "";
   return [
     {
       label: "Studies running",
-      value: sampling === items.length ? `${sampling}` : `${sampling} of ${items.length}`,
+      value:
+        studies.length === 0
+          ? "-"
+          : sampling === studies.length
+            ? `${sampling}`
+            : `${sampling} of ${studies.length}`,
       title:
-        sampling === items.length
-          ? "Studies whose target is currently reporting."
-          : `${items.length - sampling} target(s) stale or failing: their studies are not accumulating samples.`,
+        studies.length === 0
+          ? `No pre-registered study in this bucket yet.${followerNote}`
+          : sampling === studies.length
+            ? `Studies whose target is currently reporting.${followerNote}`
+            : `${studies.length - sampling} target(s) stale or failing: their studies are not accumulating samples.${followerNote}`,
     },
     {
       label: "Nearest readout",
@@ -1755,6 +1778,33 @@ const entryBlockingHalts = (target, data) => {
   return labels;
 };
 
+// Sample cadence for the tooltip: whole days read better than 86400 s
+// for a daily mark, and every α candidate's cadence so far is a whole
+// number of hours or days.
+// A producer can emit an out-of-range epoch that is still a valid int64 on
+// the wire -- a nanosecond timestamp, or math.MaxInt64 -- and the Go status
+// decoder accepts it. `new Date(...).toISOString()` throws a RangeError on
+// one, and this runs inside the shared render loop, so a single malformed
+// gate would stop every later card and the bucket aggregates from
+// refreshing (Codex, PR #44). Same treatment the subsidy ledger's own
+// timestamp already gets, with bounds that suit a forward-looking deadline
+// rather than a past write.
+const GATE_DEADLINE_TS_MIN = Date.UTC(2020, 0, 1) / 1000;
+const GATE_DEADLINE_TS_MAX = Date.UTC(2100, 0, 1) / 1000;
+const gateDeadlineText = (value) => {
+  if (!Number.isFinite(value)) return null;
+  const ts = Number(value);
+  if (ts < GATE_DEADLINE_TS_MIN || ts > GATE_DEADLINE_TS_MAX) return null;
+  return new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 16);
+};
+
+const formatCadence = (secs) => {
+  if (!Number.isFinite(secs) || secs <= 0) return "";
+  if (secs % 86400 === 0) return secs === 86400 ? "day" : `${secs / 86400} days`;
+  if (secs % 3600 === 0) return secs === 3600 ? "hour" : `${secs / 3600} hours`;
+  return `${secs}s`;
+};
+
 const gateHealthText = (gate, data, serviceStatus, target) => {
   // A stale or failing target is not sampling, whatever its last status
   // object said before it stopped arriving; deriving "normal" from that
@@ -1764,7 +1814,14 @@ const gateHealthText = (gate, data, serviceStatus, target) => {
     return `Not sampling (${serviceStatus})`;
   }
   const parts = [];
-  if (gate && gate.decision_on_time === false) parts.push("decision late");
+  // The producer's own deadline for the next sample (bot-strategy#964).
+  // A fresh status object only proves the producer is alive: the XSMOM
+  // watcher kept publishing through the six-day gap that cost the track
+  // six marks. `decision_on_time: false` is the same condition seen from
+  // the producer's side, so it is not repeated as a second label.
+  const overdue = Boolean(target && target.gate && target.gate.sample_overdue);
+  if (overdue) parts.push("sample overdue");
+  else if (gate && gate.decision_on_time === false) parts.push("decision late");
   if (gate && gate.signal_hash_matched === false) parts.push("signal hash mismatch");
   // Every entry-blocking state, by label: a kill switch or a generic
   // daily/session/circuit halt stops the study sampling just as surely
@@ -1807,7 +1864,12 @@ const renderGatePanel = (card, target, data) => {
     const el = card.querySelector(`[data-field="${field}"]`);
     if (!el) return;
     el.textContent = text;
+    // Cards are reused across polling ticks, so a title that is no longer
+    // supplied has to be removed rather than left standing: after a spec
+    // drift resolveGate deliberately withholds the deadline, and the row
+    // kept showing the previous one (Codex, PR #44).
     if (title) el.title = title;
+    else el.removeAttribute("title");
   };
 
   const required = Number.isFinite(gate.required_samples) ? Number(gate.required_samples) : null;
@@ -1836,6 +1898,14 @@ const renderGatePanel = (card, target, data) => {
   set(
     "gate-health",
     gateHealthText(data && data.gate ? data.gate : null, data, target ? target.service_status : undefined, target),
+    (() => {
+      const due = gateDeadlineText(gate.next_sample_due_at);
+      return due
+        ? `Next sample due ${due} UTC${
+            gate.sample_cadence_secs ? ` (every ${formatCadence(gate.sample_cadence_secs)})` : ""
+          }.`
+        : undefined;
+    })(),
   );
 
   const noteEl = card.querySelector('[data-field="gate-note"]');

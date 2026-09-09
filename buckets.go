@@ -34,6 +34,7 @@ var taxonomyBuckets = map[string]string{
 	"arcus-spot-live-tick":         BucketSubsidy,
 	"engine-b-live":                BucketAlphaCandidate,
 	"book-runtime-xsmom-695":       BucketAlphaCandidate,
+	"xsmom-695-shadow":             BucketAlphaCandidate,
 }
 
 func validBucket(bucket string) bool {

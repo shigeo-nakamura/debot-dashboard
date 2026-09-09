@@ -22,6 +22,7 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 | Arcus SPY/QQQ | `arcus-spot-live-tick` | `subsidy` | #902 / #938。activity → Perps アクセス。price edge 無し (0/362 pairs) |
 | Han Bridge (Engine B) | `engine-b-live` | `alpha_candidate` | #866。gate 未通過 |
 | XSMOM | `book-runtime-xsmom-695` | `alpha_candidate` | #695。readout 2026-10-02、途中の PnL は出さない (#958) |
+| XSMOM shadow track | `xsmom-695-shadow` | `alpha_candidate` | #695 の shadow-paper ledger。**2026-10-02 の gate を判定するのはこちら** (#964)。gate 進捗のみ、PnL は出さない |
 
 表に無い service は `unclassified` として描画され、集計から外れる。
 新しい bot を足すときは bot-strategy の台帳 → この表 → `taxonomyBuckets` の順に更新する。
