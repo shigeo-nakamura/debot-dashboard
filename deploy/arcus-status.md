@@ -18,7 +18,8 @@ read-only. There are no trading controls in the dashboard.
 - Successful oneshots normally show systemd `inactive/dead`. Health checks
   use the exit result, actual execution timestamp and active/enabled timer.
   A normal `no_signal` hold is healthy. Failed ticks, disabled timers,
-  unresolved executions and incomplete monitoring data are not healthy.
+  stalled or operator-blocked executions and incomplete monitoring data are
+  not healthy.
 - Decisions are bound to the checkpoint's sequence, pair and mode. The
   latest event envelope's payload hash is checked; this is **not** a full
   event-chain audit. A matching pending event is explicitly marked pending;
@@ -33,7 +34,23 @@ read-only. There are no trading controls in the dashboard.
 - Daily execution budget matches `ensure_execution_capacity`: all archived
   ledger attempts whose `updated_at` falls on today's UTC date, including
   rejections. The active attempt is not included in this counter. It is
-  not a filled-swap counter. Any non-reconciled active attempt is degraded.
+  not a filled-swap counter.
+- Status precedence: an unreadable or future clock is `unknown`; a stale
+  exporter heartbeat is `stale` (an old payload's verdict is not current
+  evidence); otherwise a recorded fault or risk halt is `degraded` **even
+  when the bot's own tick/observation clocks are also stale**, because a
+  real halt freezes those clocks and strands an execution at the same time;
+  stale bot clocks with nothing else wrong remain `stale`.
+- An active attempt is judged by phase and age, not by phase alone: the
+  executor dispatches on one tick and reconciles on the next, so
+  `prepared`/`dispatching`/`submitted`/`confirmed`/`reconciled` are what a
+  healthy trade looks like for up to `InFlightSecs` (1920s, two tick
+  intervals plus jitter) after its last phase change, and are degraded past
+  that. `unknown`/`failed`/`rejected`/`operator_hold` are degraded
+  immediately, an unrecognised phase fails closed, and a phase-change
+  timestamp more than 30s in the future is refused rather than granting an
+  in-flight grace period. `active_execution_at` carries the attempt's last
+  phase change so a reader can see for itself.
 - Gas is the most recent reconciled ledger balance snapshot, shown with its
   own observation timestamp. It is **not a live RPC gas balance**. Missing
   balances/limits/losses display unknown rather than zero. Quote time is

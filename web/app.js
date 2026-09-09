@@ -2176,6 +2176,7 @@ const renderArcusStatus = (root, a) => {
   row(`Daily execution budget · ${a.budget_day || "unknown day"} UTC`, `${a.daily_budget_used ?? "—"} / ${a.max_swaps_per_day ?? "—"}`);
   add("p", "Budget usage follows the executor's archived-attempt counter, including rejections. It is not a count of filled swaps.", root, "holder-note");
   row("Latest execution phase", a.active_execution_phase || "None / unavailable");
+  if (a.active_execution_at) row("Execution phase since", at(a.active_execution_at));
   row("Last reconciled swap", at(a.last_swap_at));
   row("Gas · last reconciled snapshot", a.gas_balance_eth == null ? "Unknown" : `${amount(a.gas_balance_eth, 9)} ETH`);
   row("Gas observed", at(a.gas_observed_at));

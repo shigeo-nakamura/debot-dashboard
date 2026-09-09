@@ -391,6 +391,13 @@ test("Arcus render separates failed tick, pending decision, strategy risk and ga
   assert.match(content, /Daily execution budget.*UTC\s+— \/ —/);
   assert.equal(tags.includes("button"), false);
   assert.equal(tags.includes("script"), false);
+  // bot-strategy#981: an in-flight attempt shows when it entered its phase,
+  // so a reader can tell a normal hand-off from a stuck one.
+  context.__test.renderArcusStatus(root, { active_execution_phase: "submitted", active_execution_at: "2026-09-05T15:17:28Z" });
+  assert.match(text(root), /Latest execution phase\s+submitted/);
+  assert.match(text(root), /Execution phase since/);
+  context.__test.renderArcusStatus(root, { active_execution_phase: "none" });
+  assert.doesNotMatch(text(root), /Execution phase since/);
   context.__test.renderArcusStatus(root, { sequence: 0 });
   assert.match(text(root), /Risk halt\s+Unknown/);
   assert.doesNotMatch(text(root), /route_unavailable/);

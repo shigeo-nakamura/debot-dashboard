@@ -10,6 +10,18 @@ const SchemaVersion = 1
 const HeartbeatSecs = 180
 const DefaultStaleSecs = 1920 // Two missed 15-minute ticks plus scheduling jitter.
 
+// InFlightSecs is how long an execution attempt may sit in a phase that is
+// still being carried forward before that stops being normal.
+//
+// A swap is dispatched by one tick and reconciled by the *next* one, so
+// every trade leaves an attempt mid-flight for up to a full tick interval
+// by design; calling that degraded made the dashboard cry wolf on each
+// trade while the real three-hour halt of bot-strategy#979 reported as
+// stale, never degraded. Two tick intervals plus jitter -- the same budget
+// DefaultStaleSecs gives the bot's own clocks -- is past any healthy
+// hand-off and into "this is not moving".
+const InFlightSecs = DefaultStaleSecs
+
 type Inventory struct {
 	Symbol            string   `json:"symbol"`
 	Amount            *float64 `json:"amount"`
@@ -67,9 +79,14 @@ type Status struct {
 	DailyBudgetUsed        *int     `json:"daily_budget_used"`
 	MaxSwapsPerDay         *int     `json:"max_swaps_per_day"`
 	ActiveExecutionPhase   string   `json:"active_execution_phase"`
-	LastSwapAt             string   `json:"last_swap_at"`
-	GasBalanceETH          *float64 `json:"gas_balance_eth"`
-	GasObservedAt          string   `json:"gas_observed_at"`
+	// ActiveExecutionAt is when the active attempt last changed phase, so a
+	// reader can tell a normal in-flight swap from a stuck one without
+	// re-deriving it from the health reasons (bot-strategy#981). Empty when
+	// no attempt is active.
+	ActiveExecutionAt string   `json:"active_execution_at"`
+	LastSwapAt        string   `json:"last_swap_at"`
+	GasBalanceETH     *float64 `json:"gas_balance_eth"`
+	GasObservedAt     string   `json:"gas_observed_at"`
 }
 
 type Payload struct {
@@ -82,28 +99,49 @@ type Payload struct {
 	Arcus         *Status `json:"arcus"`
 }
 
-// ServiceStatus ages both the producer heartbeat and the independent bot clocks.
-// A fresh exporter can never hide a stalled bot, or vice versa.
+// ServiceStatus ages both the producer heartbeat and the independent bot
+// clocks. A fresh exporter can never hide a stalled bot, or vice versa.
+//
+// Order matters. An unreadable or future clock is `unknown`: nothing here can
+// be trusted. A stale exporter heartbeat is `stale` for the same reason --
+// this payload is old, so every judgement in it may be too. But a recorded
+// fault outranks the bot's own stale clocks, because the two arrive together
+// precisely when something has gone wrong: the halt of bot-strategy#979 froze
+// the bot's observation clock *and* stranded an attempt in sticky UNKNOWN, and
+// reporting that as merely `stale` is what let three hours of downtime hide
+// from anyone watching for `degraded` (bot-strategy#981). Stale clocks with
+// nothing else wrong still report `stale`; the fault, when there is one, is
+// the more actionable of the two and its detail is in HealthReasons.
 func (s *Status) ServiceStatus(now time.Time, staleSecs int) string {
 	if staleSecs <= 0 {
 		staleSecs = DefaultStaleSecs
 	}
-	for _, clock := range []struct {
+	clocks := []struct {
 		at    string
 		limit int
 	}{
 		{s.ExportedAt, HeartbeatSecs}, {s.LastTickAt, staleSecs}, {s.LastObservationAt, staleSecs},
-	} {
+	}
+	stale := false
+	for i, clock := range clocks {
 		at, err := time.Parse(time.RFC3339Nano, clock.at)
 		if err != nil || at.After(now.Add(30*time.Second)) {
 			return "unknown"
 		}
 		if now.Sub(at) > time.Duration(clock.limit)*time.Second {
-			return "stale"
+			if i == 0 {
+				// The exporter's own heartbeat: this payload is stale as a
+				// whole, so its health verdict is not current evidence.
+				return "stale"
+			}
+			stale = true
 		}
 	}
 	if !s.Healthy || s.RiskHalt != nil {
 		return "degraded"
+	}
+	if stale {
+		return "stale"
 	}
 	return "active"
 }
