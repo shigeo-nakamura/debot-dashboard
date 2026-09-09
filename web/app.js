@@ -814,6 +814,9 @@ const createCard = (key) => {
         <div class="han-bridge-header">Engine B (Han Bridge)</div>
         <div class="row"><span>Pair</span><strong data-field="han-bridge-pair"></strong></div>
         <div class="row"><span>Today</span><strong class="tone-neutral" data-field="han-bridge-today"></strong></div>
+        <div class="row" data-field="han-bridge-equity-row" hidden><span>Venue equity</span><strong data-field="han-bridge-equity"></strong></div>
+        <div class="row" data-field="han-bridge-available-row" hidden><span>Available</span><strong data-field="han-bridge-available"></strong></div>
+        <div class="row" data-field="han-bridge-unrealized-row" hidden><span>Unrealized (mid est.)</span><strong data-field="han-bridge-unrealized"></strong></div>
         <div class="row" data-field="han-bridge-reasons-row" hidden><span>Reason</span><strong data-field="han-bridge-reasons"></strong></div>
         <div class="row" data-field="han-bridge-halt-row" hidden><span>Session halt</span><strong data-field="han-bridge-halt"></strong></div>
       </div>
@@ -2216,6 +2219,29 @@ const isHanBridgeHalted = (data) =>
 // pairtrade-specific `session_risk.session_halted`, which engine_b_live
 // never populates), so that param was always false in practice
 // (code-review finding on PR #23, second round).
+// Past this age an equity reading is annotated as old rather than shown
+// bare. engine_b_live refreshes every 60 s and dex-connector's Lighter
+// `get_balance` caches for 300 s, so anything past 300 s means refreshes
+// are failing, not merely that the cache had not turned over. The bot
+// deliberately keeps the last value and lets its age grow on failure
+// (bot-strategy#919), which is only honest if the age is surfaced.
+const HAN_BRIDGE_EQUITY_STALE_SECS = 300;
+
+// Cents, deliberately, where the rest of the dashboard uses MONEY_DIGITS
+// (1). Those panels report thousands, where a tenth is noise; Engine B
+// trades a $100 lot whose whole result lives in cents -- at one digit a
+// -$0.28 day renders as -$0.3 and a +$0.69 day as +$0.7, which is the
+// difference between reading the number and guessing it. Solvency is
+// quoted at the same precision so the two rows do not disagree about
+// what a dollar looks like (bot-strategy#919).
+const hanBridgeUsd = (value) =>
+  value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
@@ -2234,10 +2260,60 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
   } else {
     today = { label: "Not decided yet", tone: "neutral" };
   }
+  // Solvency, not performance: rendered even when `blindResult` hides
+  // the generic equity headline and PnL rows. "Can this still place its
+  // next order" is the same class of question as the halt pills that
+  // blinding already exempts, and an α candidate that quietly ran out of
+  // margin is a study that stopped sampling, not a result being peeked
+  // at (deploy/alpha-gate.md, bot-strategy#919).
+  //
+  // Nothing here infers a value it was not given. `venue_equity_usd` is
+  // absent on a bot that predates #919 and null while the first read has
+  // not succeeded; both render "-" rather than "$0.00", because an
+  // equity row reading zero is an alarm and must never be manufactured
+  // from a missing field.
+  // `holderNumber`, not `parseNumber`: `Number(null)` is 0, so a field
+  // the bot explicitly published as null would render as "$0.00" -- an
+  // account-drained alarm manufactured out of "not known". A test pins
+  // this.
+  const equityUsd = holderNumber(hanBridge.venue_equity_usd);
+  const availableUsd = holderNumber(hanBridge.venue_available_usd);
+  const ageSecs = holderNumber(hanBridge.venue_equity_age_secs);
+  const stale = ageSecs !== null && ageSecs > HAN_BRIDGE_EQUITY_STALE_SECS;
+  const venueEquity =
+    equityUsd === null
+      ? null
+      : {
+          // The age is appended only once it means something. A fresh
+          // reading needs no annotation; a stale one must not pass as
+          // current.
+          label: stale
+            ? `${hanBridgeUsd(equityUsd)} · ${formatAge(ageSecs * 1000)} old`
+            : hanBridgeUsd(equityUsd),
+          tone: stale ? "warn" : "neutral",
+        };
+  // Unrealized is shown only while a position is held. Null then is
+  // itself the finding -- holding with no trustworthy mark -- so the row
+  // stays and reads "-" instead of disappearing.
+  const unrealizedUsd = holderNumber(hanBridge.unrealized_pnl_usd_mid_estimate);
+  const unrealized = !hasPosition
+    ? null
+    : {
+        label: unrealizedUsd === null ? "-" : hanBridgeUsd(unrealizedUsd),
+        tone:
+          unrealizedUsd === null
+            ? "neutral"
+            : unrealizedUsd >= 0
+              ? "ok"
+              : "warn",
+      };
   return {
     pair: `${hanBridge.kr_primary_symbol || "?"} → ${hanBridge.us_primary_symbol || "?"}`,
     today,
     reasons,
+    venueEquity,
+    venueAvailable: availableUsd === null ? null : hanBridgeUsd(availableUsd),
+    unrealized,
     // Engine B is an α candidate, and a producer's halt reason can embed
     // the loss that caused it. A blinded card names the state; every
     // other card keeps the reason (Codex, PR #40).
@@ -2259,6 +2335,39 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
     todayEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
     todayEl.classList.add(`tone-${view.today.tone}`);
   }
+  const setOptionalRow = (rowField, valueField, value, tone) => {
+    const rowEl = card.querySelector(`[data-field="${rowField}"]`);
+    const valueEl = card.querySelector(`[data-field="${valueField}"]`);
+    if (!rowEl || !valueEl) return;
+    if (value === null) {
+      rowEl.hidden = true;
+      valueEl.textContent = "";
+      return;
+    }
+    rowEl.hidden = false;
+    valueEl.textContent = value;
+    if (tone) {
+      valueEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+      valueEl.classList.add(`tone-${tone}`);
+    }
+  };
+  setOptionalRow(
+    "han-bridge-equity-row",
+    "han-bridge-equity",
+    view.venueEquity === null ? null : view.venueEquity.label,
+    view.venueEquity === null ? null : view.venueEquity.tone,
+  );
+  setOptionalRow(
+    "han-bridge-available-row",
+    "han-bridge-available",
+    view.venueAvailable,
+  );
+  setOptionalRow(
+    "han-bridge-unrealized-row",
+    "han-bridge-unrealized",
+    view.unrealized === null ? null : view.unrealized.label,
+    view.unrealized === null ? null : view.unrealized.tone,
+  );
   const reasonsRowEl = card.querySelector('[data-field="han-bridge-reasons-row"]');
   const reasonsEl = card.querySelector('[data-field="han-bridge-reasons"]');
   if (reasonsRowEl && reasonsEl) {

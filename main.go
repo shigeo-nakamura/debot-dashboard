@@ -179,6 +179,24 @@ type HanBridgeStatus struct {
 	DayExited         bool     `json:"day_exited"`
 	IneligibleReasons []string `json:"ineligible_reasons"`
 	SessionHaltReason *string  `json:"session_halt_reason,omitempty"`
+	// Venue-reported solvency (bot-strategy#919), rendered even on a
+	// blinded alpha_candidate card -- see deploy/alpha-gate.md. All
+	// pointers: the bot publishes null, not zero, for "not known", and
+	// the difference matters. An equity row showing $0.00 is an alarm;
+	// a row showing "-" is an absent reading. Collapsing the two would
+	// turn a missing field into a solvency emergency, or hide a real
+	// one.
+	VenueEquityUsd    *float64 `json:"venue_equity_usd,omitempty"`
+	VenueAvailableUsd *float64 `json:"venue_available_usd,omitempty"`
+	// Age of the equity reading. The bot keeps the last value across a
+	// failed refresh and lets this grow rather than blanking it, so a
+	// large age means "unknown", not "unchanged".
+	VenueEquityAgeSecs *int64 `json:"venue_equity_age_secs,omitempty"`
+	// Mark-to-mid PnL of the managed position: no fees, no funding, and
+	// null when flat, when the cost basis is unknown, or when no fresh
+	// mark is available. Not the exchange's unrealized figure and not
+	// reconcilable against an account statement (bot-strategy#919).
+	UnrealizedPnlUsdMidEstimate *float64 `json:"unrealized_pnl_usd_mid_estimate,omitempty"`
 }
 
 // BookDecision is one entry of the book runtime's decision history: the

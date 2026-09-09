@@ -76,6 +76,70 @@ func readAccumulatorFixture(t *testing.T) []byte {
 
 const hanBridgeFixturePath = "tests/fixtures/han-bridge-status-v1.json"
 
+// v2 adds the venue-solvency fields (bot-strategy#919). v1 is kept as a
+// separate fixture on purpose: a bot that predates #919 must still
+// decode, with the new fields nil rather than zero.
+const hanBridgeV2FixturePath = "tests/fixtures/han-bridge-status-v2.json"
+
+func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
+	payload, err := os.ReadFile(hanBridgeV2FixturePath)
+	if err != nil {
+		t.Fatalf("read han_bridge v2 fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	hb := status.HanBridge
+	if hb == nil {
+		t.Fatal("han_bridge status missing")
+	}
+	if hb.VenueEquityUsd == nil || *hb.VenueEquityUsd != 5002.31 {
+		t.Fatalf("venue_equity_usd = %v, want 5002.31", hb.VenueEquityUsd)
+	}
+	if hb.VenueAvailableUsd == nil || *hb.VenueAvailableUsd != 4952.06 {
+		t.Fatalf("venue_available_usd = %v, want 4952.06", hb.VenueAvailableUsd)
+	}
+	if hb.VenueEquityAgeSecs == nil || *hb.VenueEquityAgeSecs != 12 {
+		t.Fatalf("venue_equity_age_secs = %v, want 12", hb.VenueEquityAgeSecs)
+	}
+	if hb.UnrealizedPnlUsdMidEstimate == nil || *hb.UnrealizedPnlUsdMidEstimate != 2.31 {
+		t.Fatalf("unrealized = %v, want 2.31", hb.UnrealizedPnlUsdMidEstimate)
+	}
+}
+
+// The whole point of the pointer types: "not reported" and "reported as
+// zero" must stay distinguishable end to end. A bot that has not yet
+// read its account publishes null, and the card renders "-"; only a real
+// zero renders "$0.00", which is an alarm.
+func TestHanBridgeVenueSolvencyAbsentAndNullBothDecodeAsUnknown(t *testing.T) {
+	for name, payload := range map[string]string{
+		"absent (a bot predating #919)": `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[]}}`,
+		"explicitly null (never read)":  `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_equity_usd":null,"venue_available_usd":null,"venue_equity_age_secs":null,"unrealized_pnl_usd_mid_estimate":null}}`,
+	} {
+		status, err := decodeStatusPayload([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		hb := status.HanBridge
+		if hb == nil {
+			t.Fatalf("%s: han_bridge missing", name)
+		}
+		if hb.VenueEquityUsd != nil {
+			t.Fatalf("%s: venue_equity_usd = %v, want nil", name, *hb.VenueEquityUsd)
+		}
+		if hb.VenueAvailableUsd != nil {
+			t.Fatalf("%s: venue_available_usd = %v, want nil", name, *hb.VenueAvailableUsd)
+		}
+		if hb.VenueEquityAgeSecs != nil {
+			t.Fatalf("%s: venue_equity_age_secs = %v, want nil", name, *hb.VenueEquityAgeSecs)
+		}
+		if hb.UnrealizedPnlUsdMidEstimate != nil {
+			t.Fatalf("%s: unrealized = %v, want nil", name, *hb.UnrealizedPnlUsdMidEstimate)
+		}
+	}
+}
+
 func TestHanBridgeStatusFixtureMatchesDashboardContract(t *testing.T) {
 	payload, err := os.ReadFile(hanBridgeFixturePath)
 	if err != nil {

@@ -75,6 +75,40 @@ independently of the process being observed.
   declares no deadline gets no verdict: the dashboard never infers one from
   `last_sample_at`.
 
+## Solvency is exempt (bot-strategy#919)
+
+One class of number stays visible on a blinded card: what the venue says
+the account holds. Engine B's Han Bridge panel shows `Venue equity`,
+`Available` and, while a position is open, `Unrealized (mid est.)` from
+its `han_bridge` block, regardless of blinding.
+
+The line this draws is the same one the halt pills already sit on. A
+halt is shown because it answers "can this still trade", which is safety;
+its *reason* is withheld because it can embed the running loss, which is
+performance. Account solvency is the safety half of the same question --
+an α candidate that quietly ran out of margin is a study that stopped
+sampling, and "Sampling health" cannot say so if nothing may report the
+balance. For Engine B specifically the peeking risk is close to nil in
+practice: a $100 lot moves a five-figure account by cents, so the equity
+figure is dominated by the deposit, not by the result.
+
+Three rules keep this from becoming a back door:
+
+- **Only the venue's own figures.** No equity *curve*, no drawdown, no
+  win rate, no PnL series -- a point-in-time balance, not a track record.
+- **Null is not zero.** The bot publishes `null` for "not read yet" and
+  the card renders "-". A row reading "$0.00" therefore always means a
+  real, empty account. Collapsing the two would either manufacture a
+  solvency alarm or hide one (`Number(null) === 0` in JS made exactly
+  this mistake once; a test pins it).
+- **Age travels with the value.** A failed refresh keeps the last reading
+  and lets its age grow rather than restamping it; past
+  `HAN_BRIDGE_EQUITY_STALE_SECS` (300 s) the card annotates it and tones
+  it as a warning. An old balance is "unknown", not "unchanged".
+
+Realized PnL, the equity chart and the lifetime stats stay hidden. So
+does the halt reason.
+
 The generic trading view's equity headline, PnL rows, lifetime stats and equity
 chart are hidden for these targets, along with the risk progress panel (its bars
 state the live drawdown in bps against its threshold) and the book panel's

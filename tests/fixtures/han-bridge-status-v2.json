@@ -1,0 +1,45 @@
+{
+  "ts": 1788994324,
+  "updated_at": "2026-09-10T06:35:00.000000000+00:00",
+  "id": "engine-b-live",
+  "dex": "lighter",
+  "dry_run": false,
+  "has_position": true,
+  "position_count": 1,
+  "positions_ready": true,
+  "positions": [
+    {
+      "symbol": "SNDK",
+      "side": "long",
+      "size": "0.056945",
+      "entry_price": "1756.095"
+    }
+  ],
+  "pnl_total": 0.0,
+  "pnl_today": 0.0,
+  "pnl_source": "engine_b_live_risk_state",
+  "kill_switch_active": false,
+  "trade_stats": {
+    "trades": 0,
+    "wins": 0,
+    "win_rate": 0.0,
+    "max_dd": 0.0,
+    "pnl": 0.0
+  },
+  "han_bridge": {
+    "kr_primary_symbol": "SKHYNIXUSD",
+    "us_primary_symbol": "SNDK",
+    "day_entered": true,
+    "day_exited": false,
+    "position_unconfirmed": false,
+    "ineligible_reasons": [],
+    "session_halt_reason": null,
+    "skip_reason": null,
+    "stale_or_missing_symbols": [],
+    "price_feed_generation": 0,
+    "venue_equity_usd": 5002.31,
+    "venue_available_usd": 4952.06,
+    "venue_equity_age_secs": 12,
+    "unrealized_pnl_usd_mid_estimate": 2.31
+  }
+}
