@@ -112,6 +112,19 @@ func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
 	if !hb.VenueSolvencyReported {
 		t.Fatal("venue_solvency_reported decoded as false, want true")
 	}
+	// The session schedule reaches the frontend as a top-level field,
+	// not inside han_bridge: it is emitted by the binary's generic
+	// status block. Without it the card cannot say when the exit is due,
+	// nor that it is late (bot-strategy#919 follow-up).
+	if len(status.Window) != 3 {
+		t.Fatalf("window = %v, want three boundaries", status.Window)
+	}
+	if status.Window[2] != 1789047000000000 {
+		t.Fatalf("t2 = %d, want 1789047000000000", status.Window[2])
+	}
+	if hb.ExitDeadlineUs == nil || *hb.ExitDeadlineUs != 1789047900000000 {
+		t.Fatalf("exit_deadline_us = %v, want 1789047900000000", hb.ExitDeadlineUs)
+	}
 	// A producer reporting that its last read failed must survive the
 	// round trip: this is the exact signal the card warns on, and the
 	// age is only an approximation beside it.
@@ -175,6 +188,21 @@ func TestHanBridgeSolvencySurvivesTheApiRoundTrip(t *testing.T) {
 	}
 	if got := toBrowser.HanBridge["venue_equity_stale"]; string(got) != "true" {
 		t.Fatalf("venue_equity_stale reached the browser as %q, want true", got)
+	}
+}
+
+// A non-session day emits no window, and the card must render no
+// countdown rather than one anchored on a stale schedule.
+func TestStatusWithoutAWindowDecodesAsNoSchedule(t *testing.T) {
+	status, err := decodeStatusPayload([]byte(`{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[]}}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status.Window != nil {
+		t.Fatalf("window = %v, want nil", status.Window)
+	}
+	if status.HanBridge.ExitDeadlineUs != nil {
+		t.Fatalf("exit_deadline_us = %v, want nil", status.HanBridge.ExitDeadlineUs)
 	}
 }
 

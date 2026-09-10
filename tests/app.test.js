@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2123,4 +2123,119 @@ test("unrealized shows only while holding, and null then is itself the finding",
   );
   assert.equal(losing.unrealized.label, "-$4.50");
   assert.equal(losing.unrealized.tone, "warn");
+});
+
+// --- Session schedule row (bot-strategy#919 follow-up) ---------------
+
+const SESSION = {
+  // 2026-09-10: t0 00:00, t1 06:30, t2 13:30 UTC, in microseconds.
+  window: [1788998400000000, 1789021800000000, 1789047000000000],
+  t1: 1789021800,
+  t2: 1789047000,
+};
+
+test("the schedule row counts down to whatever the session is still waiting for", () => {
+  const schedule = context.__test.hanBridgeScheduleViewModel;
+
+  // Before the entry decision.
+  const beforeEntry = schedule({
+    window: SESSION.window,
+    nowSecs: SESSION.t1 - 3 * 3600 - 12 * 60,
+  });
+  assert.equal(beforeEntry.label, "Entry");
+  assert.equal(beforeEntry.text, "06:30 UTC · in 3h12m");
+  assert.equal(beforeEntry.tone, "neutral");
+
+  // Holding, exit still ahead.
+  const holding = schedule({
+    window: SESSION.window,
+    hasPosition: true,
+    dayEntered: true,
+    nowSecs: SESSION.t2 - 2 * 3600 - 33 * 60,
+  });
+  assert.equal(holding.label, "Exit");
+  assert.equal(holding.text, "13:30 UTC · in 2h33m");
+  assert.equal(holding.tone, "neutral");
+});
+
+test("an exit that was due and has not happened is the row's real job", () => {
+  const schedule = context.__test.hanBridgeScheduleViewModel;
+  const deadline = SESSION.t2 + 900;
+
+  // Past the scheduled exit, still retrying.
+  const late = schedule({
+    window: SESSION.window,
+    hasPosition: true,
+    dayEntered: true,
+    exitDeadlineSecs: deadline,
+    nowSecs: SESSION.t2 + 5 * 60,
+  });
+  assert.equal(late.text, "due 13:30 UTC · 5m late");
+  assert.equal(late.tone, "warn");
+
+  // Past the deadline: the engine has stopped retrying and the position
+  // stays open by design (bot-strategy#917). Without this row nothing on
+  // the card ever says so.
+  const abandoned = schedule({
+    window: SESSION.window,
+    hasPosition: true,
+    dayEntered: true,
+    exitDeadlineSecs: deadline,
+    nowSecs: SESSION.t2 + 3600,
+  });
+  assert.equal(abandoned.text, "abandoned, still open 13:30 UTC · 1h late");
+  assert.equal(abandoned.tone, "warn");
+});
+
+test("the schedule row is absent whenever nothing is pending", () => {
+  const schedule = context.__test.hanBridgeScheduleViewModel;
+
+  // A non-session day: no window at all.
+  assert.equal(schedule({ nowSecs: SESSION.t1 }), null);
+  assert.equal(schedule({ window: [1, 2], nowSecs: SESSION.t1 }), null);
+
+  // Already exited. `has_position` counts unmanaged exposures too, so
+  // a day can be exited while something this engine does not trade is
+  // still on the account -- and that must not be reported as a late
+  // exit, which is a different (and alarming) thing. Written with
+  // hasPosition true on purpose: with it false the row would come out
+  // null anyway and the assertion would pass for the wrong reason.
+  assert.equal(
+    schedule({
+      window: SESSION.window,
+      dayEntered: true,
+      dayExited: true,
+      hasPosition: true,
+      nowSecs: SESSION.t2 + 60,
+    }),
+    null,
+  );
+
+  // Entry decision made, no position: a no-signal day has nothing left
+  // to wait for, and half a countdown to an event that will not happen
+  // is worse than no row.
+  assert.equal(
+    schedule({
+      window: SESSION.window,
+      dayEntered: true,
+      hasPosition: false,
+      nowSecs: SESSION.t1 + 60,
+    }),
+    null,
+  );
+});
+
+test("the schedule is stated in UTC, matching the runbook and the journal", () => {
+  const schedule = context.__test.hanBridgeScheduleViewModel;
+  const row = schedule({
+    window: SESSION.window,
+    hasPosition: true,
+    dayEntered: true,
+    nowSecs: SESSION.t2 - 60,
+  });
+  assert.match(
+    row.text,
+    /^13:30 UTC/,
+    "a time silently rendered in the viewer's zone would be read against a runbook that means something else",
+  );
 });

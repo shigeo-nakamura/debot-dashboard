@@ -126,6 +126,26 @@ Three rules keep this from becoming a back door:
   (300 s) and before displaying it. An old balance is "unknown", not
   "unchanged".
 
+The session schedule is exempt on the same grounds. The card shows what
+this session is still waiting for -- `Entry 06:30 UTC · in 3h12m`,
+`Exit 13:30 UTC · in 2h33m` -- from the frozen trading calendar. It is
+the same three timestamps every session day, so it says nothing about
+how the study is going, and it answers the operational question this
+card otherwise leaves to tribal knowledge: when a restart is safe.
+
+Its real job is the third state. bot-strategy#917 closes an
+unconfirmable exit by leaving the position open on purpose -- a
+documented open position beats a close nobody can verify -- and that
+outcome had no signal anywhere but an e-mail and the journal. Past the
+scheduled exit the row reads `due 13:30 UTC · 5m late` and, once the
+engine has stopped retrying, `abandoned, still open 13:30 UTC · 1h
+late`, both toned as warnings. A card that went on reading "Entered,
+holding" indefinitely was the alternative.
+
+Times are stated in UTC and labelled as such, because the calendar, the
+runbook and the journal all are; a time silently rendered in the
+viewer's zone would be read against a runbook that means something else.
+
 Realized PnL, the equity chart and the lifetime stats stay hidden. So
 does the halt reason.
 

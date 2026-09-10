@@ -814,6 +814,7 @@ const createCard = (key) => {
         <div class="han-bridge-header">Engine B (Han Bridge)</div>
         <div class="row"><span>Pair</span><strong data-field="han-bridge-pair"></strong></div>
         <div class="row"><span>Today</span><strong class="tone-neutral" data-field="han-bridge-today"></strong></div>
+        <div class="row" data-field="han-bridge-schedule-row" hidden><span data-field="han-bridge-schedule-label">Exit</span><strong data-field="han-bridge-schedule"></strong></div>
         <div class="row" data-field="han-bridge-equity-row" hidden><span>Venue equity</span><strong data-field="han-bridge-equity"></strong></div>
         <div class="row" data-field="han-bridge-available-row" hidden><span>Available</span><strong data-field="han-bridge-available"></strong></div>
         <div class="row" data-field="han-bridge-unrealized-row" hidden><span>Unrealized (mid est.)</span><strong data-field="han-bridge-unrealized"></strong></div>
@@ -1323,11 +1324,23 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (hanBridgeViewEl) {
     hanBridgeViewEl.hidden = hanBridge === null;
     if (hanBridge) {
+      const nowSecs = Math.floor(Date.now() / 1000);
+      const exitDeadlineUs = holderNumber(hanBridge.exit_deadline_us);
       renderHanBridgeStatus(card, hanBridge, {
         hasPosition: Boolean(data.has_position),
         // So the equity reading's age counts the time this document has
         // been sitting still, not only the age it claimed when written.
         statusTsSecs: holderNumber(data.ts),
+        nowSecs,
+        schedule: hanBridgeScheduleViewModel({
+          window: data.window,
+          hasPosition: Boolean(data.has_position),
+          dayEntered: Boolean(hanBridge.day_entered),
+          dayExited: Boolean(hanBridge.day_exited),
+          exitDeadlineSecs:
+            exitDeadlineUs === null ? null : Math.floor(exitDeadlineUs / 1e6),
+          nowSecs,
+        }),
         killSwitchActive: target.kill_switch_active === true,
         // Engine B is an α candidate, and this view copies the
         // producer's halt reason verbatim (Codex, PR #40).
@@ -2246,6 +2259,69 @@ const hanBridgeUsd = (value) =>
     maximumFractionDigits: 2,
   });
 
+// UTC, always, and labelled as such. Engine B's whole schedule is
+// defined in UTC (the frozen calendar, the runbook, the journal), and a
+// card that quietly rendered it in the viewer's zone would be read
+// against a runbook that means something else.
+const utcHm = (secs) => {
+  const d = new Date(secs * 1000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")} UTC`;
+};
+
+// What this session is still waiting for: the entry decision, the
+// scheduled exit, or -- the case that has no other signal on this card
+// -- an exit that was due and has not happened.
+//
+// A fixed schedule from the committed trading calendar, identical every
+// session day, so this carries no performance information and is shown
+// even on a blinded alpha_candidate card (deploy/alpha-gate.md).
+//
+// `null` whenever nothing is pending: a non-session day (no window),
+// a day already exited, or a day whose entry decision was made and
+// produced no position. Half a countdown to an event that will not
+// happen is worse than no row.
+const hanBridgeScheduleViewModel = ({
+  window = null,
+  hasPosition = false,
+  dayEntered = false,
+  dayExited = false,
+  exitDeadlineSecs = null,
+  nowSecs,
+}) => {
+  if (!Array.isArray(window) || window.length < 3) return null;
+  const [, t1Us, t2Us] = window;
+  const t1 = Math.floor(t1Us / 1e6);
+  const t2 = Math.floor(t2Us / 1e6);
+  if (dayExited) return null;
+  if (hasPosition) {
+    if (nowSecs < t2) {
+      return {
+        label: "Exit",
+        text: `${utcHm(t2)} · in ${formatAge((t2 - nowSecs) * 1000)}`,
+        tone: "neutral",
+      };
+    }
+    // Past the scheduled exit and still holding. Before the deadline
+    // the engine is still retrying; after it, it has stopped and the
+    // position stays open by design (bot-strategy#917). Both are worth
+    // seeing, and the second is the one nobody would otherwise notice.
+    const gaveUp = exitDeadlineSecs !== null && nowSecs >= exitDeadlineSecs;
+    return {
+      label: "Exit",
+      text: `${gaveUp ? "abandoned, still open" : "due"} ${utcHm(t2)} · ${formatAge((nowSecs - t2) * 1000)} late`,
+      tone: "warn",
+    };
+  }
+  if (!dayEntered && nowSecs < t1) {
+    return {
+      label: "Entry",
+      text: `${utcHm(t1)} · in ${formatAge((t1 - nowSecs) * 1000)}`,
+      tone: "neutral",
+    };
+  }
+  return null;
+};
+
 const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false, statusTsSecs = null, nowSecs = Math.floor(Date.now() / 1000) } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
@@ -2371,6 +2447,20 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
     todayEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
     todayEl.classList.add(`tone-${view.today.tone}`);
   }
+  const scheduleRowEl = card.querySelector('[data-field="han-bridge-schedule-row"]');
+  const scheduleLabelEl = card.querySelector('[data-field="han-bridge-schedule-label"]');
+  const scheduleEl = card.querySelector('[data-field="han-bridge-schedule"]');
+  if (scheduleRowEl && scheduleEl) {
+    const schedule = (extra && extra.schedule) || null;
+    scheduleRowEl.hidden = schedule === null;
+    scheduleEl.textContent = schedule === null ? "" : schedule.text;
+    if (scheduleLabelEl && schedule !== null) scheduleLabelEl.textContent = schedule.label;
+    if (schedule !== null) {
+      scheduleEl.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+      scheduleEl.classList.add(`tone-${schedule.tone}`);
+    }
+  }
+
   const setOptionalRow = (rowField, valueField, value, tone) => {
     const rowEl = card.querySelector(`[data-field="${rowField}"]`);
     const valueEl = card.querySelector(`[data-field="${valueField}"]`);

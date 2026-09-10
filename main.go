@@ -212,6 +212,12 @@ type HanBridgeStatus struct {
 	// mark is available. Not the exchange's unrealized figure and not
 	// reconcilable against an account statement (bot-strategy#919).
 	UnrealizedPnlUsdMidEstimate *float64 `json:"unrealized_pnl_usd_mid_estimate"`
+	// When today's exit stops being retried and the day is abandoned
+	// with the position still open (microseconds). Nil when nothing is
+	// open. bot-strategy#917 leaves an unconfirmable close open on
+	// purpose, so "the exit was due and did not happen" is a real state
+	// with no other signal on this card.
+	ExitDeadlineUs *int64 `json:"exit_deadline_us"`
 }
 
 // BookDecision is one entry of the book runtime's decision history: the
@@ -317,13 +323,21 @@ type StatusData struct {
 	AccumulatorOps      *AccumulatorOperations `json:"operations,omitempty"`
 	BullHolder          *BullHolderStatus      `json:"bull_holder,omitempty"`
 	HanBridge           *HanBridgeStatus       `json:"han_bridge,omitempty"`
-	Book                *BookStatus            `json:"book,omitempty"`
-	TradeStats          *TradeStats            `json:"trade_stats,omitempty"`
-	Maintenance         *string                `json:"maintenance,omitempty"`
-	Shutdown            *ShutdownStatus        `json:"shutdown,omitempty"`
-	ErrorSummary        *ErrorSummary          `json:"error_summary,omitempty"`
-	EquityHistory       []EquityPoint          `json:"equity_history,omitempty"`
-	Arcus               *arcusstatus.Status    `json:"arcus,omitempty"`
+	// Engine B's frozen session boundaries for the current date --
+	// (t0, t1, t2) in microseconds: the KRX-open reference snapshot, the
+	// entry decision, and the scheduled exit. A fixed schedule from the
+	// committed trading calendar, identical every session day, so it
+	// carries no performance information and is shown even on a blinded
+	// alpha_candidate card (bot-strategy#919 follow-up). Absent on a
+	// non-session day, and on every other bot.
+	Window        []int64             `json:"window,omitempty"`
+	Book          *BookStatus         `json:"book,omitempty"`
+	TradeStats    *TradeStats         `json:"trade_stats,omitempty"`
+	Maintenance   *string             `json:"maintenance,omitempty"`
+	Shutdown      *ShutdownStatus     `json:"shutdown,omitempty"`
+	ErrorSummary  *ErrorSummary       `json:"error_summary,omitempty"`
+	EquityHistory []EquityPoint       `json:"equity_history,omitempty"`
+	Arcus         *arcusstatus.Status `json:"arcus,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
