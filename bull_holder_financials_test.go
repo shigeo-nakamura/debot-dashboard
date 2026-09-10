@@ -117,7 +117,7 @@ func TestHolderBenchmarkValuesTheAnchoredBookAtCurrentMarks(t *testing.T) {
 	// 0.45 ETH. At 100k / 2k those legs are worth $900 each, and the
 	// $100 the bot kept as perp margin stays cash in the benchmark, so
 	// both sides start from the same $1000.
-	b, msg := holderBenchmarkFrom(anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 2000}, nil)
+	b, msg := holderBenchmarkFrom(anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 2000}, nil, nil)
 	if msg != "" || b == nil {
 		t.Fatalf("benchmark unavailable: %q", msg)
 	}
@@ -155,7 +155,7 @@ func TestHolderBenchmarkNeverGuessesAMissingInput(t *testing.T) {
 		{"leg priced at zero", anchoredInvestment(), map[string]float64{"UBTC": 100000, "UETH": 0}, "Benchmark price unavailable for ETH"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, msg := holderBenchmarkFrom(tc.investment, tc.marks, nil)
+			b, msg := holderBenchmarkFrom(tc.investment, tc.marks, nil, nil)
 			if b != nil || msg != tc.want {
 				t.Fatalf("benchmark = %+v, msg = %q, want msg %q", b, msg, tc.want)
 			}
@@ -166,7 +166,7 @@ func TestHolderBenchmarkNeverGuessesAMissingInput(t *testing.T) {
 func TestHolderBenchmarkRequiresTheAnchorToDescribeTheWholeBook(t *testing.T) {
 	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
 	legs := map[string]struct{}{"BTC": {}, "ETH": {}}
-	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, legs); msg != "" {
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, legs, nil); msg != "" {
 		t.Fatalf("matching book rejected: %q", msg)
 	}
 
@@ -177,18 +177,18 @@ func TestHolderBenchmarkRequiresTheAnchorToDescribeTheWholeBook(t *testing.T) {
 	// the two legs.
 	oneLeg := anchoredInvestment()
 	oneLeg.Anchor.Assets = oneLeg.Anchor.Assets[:1]
-	if b, msg := holderBenchmarkFrom(oneLeg, marks, legs); b != nil || msg != "Benchmark anchor does not match the book's legs" {
+	if b, msg := holderBenchmarkFrom(oneLeg, marks, legs, nil); b != nil || msg != "Benchmark anchor does not match the book's legs" {
 		t.Fatalf("short anchor accepted: %+v %q", b, msg)
 	}
 
 	// A leg the bot does not trade is the same problem mirrored.
-	if b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{"BTC": {}, "SOL": {}}); b != nil || msg == "" {
+	if b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{"BTC": {}, "SOL": {}}, nil); b != nil || msg == "" {
 		t.Fatalf("mismatched book accepted: %+v %q", b, msg)
 	}
 
 	// Before the bot arms it reports no legs, so there is nothing to
 	// check the anchor against and the benchmark still stands.
-	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{}); msg != "" {
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, map[string]struct{}{}, nil); msg != "" {
 		t.Fatalf("benchmark suppressed for an unarmed bot: %q", msg)
 	}
 }
@@ -203,6 +203,13 @@ func TestHolderBenchmarkAnchorValidation(t *testing.T) {
 		{"unnamed asset", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{PriceUSD: 1}}}},
 		{"zero anchor price", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 0}}}},
 		{"duplicate leg", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 1}, {Symbol: "BTC", PriceUSD: 2}}}},
+		{"zero units", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 1, Units: finiteHolderValue(0)}}}},
+		// Half the legs sized from the bot's real book and half from the
+		// declared allocation is two benchmarks added together.
+		{"units on only one leg", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{
+			{Symbol: "BTC", PriceUSD: 1, Units: finiteHolderValue(1)},
+			{Symbol: "ETH", PriceUSD: 1},
+		}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := anchoredInvestment()
@@ -248,7 +255,7 @@ func TestHolderBenchmarkStartsFromTheFundedAccountNotTheDeclaredCapital(t *testi
 	// capital reported the $301 difference as a 31% outperformance.
 	funded := anchoredInvestment()
 	funded.Anchor.FundedUSD = finiteHolderValue(1301)
-	b, msg := holderBenchmarkFrom(funded, marks, nil)
+	b, msg := holderBenchmarkFrom(funded, marks, nil, nil)
 	if msg != "" {
 		t.Fatalf("benchmark unavailable: %q", msg)
 	}
@@ -262,7 +269,7 @@ func TestHolderBenchmarkStartsFromTheFundedAccountNotTheDeclaredCapital(t *testi
 
 	// Omitted: an account funded at exactly the declared capital is the
 	// case the field exists to distinguish from, and must not change.
-	plain, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil)
+	plain, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil, nil)
 	if msg != "" || plain.FundedUSD != 1000 || plain.CashUSD != 100 {
 		t.Fatalf("fallback changed: %+v %q", plain, msg)
 	}
@@ -272,7 +279,7 @@ func TestHolderBenchmarkStartsFromTheFundedAccountNotTheDeclaredCapital(t *testi
 	// never be.
 	short := anchoredInvestment()
 	short.Anchor.FundedUSD = finiteHolderValue(500)
-	if b, msg := holderBenchmarkFrom(short, marks, nil); b != nil || msg != "Funded capital is below the anchored spot allocation" {
+	if b, msg := holderBenchmarkFrom(short, marks, nil, nil); b != nil || msg != "Funded capital is below the anchored spot allocation" {
 		t.Fatalf("under-funded anchor accepted: %+v %q", b, msg)
 	}
 
@@ -291,12 +298,12 @@ func TestHolderBookPrefersTheConfiguredUniverseOverOpenLegs(t *testing.T) {
 	// is exactly where the leg check has to work (bot-strategy#963).
 	preArm := &BullHolderStatus{ConfiguredSymbols: []string{"BTC", "ETH"}}
 	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
-	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, holderBook(preArm)); msg != "" {
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, holderBook(preArm), nil); msg != "" {
 		t.Fatalf("matching pre-ARM book rejected: %q", msg)
 	}
 	short := anchoredInvestment()
 	short.Anchor.Assets = short.Anchor.Assets[:1]
-	if _, msg := holderBenchmarkFrom(short, marks, holderBook(preArm)); msg == "" {
+	if _, msg := holderBenchmarkFrom(short, marks, holderBook(preArm), nil); msg == "" {
 		t.Fatal("a one-leg anchor passed against a two-leg configured book")
 	}
 
@@ -306,7 +313,7 @@ func TestHolderBookPrefersTheConfiguredUniverseOverOpenLegs(t *testing.T) {
 		ConfiguredSymbols: []string{"BTC", "ETH"},
 		Legs:              map[string]BullHolderLeg{"BTC": {}},
 	}
-	if _, msg := holderBenchmarkFrom(short, marks, holderBook(half)); msg == "" {
+	if _, msg := holderBenchmarkFrom(short, marks, holderBook(half), nil); msg == "" {
 		t.Fatal("a one-leg anchor passed against a partially deployed two-leg book")
 	}
 
@@ -322,5 +329,75 @@ func TestHolderBookPrefersTheConfiguredUniverseOverOpenLegs(t *testing.T) {
 	// Blank entries are not a leg the anchor has to name.
 	if got := len(holderBook(&BullHolderStatus{ConfiguredSymbols: []string{"BTC", ""}})); got != 1 {
 		t.Fatalf("book size = %d, want 1", got)
+	}
+}
+
+// The entry ladder is what makes explicit quantities necessary: the bot
+// buys `BULL_HOLDER_ENTRY_TRANCHES` times at whatever each day's price
+// is, so the book it ends up holding is not the declared allocation
+// divided by any single price (Codex, PR #51).
+func TestHolderBenchmarkHoldsTheAnchoredQuantitiesWhenGiven(t *testing.T) {
+	v := anchoredInvestment()
+	// The legs are deliberately NOT equal-weight at the anchor: $1000 of
+	// BTC against $200 of ETH. An equal split of the same $1200 would
+	// derive 0.012 BTC / 0.6 ETH, so a benchmark that ignored the
+	// explicit quantities would still price out to the same cost and
+	// pass every total below — the asymmetry is what makes this test
+	// able to fail.
+	v.Anchor.Assets[0].Units = finiteHolderValue(0.02) // $1000 at 50k
+	v.Anchor.Assets[1].Units = finiteHolderValue(0.2)  // $200 at 1k
+	v.Anchor.FundedUSD = finiteHolderValue(1301)
+
+	b, msg := holderBenchmarkFrom(v, map[string]float64{"UBTC": 100000, "UETH": 2000}, nil, nil)
+	if msg != "" || b == nil {
+		t.Fatalf("benchmark unavailable: %q", msg)
+	}
+	if b.Assets[0].Units != 0.02 || b.Assets[1].Units != 0.2 {
+		t.Fatalf("anchored quantities not used: %+v", b.Assets)
+	}
+	if math.Abs(b.CostUSD-1200) > 1e-6 || math.Abs(b.CashUSD-101) > 1e-6 {
+		t.Fatalf("wrong cost/cash split: %+v", b)
+	}
+	// Both marks doubled: $2000 of BTC and $400 of ETH, plus $101 cash.
+	if math.Abs(b.EquityUSD-(2000+400+101)) > 1e-6 {
+		t.Fatalf("wrong benchmark equity: %+v", b)
+	}
+}
+
+func TestHolderBenchmarkRejectsAnchoredQuantitiesAboveTheFundedAccount(t *testing.T) {
+	v := anchoredInvestment()
+	// $1200 of spot at the anchor against $1000 funded: paying for the
+	// gap would make the benchmark levered, the one thing it must not be.
+	v.Anchor.Assets[0].Units = finiteHolderValue(0.02)
+	v.Anchor.Assets[1].Units = finiteHolderValue(0.2)
+	v.Anchor.FundedUSD = finiteHolderValue(1000)
+
+	if b, msg := holderBenchmarkFrom(v, map[string]float64{"UBTC": 100000, "UETH": 2000}, nil, nil); b != nil || msg == "" {
+		t.Fatalf("levered benchmark accepted: %+v", b)
+	}
+}
+
+// funded_usd is captured from account equity, which sums every priced
+// spot holding. Anything in there that is not one of the benchmark's legs
+// is carried by the benchmark as cash and marked to market on the bot's
+// side, so it is published as excess -- and the first reading still looks
+// right (Codex, PR #51).
+func TestHolderBenchmarkSuppressedWhenSpotHoldsSomethingOutsideTheBook(t *testing.T) {
+	marks := map[string]float64{"UBTC": 100000, "UETH": 2000}
+	book := []HolderAsset{{Symbol: "UBTC", Size: 0.009}, {Symbol: "UETH", Size: 0.45}}
+
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil, book); msg != "" {
+		t.Fatalf("the book's own legs were rejected: %q", msg)
+	}
+	// The anchor names its legs BTC/ETH and prices them as UBTC/UETH, so
+	// both spellings have to count as known.
+	if _, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil, []HolderAsset{{Symbol: "BTC", Size: 1}}); msg != "" {
+		t.Fatalf("leg name rejected: %q", msg)
+	}
+
+	strayed := append(append([]HolderAsset{}, book...), HolderAsset{Symbol: "HYPE", Size: 3})
+	b, msg := holderBenchmarkFrom(anchoredInvestment(), marks, nil, strayed)
+	if b != nil || msg != "Hyperliquid account holds HYPE outside the benchmark book" {
+		t.Fatalf("stray holding accepted: %+v %q", b, msg)
 	}
 }
