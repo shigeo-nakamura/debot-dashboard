@@ -76,6 +76,142 @@ func readAccumulatorFixture(t *testing.T) []byte {
 
 const hanBridgeFixturePath = "tests/fixtures/han-bridge-status-v1.json"
 
+// v2 adds the venue-solvency fields (bot-strategy#919). v1 is kept as a
+// separate fixture on purpose: a bot that predates #919 must still
+// decode, with the new fields nil rather than zero.
+const hanBridgeV2FixturePath = "tests/fixtures/han-bridge-status-v2.json"
+
+func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
+	payload, err := os.ReadFile(hanBridgeV2FixturePath)
+	if err != nil {
+		t.Fatalf("read han_bridge v2 fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	hb := status.HanBridge
+	if hb == nil {
+		t.Fatal("han_bridge status missing")
+	}
+	if hb.VenueEquityUsd == nil || *hb.VenueEquityUsd != 5002.31 {
+		t.Fatalf("venue_equity_usd = %v, want 5002.31", hb.VenueEquityUsd)
+	}
+	if hb.VenueAvailableUsd == nil || *hb.VenueAvailableUsd != 4952.06 {
+		t.Fatalf("venue_available_usd = %v, want 4952.06", hb.VenueAvailableUsd)
+	}
+	if hb.VenueEquityAgeSecs == nil || *hb.VenueEquityAgeSecs != 12 {
+		t.Fatalf("venue_equity_age_secs = %v, want 12", hb.VenueEquityAgeSecs)
+	}
+	if hb.UnrealizedPnlUsdMidEstimate == nil || *hb.UnrealizedPnlUsdMidEstimate != 2.31 {
+		t.Fatalf("unrealized = %v, want 2.31", hb.UnrealizedPnlUsdMidEstimate)
+	}
+	if hb.VenueEquityStale {
+		t.Fatal("venue_equity_stale decoded as true, want false")
+	}
+	if !hb.VenueSolvencyReported {
+		t.Fatal("venue_solvency_reported decoded as false, want true")
+	}
+	// A producer reporting that its last read failed must survive the
+	// round trip: this is the exact signal the card warns on, and the
+	// age is only an approximation beside it.
+	failing, err := decodeStatusPayload([]byte(`{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_equity_usd":5000,"venue_equity_stale":true}}`))
+	if err != nil {
+		t.Fatalf("decode failing payload: %v", err)
+	}
+	if !failing.HanBridge.VenueEquityStale {
+		t.Fatal("venue_equity_stale decoded as false, want true")
+	}
+}
+
+// The whole point of the pointer types: "not reported" and "reported as
+// zero" must stay distinguishable end to end. A bot that has not yet
+// read its account publishes null, and the card renders "-"; only a real
+// zero renders "$0.00", which is an alarm.
+// The finding this pins is not in the decoder but in what leaves the
+// server. /api/status re-encodes this struct, and a nil pointer with
+// `omitempty` serialises to nothing -- so a producer's explicit null
+// would have reached the browser as an absent field, hiding the row
+// instead of flagging unknown solvency (PR #46 Codex review). The
+// JavaScript view-model tests cannot see this: they never cross the
+// server.
+func TestHanBridgeSolvencySurvivesTheApiRoundTrip(t *testing.T) {
+	const fromProducer = `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_solvency_reported":true,"venue_equity_usd":null,"venue_available_usd":null,"venue_equity_age_secs":null,"venue_equity_stale":true,"unrealized_pnl_usd_mid_estimate":null}}`
+
+	status, err := decodeStatusPayload([]byte(fromProducer))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	reencoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	var toBrowser struct {
+		HanBridge map[string]json.RawMessage `json:"han_bridge"`
+	}
+	if err := json.Unmarshal(reencoded, &toBrowser); err != nil {
+		t.Fatalf("decode what the browser would receive: %v", err)
+	}
+	// The flag is what the frontend keys the row on, so it has to be
+	// there and true.
+	if got, ok := toBrowser.HanBridge["venue_solvency_reported"]; !ok || string(got) != "true" {
+		t.Fatalf("venue_solvency_reported reached the browser as %q (present=%v), want true", got, ok)
+	}
+	// And the unknown values must arrive as explicit nulls, not as
+	// missing keys -- "-" on the card, never a hidden row.
+	for _, field := range []string{
+		"venue_equity_usd",
+		"venue_available_usd",
+		"venue_equity_age_secs",
+		"unrealized_pnl_usd_mid_estimate",
+	} {
+		got, ok := toBrowser.HanBridge[field]
+		if !ok {
+			t.Fatalf("%s was dropped on the way to the browser; an unknown reading must stay visible", field)
+		}
+		if string(got) != "null" {
+			t.Fatalf("%s reached the browser as %q, want null", field, got)
+		}
+	}
+	if got := toBrowser.HanBridge["venue_equity_stale"]; string(got) != "true" {
+		t.Fatalf("venue_equity_stale reached the browser as %q, want true", got)
+	}
+}
+
+func TestHanBridgeVenueSolvencyAbsentAndNullBothDecodeAsUnknown(t *testing.T) {
+	for name, payload := range map[string]string{
+		"absent (a bot predating #919)": `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[]}}`,
+		"explicitly null (never read)":  `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_equity_usd":null,"venue_available_usd":null,"venue_equity_age_secs":null,"unrealized_pnl_usd_mid_estimate":null}}`,
+	} {
+		status, err := decodeStatusPayload([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		hb := status.HanBridge
+		if hb == nil {
+			t.Fatalf("%s: han_bridge missing", name)
+		}
+		if hb.VenueEquityUsd != nil {
+			t.Fatalf("%s: venue_equity_usd = %v, want nil", name, *hb.VenueEquityUsd)
+		}
+		if hb.VenueAvailableUsd != nil {
+			t.Fatalf("%s: venue_available_usd = %v, want nil", name, *hb.VenueAvailableUsd)
+		}
+		if hb.VenueEquityAgeSecs != nil {
+			t.Fatalf("%s: venue_equity_age_secs = %v, want nil", name, *hb.VenueEquityAgeSecs)
+		}
+		if hb.UnrealizedPnlUsdMidEstimate != nil {
+			t.Fatalf("%s: unrealized = %v, want nil", name, *hb.UnrealizedPnlUsdMidEstimate)
+		}
+		// Neither payload claims to report solvency, so the card hides
+		// the rows in both cases -- including the null one, where the
+		// nulls are the API's own doing rather than the producer's.
+		if hb.VenueSolvencyReported {
+			t.Fatalf("%s: venue_solvency_reported = true, want false", name)
+		}
+	}
+}
+
 func TestHanBridgeStatusFixtureMatchesDashboardContract(t *testing.T) {
 	payload, err := os.ReadFile(hanBridgeFixturePath)
 	if err != nil {

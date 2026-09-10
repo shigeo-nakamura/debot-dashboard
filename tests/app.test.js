@@ -93,6 +93,10 @@ const hanBridgeFixture = JSON.parse(
   fs.readFileSync(`${__dirname}/fixtures/han-bridge-status-v1.json`, "utf8"),
 );
 
+const hanBridgeV2Fixture = JSON.parse(
+  fs.readFileSync(`${__dirname}/fixtures/han-bridge-status-v2.json`, "utf8"),
+);
+
 const bookFixture = JSON.parse(
   fs.readFileSync(`${__dirname}/fixtures/book-runtime-status-v1.json`, "utf8"),
 );
@@ -1964,4 +1968,159 @@ test("DCA benchmark row reports the edge in bps and withholds what it lacks", ()
   context.__test.renderAccumulatorDCA(missing, { accumulator_dca_error: "DCA window not configured" });
   assert.equal(missing.text("accumulator-dca-price"), "-");
   assert.equal(missing.text("accumulator-dca-note"), "DCA window not configured");
+});
+
+// --- Venue solvency on a blinded card (bot-strategy#919) -------------
+
+test("venue equity and unrealized render on the han bridge panel", () => {
+  const hanBridge = hanBridgeV2Fixture.han_bridge;
+  const model = context.__test.hanBridgeViewModel(hanBridge, {
+    hasPosition: true,
+  });
+  assert.equal(model.venueEquity.label, "$5,002.31");
+  assert.equal(
+    model.venueEquity.tone,
+    "neutral",
+    "a 12 s old reading is current; no age annotation",
+  );
+  assert.equal(model.venueAvailable, "$4,952.06");
+  assert.equal(model.unrealized.label, "$2.31");
+  assert.equal(model.unrealized.tone, "ok");
+});
+
+test("solvency survives alpha-candidate blinding, unlike the halt reason", () => {
+  // The card blinds performance. Whether the account can still place an
+  // order is safety, and must come through (deploy/alpha-gate.md).
+  const model = context.__test.hanBridgeViewModel(
+    { ...hanBridgeV2Fixture.han_bridge, session_halt_reason: "session loss $60.00 > limit $50.00" },
+    { hasPosition: true, blindResult: true },
+  );
+  assert.equal(model.venueEquity.label, "$5,002.31");
+  assert.equal(model.unrealized.label, "$2.31");
+  assert.equal(
+    model.sessionHaltReason,
+    "session halt",
+    "the halt reason is still blinded — it embeds the running loss",
+  );
+});
+
+test("a stale equity reading is annotated with its age, not shown bare", () => {
+  const fresh = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 300,
+  });
+  assert.equal(fresh.venueEquity.label, "$5,000.00", "exactly at the bound is still current");
+  assert.equal(fresh.venueEquity.tone, "neutral");
+
+  const stale = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 3600,
+  });
+  assert.equal(stale.venueEquity.label, "$5,000.00 · 1h old");
+  assert.equal(stale.venueEquity.tone, "warn");
+});
+
+test("the producer's own stale flag is enough, whatever the age says", () => {
+  // The age is an approximation of the venue sample's age; the flag is
+  // exact. A one-second-old reading whose last refresh failed is not
+  // current (pairtrade#316 Codex P2).
+  const model = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 1,
+    venue_equity_stale: true,
+  });
+  assert.equal(model.venueEquity.tone, "warn");
+});
+
+test("a frozen status payload cannot keep a reading looking current", () => {
+  // Emitted at age 290 s, then the producer stopped writing an hour ago.
+  // Judging on the published age alone would call this current forever.
+  const hanBridge = {
+    venue_solvency_reported: true,
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 290,
+  };
+  const now = 1_800_000_000;
+  const live = context.__test.hanBridgeViewModel(hanBridge, {
+    statusTsSecs: now,
+    nowSecs: now,
+  });
+  assert.equal(live.venueEquity.tone, "neutral", "just written: still current");
+
+  const frozen = context.__test.hanBridgeViewModel(hanBridge, {
+    statusTsSecs: now - 3600,
+    nowSecs: now,
+  });
+  assert.equal(frozen.venueEquity.tone, "warn");
+  assert.equal(
+    frozen.venueEquity.label,
+    "$5,000.00 · 1h4m old",
+    "the displayed age counts the time the document sat still",
+  );
+});
+
+test("absent, null and zero equity are three different things", () => {
+  // A producer predating #919 has no such concept: no row at all. It
+  // does not send the flag, and it also would not send the value -- but
+  // the flag is what decides, because the Go API re-encodes nil as null
+  // and key presence does not survive that trip.
+  const older = context.__test.hanBridgeViewModel({});
+  assert.equal(older.venueEquity, null);
+  assert.equal(older.venueAvailable, null);
+  const olderThroughGo = context.__test.hanBridgeViewModel({
+    venue_equity_usd: null,
+    venue_available_usd: null,
+  });
+  assert.equal(
+    olderThroughGo.venueEquity,
+    null,
+    "nulls the API invented for an unsupporting producer must not become a row",
+  );
+
+  // A current producer that has not read the account yet: solvency is
+  // UNKNOWN, which is a finding and must stay on screen.
+  const unknown = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: null,
+    venue_available_usd: null,
+  });
+  assert.equal(unknown.venueEquity.label, "-");
+  assert.equal(unknown.venueEquity.tone, "warn");
+  assert.equal(unknown.venueAvailable, "-");
+
+  // A real zero is an alarm and must render as one.
+  const broke = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: 0,
+  });
+  assert.equal(broke.venueEquity.label, "$0.00");
+});
+
+test("unrealized shows only while holding, and null then is itself the finding", () => {
+  assert.equal(
+    context.__test.hanBridgeViewModel(
+      { unrealized_pnl_usd_mid_estimate: 2.31 },
+      { hasPosition: false },
+    ).unrealized,
+    null,
+    "flat: no row at all",
+  );
+  const noMark = context.__test.hanBridgeViewModel(
+    { unrealized_pnl_usd_mid_estimate: null },
+    { hasPosition: true },
+  );
+  assert.equal(
+    noMark.unrealized.label,
+    "-",
+    "holding with no trustworthy mark must stay visible",
+  );
+  const losing = context.__test.hanBridgeViewModel(
+    { unrealized_pnl_usd_mid_estimate: -4.5 },
+    { hasPosition: true },
+  );
+  assert.equal(losing.unrealized.label, "-$4.50");
+  assert.equal(losing.unrealized.tone, "warn");
 });

@@ -75,6 +75,60 @@ independently of the process being observed.
   declares no deadline gets no verdict: the dashboard never infers one from
   `last_sample_at`.
 
+## Solvency is exempt (bot-strategy#919)
+
+One class of number stays visible on a blinded card: what the venue says
+the account holds. Engine B's Han Bridge panel shows `Venue equity`,
+`Available` and, while a position is open, `Unrealized (mid est.)` from
+its `han_bridge` block, regardless of blinding.
+
+The line this draws is the same one the halt pills already sit on. A
+halt is shown because it answers "can this still trade", which is safety;
+its *reason* is withheld because it can embed the running loss, which is
+performance. Account solvency is the safety half of the same question --
+an α candidate that quietly ran out of margin is a study that stopped
+sampling, and "Sampling health" cannot say so if nothing may report the
+balance. For Engine B specifically the peeking risk is close to nil in
+practice: a $100 lot moves a five-figure account by cents, so the equity
+figure is dominated by the deposit, not by the result.
+
+Three rules keep this from becoming a back door:
+
+- **Only the venue's own figures.** No equity *curve*, no drawdown, no
+  win rate, no PnL series -- a point-in-time balance, not a track record.
+- **Absent, null and zero are three different things.** A producer that
+  predates #919 gets no row. A current producer that has not read its
+  account yet publishes `null`, and the card shows the row as "-" toned
+  as a warning -- unknown solvency is a finding, not a reason to hide the
+  row. Only a number renders as money, so "$0.00" always means a real,
+  empty account. Collapsing any two of these would either manufacture a
+  solvency alarm or hide one (`Number(null) === 0` in JS made exactly
+  that mistake once; a test pins it).
+- **Which producer is which is decided by `venue_solvency_reported`, not
+  by whether the key is there.** This document is decoded into Go and
+  re-encoded on the `/api/status` path, and there a nil pointer and an
+  absent key are the same thing: an explicit `null` from the producer
+  reached the browser as a missing field, hiding the row exactly when it
+  should have read "-". The solvency fields therefore carry no
+  `omitempty` — nil must re-encode as `null` — and presence is stated
+  outright by the producer. A Go test walks the whole decode/re-encode
+  path, because the JavaScript view-model tests never cross the server
+  and cannot see this class of bug.
+- **Staleness is judged on the producer's flag first.** `venue_equity_stale`
+  is exact: it says the last read failed. The age beside it is an
+  approximation -- the connector may have served a cached sample -- so it
+  is a secondary signal, and either one tones the row as a warning.
+- **The age counts the time the status document sat still.** A payload
+  that stops arriving freezes `venue_equity_age_secs` at whatever it was
+  when written, so a reading emitted at 290 s would otherwise read as
+  current forever. The card adds the elapsed time since the status
+  timestamp before judging against `HAN_BRIDGE_EQUITY_STALE_SECS`
+  (300 s) and before displaying it. An old balance is "unknown", not
+  "unchanged".
+
+Realized PnL, the equity chart and the lifetime stats stay hidden. So
+does the halt reason.
+
 The generic trading view's equity headline, PnL rows, lifetime stats and equity
 chart are hidden for these targets, along with the risk progress panel (its bars
 state the live drawdown in bps against its threshold) and the book panel's
