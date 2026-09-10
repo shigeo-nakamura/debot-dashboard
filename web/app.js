@@ -2230,11 +2230,6 @@ const isHanBridgeHalted = (data) =>
 // (bot-strategy#919), which is only honest if the age is surfaced.
 const HAN_BRIDGE_EQUITY_STALE_SECS = 300;
 
-// "The producer did not send this field" vs "the producer sent null".
-// Reading the property alone cannot tell them apart, and the difference
-// decides whether a row is hidden or shown as unknown.
-const hasOwn = (obj, key) =>
-  obj != null && Object.prototype.hasOwnProperty.call(obj, key);
 
 // Cents, deliberately, where the rest of the dashboard uses MONEY_DIGITS
 // (1). Those panels report thousands, where a tenth is noise; Engine B
@@ -2290,8 +2285,10 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
   // `holderNumber`, not `parseNumber`: `Number(null)` is 0, so an
   // explicitly-null field would otherwise render as "$0.00" -- an
   // account-drained alarm manufactured out of "not known".
-  const reportsEquity = hasOwn(hanBridge, "venue_equity_usd");
-  const reportsAvailable = hasOwn(hanBridge, "venue_available_usd");
+  // Not key presence: this document is decoded and re-encoded by the
+  // Go API, where a nil pointer and an absent key are the same thing.
+  // The producer states it outright instead (PR #46 Codex review).
+  const reportsSolvency = hanBridge.venue_solvency_reported === true;
   const equityUsd = holderNumber(hanBridge.venue_equity_usd);
   const availableUsd = holderNumber(hanBridge.venue_available_usd);
   const publishedAgeSecs = holderNumber(hanBridge.venue_equity_age_secs);
@@ -2313,7 +2310,7 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
   const stale =
     hanBridge.venue_equity_stale === true ||
     (readingAgeSecs !== null && readingAgeSecs > HAN_BRIDGE_EQUITY_STALE_SECS);
-  const venueEquity = !reportsEquity
+  const venueEquity = !reportsSolvency
     ? null
     : equityUsd === null
       ? { label: "-", tone: "warn" }
@@ -2347,7 +2344,7 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
     today,
     reasons,
     venueEquity,
-    venueAvailable: !reportsAvailable
+    venueAvailable: !reportsSolvency
       ? null
       : availableUsd === null
         ? "-"

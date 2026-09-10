@@ -2006,6 +2006,7 @@ test("solvency survives alpha-candidate blinding, unlike the halt reason", () =>
 
 test("a stale equity reading is annotated with its age, not shown bare", () => {
   const fresh = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
     venue_equity_usd: 5000,
     venue_equity_age_secs: 300,
   });
@@ -2013,6 +2014,7 @@ test("a stale equity reading is annotated with its age, not shown bare", () => {
   assert.equal(fresh.venueEquity.tone, "neutral");
 
   const stale = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
     venue_equity_usd: 5000,
     venue_equity_age_secs: 3600,
   });
@@ -2025,6 +2027,7 @@ test("the producer's own stale flag is enough, whatever the age says", () => {
   // exact. A one-second-old reading whose last refresh failed is not
   // current (pairtrade#316 Codex P2).
   const model = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
     venue_equity_usd: 5000,
     venue_equity_age_secs: 1,
     venue_equity_stale: true,
@@ -2035,7 +2038,11 @@ test("the producer's own stale flag is enough, whatever the age says", () => {
 test("a frozen status payload cannot keep a reading looking current", () => {
   // Emitted at age 290 s, then the producer stopped writing an hour ago.
   // Judging on the published age alone would call this current forever.
-  const hanBridge = { venue_equity_usd: 5000, venue_equity_age_secs: 290 };
+  const hanBridge = {
+    venue_solvency_reported: true,
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 290,
+  };
   const now = 1_800_000_000;
   const live = context.__test.hanBridgeViewModel(hanBridge, {
     statusTsSecs: now,
@@ -2056,14 +2063,27 @@ test("a frozen status payload cannot keep a reading looking current", () => {
 });
 
 test("absent, null and zero equity are three different things", () => {
-  // A producer predating #919 has no such concept: no row at all.
+  // A producer predating #919 has no such concept: no row at all. It
+  // does not send the flag, and it also would not send the value -- but
+  // the flag is what decides, because the Go API re-encodes nil as null
+  // and key presence does not survive that trip.
   const older = context.__test.hanBridgeViewModel({});
   assert.equal(older.venueEquity, null);
   assert.equal(older.venueAvailable, null);
+  const olderThroughGo = context.__test.hanBridgeViewModel({
+    venue_equity_usd: null,
+    venue_available_usd: null,
+  });
+  assert.equal(
+    olderThroughGo.venueEquity,
+    null,
+    "nulls the API invented for an unsupporting producer must not become a row",
+  );
 
   // A current producer that has not read the account yet: solvency is
   // UNKNOWN, which is a finding and must stay on screen.
   const unknown = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
     venue_equity_usd: null,
     venue_available_usd: null,
   });
@@ -2072,7 +2092,10 @@ test("absent, null and zero equity are three different things", () => {
   assert.equal(unknown.venueAvailable, "-");
 
   // A real zero is an alarm and must render as one.
-  const broke = context.__test.hanBridgeViewModel({ venue_equity_usd: 0 });
+  const broke = context.__test.hanBridgeViewModel({
+    venue_solvency_reported: true,
+    venue_equity_usd: 0,
+  });
   assert.equal(broke.venueEquity.label, "$0.00");
 });
 

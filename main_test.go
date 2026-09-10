@@ -109,6 +109,9 @@ func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
 	if hb.VenueEquityStale {
 		t.Fatal("venue_equity_stale decoded as true, want false")
 	}
+	if !hb.VenueSolvencyReported {
+		t.Fatal("venue_solvency_reported decoded as false, want true")
+	}
 	// A producer reporting that its last read failed must survive the
 	// round trip: this is the exact signal the card warns on, and the
 	// age is only an approximation beside it.
@@ -125,6 +128,56 @@ func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
 // zero" must stay distinguishable end to end. A bot that has not yet
 // read its account publishes null, and the card renders "-"; only a real
 // zero renders "$0.00", which is an alarm.
+// The finding this pins is not in the decoder but in what leaves the
+// server. /api/status re-encodes this struct, and a nil pointer with
+// `omitempty` serialises to nothing -- so a producer's explicit null
+// would have reached the browser as an absent field, hiding the row
+// instead of flagging unknown solvency (PR #46 Codex review). The
+// JavaScript view-model tests cannot see this: they never cross the
+// server.
+func TestHanBridgeSolvencySurvivesTheApiRoundTrip(t *testing.T) {
+	const fromProducer = `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_solvency_reported":true,"venue_equity_usd":null,"venue_available_usd":null,"venue_equity_age_secs":null,"venue_equity_stale":true,"unrealized_pnl_usd_mid_estimate":null}}`
+
+	status, err := decodeStatusPayload([]byte(fromProducer))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	reencoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	var toBrowser struct {
+		HanBridge map[string]json.RawMessage `json:"han_bridge"`
+	}
+	if err := json.Unmarshal(reencoded, &toBrowser); err != nil {
+		t.Fatalf("decode what the browser would receive: %v", err)
+	}
+	// The flag is what the frontend keys the row on, so it has to be
+	// there and true.
+	if got, ok := toBrowser.HanBridge["venue_solvency_reported"]; !ok || string(got) != "true" {
+		t.Fatalf("venue_solvency_reported reached the browser as %q (present=%v), want true", got, ok)
+	}
+	// And the unknown values must arrive as explicit nulls, not as
+	// missing keys -- "-" on the card, never a hidden row.
+	for _, field := range []string{
+		"venue_equity_usd",
+		"venue_available_usd",
+		"venue_equity_age_secs",
+		"unrealized_pnl_usd_mid_estimate",
+	} {
+		got, ok := toBrowser.HanBridge[field]
+		if !ok {
+			t.Fatalf("%s was dropped on the way to the browser; an unknown reading must stay visible", field)
+		}
+		if string(got) != "null" {
+			t.Fatalf("%s reached the browser as %q, want null", field, got)
+		}
+	}
+	if got := toBrowser.HanBridge["venue_equity_stale"]; string(got) != "true" {
+		t.Fatalf("venue_equity_stale reached the browser as %q, want true", got)
+	}
+}
+
 func TestHanBridgeVenueSolvencyAbsentAndNullBothDecodeAsUnknown(t *testing.T) {
 	for name, payload := range map[string]string{
 		"absent (a bot predating #919)": `{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[]}}`,
@@ -149,6 +202,12 @@ func TestHanBridgeVenueSolvencyAbsentAndNullBothDecodeAsUnknown(t *testing.T) {
 		}
 		if hb.UnrealizedPnlUsdMidEstimate != nil {
 			t.Fatalf("%s: unrealized = %v, want nil", name, *hb.UnrealizedPnlUsdMidEstimate)
+		}
+		// Neither payload claims to report solvency, so the card hides
+		// the rows in both cases -- including the null one, where the
+		// nulls are the API's own doing rather than the producer's.
+		if hb.VenueSolvencyReported {
+			t.Fatalf("%s: venue_solvency_reported = true, want false", name)
 		}
 	}
 }

@@ -180,28 +180,38 @@ type HanBridgeStatus struct {
 	IneligibleReasons []string `json:"ineligible_reasons"`
 	SessionHaltReason *string  `json:"session_halt_reason,omitempty"`
 	// Venue-reported solvency (bot-strategy#919), rendered even on a
-	// blinded alpha_candidate card -- see deploy/alpha-gate.md. All
-	// pointers: the bot publishes null, not zero, for "not known", and
-	// the difference matters. An equity row showing $0.00 is an alarm;
-	// a row showing "-" is an absent reading. Collapsing the two would
-	// turn a missing field into a solvency emergency, or hide a real
-	// one.
-	VenueEquityUsd    *float64 `json:"venue_equity_usd,omitempty"`
-	VenueAvailableUsd *float64 `json:"venue_available_usd,omitempty"`
+	// blinded alpha_candidate card -- see deploy/alpha-gate.md.
+	//
+	// VenueSolvencyReported is how the frontend tells "this producer has
+	// no such concept" from "this producer has not read its account
+	// yet". It cannot use JSON key presence for that: this struct is
+	// decoded and *re-encoded* on the /api/status path, and a nil
+	// pointer with `omitempty` serialises to nothing, so an explicit
+	// null from the producer would reach the browser as an absent field
+	// and hide the row instead of flagging unknown solvency (PR #46
+	// Codex review). Presence has to travel as data.
+	VenueSolvencyReported bool `json:"venue_solvency_reported"`
+	// Pointers, and deliberately without `omitempty`: the bot publishes
+	// null, not zero, for "not known", and nil must re-encode as null
+	// rather than vanish. An equity row showing $0.00 is an alarm; one
+	// showing "-" is an unread account. Collapsing the two would turn a
+	// missing reading into a solvency emergency, or hide a real one.
+	VenueEquityUsd    *float64 `json:"venue_equity_usd"`
+	VenueAvailableUsd *float64 `json:"venue_available_usd"`
 	// Age of the equity reading. The bot keeps the last value across a
 	// failed refresh and lets this grow rather than blanking it, so a
 	// large age means "unknown", not "unchanged".
-	VenueEquityAgeSecs *int64 `json:"venue_equity_age_secs,omitempty"`
+	VenueEquityAgeSecs *int64 `json:"venue_equity_age_secs"`
 	// The producer's own verdict that its last read failed -- exact,
 	// where the age is an approximation of the venue sample's age. The
 	// frontend treats either one as reason to stop calling the figure
 	// current.
-	VenueEquityStale bool `json:"venue_equity_stale,omitempty"`
+	VenueEquityStale bool `json:"venue_equity_stale"`
 	// Mark-to-mid PnL of the managed position: no fees, no funding, and
 	// null when flat, when the cost basis is unknown, or when no fresh
 	// mark is available. Not the exchange's unrealized figure and not
 	// reconcilable against an account statement (bot-strategy#919).
-	UnrealizedPnlUsdMidEstimate *float64 `json:"unrealized_pnl_usd_mid_estimate,omitempty"`
+	UnrealizedPnlUsdMidEstimate *float64 `json:"unrealized_pnl_usd_mid_estimate"`
 }
 
 // BookDecision is one entry of the book runtime's decision history: the

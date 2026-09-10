@@ -97,13 +97,23 @@ Three rules keep this from becoming a back door:
 - **Only the venue's own figures.** No equity *curve*, no drawdown, no
   win rate, no PnL series -- a point-in-time balance, not a track record.
 - **Absent, null and zero are three different things.** A producer that
-  predates #919 omits the field and gets no row. A current producer that
-  has not read its account yet publishes `null`, and the card shows the
-  row as "-" toned as a warning -- unknown solvency is a finding, not a
-  reason to hide the row. Only a number renders as money, so "$0.00"
-  always means a real, empty account. Collapsing any two of these would
-  either manufacture a solvency alarm or hide one (`Number(null) === 0`
-  in JS made exactly that mistake once; a test pins it).
+  predates #919 gets no row. A current producer that has not read its
+  account yet publishes `null`, and the card shows the row as "-" toned
+  as a warning -- unknown solvency is a finding, not a reason to hide the
+  row. Only a number renders as money, so "$0.00" always means a real,
+  empty account. Collapsing any two of these would either manufacture a
+  solvency alarm or hide one (`Number(null) === 0` in JS made exactly
+  that mistake once; a test pins it).
+- **Which producer is which is decided by `venue_solvency_reported`, not
+  by whether the key is there.** This document is decoded into Go and
+  re-encoded on the `/api/status` path, and there a nil pointer and an
+  absent key are the same thing: an explicit `null` from the producer
+  reached the browser as a missing field, hiding the row exactly when it
+  should have read "-". The solvency fields therefore carry no
+  `omitempty` — nil must re-encode as `null` — and presence is stated
+  outright by the producer. A Go test walks the whole decode/re-encode
+  path, because the JavaScript view-model tests never cross the server
+  and cannot see this class of bug.
 - **Staleness is judged on the producer's flag first.** `venue_equity_stale`
   is exact: it says the last read failed. The age beside it is an
   approximation -- the connector may have served a cached sample -- so it
