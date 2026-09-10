@@ -782,11 +782,13 @@ const createCard = (key) => {
           <div class="row"><span>Execution edge</span><strong data-field="accumulator-edge"></strong></div>
           <div class="benchmark-note" data-field="accumulator-dca-note" hidden></div>
         </div>
-        <div class="row" data-field="accumulator-pnl-row" hidden><span>Price β (unrealized)</span><strong data-field="accumulator-pnl"></strong></div>
-        <div class="row" data-field="accumulator-staking-row"><span>Staking rewards (carry)</span><strong data-field="accumulator-staking"></strong></div>
-        <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
-        <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
-        <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
+        <div class="row-grid accumulator-details">
+          <div class="row" data-field="accumulator-pnl-row" hidden><span>Price β (unrealized)</span><strong data-field="accumulator-pnl"></strong></div>
+          <div class="row" data-field="accumulator-staking-row"><span>Staking rewards (carry)</span><strong data-field="accumulator-staking"></strong></div>
+          <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
+          <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
+          <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
+        </div>
       </div>
       <div data-field="trading-view">
       <div class="equity-headline" data-field="trading-headline">
