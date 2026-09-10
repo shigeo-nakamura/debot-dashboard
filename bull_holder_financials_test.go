@@ -203,6 +203,13 @@ func TestHolderBenchmarkAnchorValidation(t *testing.T) {
 		{"unnamed asset", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{PriceUSD: 1}}}},
 		{"zero anchor price", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 0}}}},
 		{"duplicate leg", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 1}, {Symbol: "BTC", PriceUSD: 2}}}},
+		{"zero units", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{{Symbol: "BTC", PriceUSD: 1, Units: finiteHolderValue(0)}}}},
+		// Half the legs sized from the bot's real book and half from the
+		// declared allocation is two benchmarks added together.
+		{"units on only one leg", HolderAnchor{TS: 1, Assets: []HolderAnchorAsset{
+			{Symbol: "BTC", PriceUSD: 1, Units: finiteHolderValue(1)},
+			{Symbol: "ETH", PriceUSD: 1},
+		}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := anchoredInvestment()
@@ -322,5 +329,50 @@ func TestHolderBookPrefersTheConfiguredUniverseOverOpenLegs(t *testing.T) {
 	// Blank entries are not a leg the anchor has to name.
 	if got := len(holderBook(&BullHolderStatus{ConfiguredSymbols: []string{"BTC", ""}})); got != 1 {
 		t.Fatalf("book size = %d, want 1", got)
+	}
+}
+
+// The entry ladder is what makes explicit quantities necessary: the bot
+// buys `BULL_HOLDER_ENTRY_TRANCHES` times at whatever each day's price
+// is, so the book it ends up holding is not the declared allocation
+// divided by any single price (Codex, PR #51).
+func TestHolderBenchmarkHoldsTheAnchoredQuantitiesWhenGiven(t *testing.T) {
+	v := anchoredInvestment()
+	// The legs are deliberately NOT equal-weight at the anchor: $1000 of
+	// BTC against $200 of ETH. An equal split of the same $1200 would
+	// derive 0.012 BTC / 0.6 ETH, so a benchmark that ignored the
+	// explicit quantities would still price out to the same cost and
+	// pass every total below — the asymmetry is what makes this test
+	// able to fail.
+	v.Anchor.Assets[0].Units = finiteHolderValue(0.02) // $1000 at 50k
+	v.Anchor.Assets[1].Units = finiteHolderValue(0.2)  // $200 at 1k
+	v.Anchor.FundedUSD = finiteHolderValue(1301)
+
+	b, msg := holderBenchmarkFrom(v, map[string]float64{"UBTC": 100000, "UETH": 2000}, nil)
+	if msg != "" || b == nil {
+		t.Fatalf("benchmark unavailable: %q", msg)
+	}
+	if b.Assets[0].Units != 0.02 || b.Assets[1].Units != 0.2 {
+		t.Fatalf("anchored quantities not used: %+v", b.Assets)
+	}
+	if math.Abs(b.CostUSD-1200) > 1e-6 || math.Abs(b.CashUSD-101) > 1e-6 {
+		t.Fatalf("wrong cost/cash split: %+v", b)
+	}
+	// Both marks doubled: $2000 of BTC and $400 of ETH, plus $101 cash.
+	if math.Abs(b.EquityUSD-(2000+400+101)) > 1e-6 {
+		t.Fatalf("wrong benchmark equity: %+v", b)
+	}
+}
+
+func TestHolderBenchmarkRejectsAnchoredQuantitiesAboveTheFundedAccount(t *testing.T) {
+	v := anchoredInvestment()
+	// $1200 of spot at the anchor against $1000 funded: paying for the
+	// gap would make the benchmark levered, the one thing it must not be.
+	v.Anchor.Assets[0].Units = finiteHolderValue(0.02)
+	v.Anchor.Assets[1].Units = finiteHolderValue(0.2)
+	v.Anchor.FundedUSD = finiteHolderValue(1000)
+
+	if b, msg := holderBenchmarkFrom(v, map[string]float64{"UBTC": 100000, "UETH": 2000}, nil); b != nil || msg == "" {
+		t.Fatalf("levered benchmark accepted: %+v", b)
 	}
 }

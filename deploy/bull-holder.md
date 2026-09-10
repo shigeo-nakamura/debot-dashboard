@@ -87,9 +87,11 @@ investment:
       - symbol: BTC
         spot_symbol: UBTC # Hyperliquid spot token used for the current price
         price_usd: 111000 # BTC price at `ts`
+        units: 0.0081     # what the bot actually holds at `ts` (optional)
       - symbol: ETH
         spot_symbol: UETH
         price_usd: 4300
+        units: 0.209
 ```
 
 The anchor must list every leg the bot trades, checked against the producer's
@@ -109,7 +111,15 @@ where the venue's spot token differs (BTC → `UBTC`, ETH → `UETH`).
 
 The benchmark spends `equity_usd × spot_fraction` at the anchor, split equally
 by USD across the legs (matching how the bot deploys the same
-`tranche_spot_usd` into each leg), and leaves the remainder in cash. The bot's
+`tranche_spot_usd` into each leg), and leaves the remainder in cash. That
+derivation is only the bot's book when the bot bought everything at
+`price_usd`, so each asset also takes an optional **`units`** — the quantity the
+benchmark holds — which replaces it. With `units` set the benchmark's cost at
+the anchor is what those quantities were worth then, and the rest of
+`funded_usd` is cash. It is all-or-nothing across the legs: sizing some from the
+bot's real book and the rest from the declared allocation is two benchmarks
+added together, and is rejected. See the cutover procedure below for why a
+laddered entry needs it. The bot's
 leverage and hedge are what the comparison is about, so the benchmark takes none
 of them. It is
 priced from the same public `spotMetaAndAssetCtxs` marks the card already reads,
@@ -159,44 +169,59 @@ control dashboard labels; changing them does not change the bot's investment.
 #### Anchoring at the live cutover (bot-strategy#963)
 
 The anchor is not set yet, and it must not be set from the DRY_RUN run: while
-`dry_run: true` the accounts hold the untouched deposit, so any `funded_usd`
-and prices captured then describe a portfolio the bot never bought.
+`dry_run: true` the accounts hold the untouched deposit, so any `funded_usd` and
+prices captured then describe a portfolio the bot never bought.
 
-**Anchor when the last entry tranche fills, not when the bot goes live.** The
-bot builds the book in `BULL_HOLDER_ENTRY_TRANCHES` equal daily tranches (read
-the count off the `tranches=` field of the running bot's `[CONFIG]` line; it was
-5 as of 2026-09-10) while the
-benchmark above buys the entire spot allocation at one price, at `ts`. Anchoring
-at the first tranche therefore gives buy & hold the whole ladder's worth of
-full exposure
-against a bot that is still averaging in: in a rising ramp the benchmark wins by
-construction and in a falling one the bot does, by an amount that is the same
-order as the excess the card exists to measure. It is the same shape of artifact
-as the $310 phantom outperformance this issue started from — a comparison whose
-two sides do not start from the same thing.
+**Wait for the entry ladder to finish, and capture the quantities it actually
+bought.** The bot builds the book in `BULL_HOLDER_ENTRY_TRANCHES` equal daily
+tranches (read the count off the `tranches=` field of the running bot's
+`[CONFIG]` line; it was 5 as of 2026-09-10), so it ends up holding the sum of
+each tranche's USD at that tranche's own fill price. Two things follow, and both
+have to be handled or the card measures the ladder instead of the strategy:
 
-Anchoring at the **last** tranche makes both sides start fully deployed, from
-the same capital, at the same instant. What it gives up is that the ramp window
-itself is not measured against buy & hold; it is simply part of the capital the
-comparison begins with. That is the honest trade, and it needs no per-tranche
-schema.
+- Anchoring at the *first* tranche gives buy & hold the whole ladder's worth of
+  full exposure against a bot that is still averaging in. In a rising ramp the
+  benchmark wins by construction and in a falling one the bot does.
+- Anchoring at the *last* tranche fixes the timing but not the size. Without
+  `units` the benchmark still derives its quantities from the declared spot
+  allocation divided by the anchor price, which is what the bot would hold had
+  it bought everything at that one price. Matching the totals with `funded_usd`
+  only books the ladder's accumulated P&L as cash; the two sides still hold
+  different amounts of the same asset, and every later move in it shows up as
+  "excess" (Codex, PR #51).
+
+Setting `units` to the bot's real per-leg spot quantity removes both. The
+benchmark then holds exactly the spot book the bot holds, minus the perp leg and
+its margin — which is the comparison the card is for. It also means the ramp
+window itself is not measured against buy & hold; it is part of the capital the
+comparison starts from. That is deliberate: there is no single-price benchmark
+that is honest about a laddered entry.
 
 The procedure, once the owner has flipped the unit out of DRY_RUN and the ladder
 has completed:
 
 1. Confirm the ladder is done from the producer status: `tranches_remaining` is
-   `0` and every configured symbol has a leg. Note the `ts` of that status
-   sample — that is the anchor `ts`.
-2. Read total account equity at that moment (Hyperliquid spot + Lighter) from
-   the card's own account rows, and use it as `funded_usd`. It includes the perp
-   leg's margin buffer on purpose: it is what the card's bot side reads.
-3. Read each leg's price at that `ts` — the same `spotMetaAndAssetCtxs` marks
-   the card prices the benchmark from, so the two agree at `ts` by construction
-   and the first sample shows an excess of ~0. A visibly non-zero excess on the
-   first refresh means the anchor was captured at a different moment than the
-   equity was.
+   `0` and every configured symbol has a leg.
+2. Take **one** dashboard observation and read everything from it: total account
+   equity (Hyperliquid spot + Lighter) as `funded_usd`, each leg's spot quantity
+   as `units`, and each leg's mark as `price_usd`. The equity includes the perp
+   leg's margin buffer on purpose — it is what the card's bot side reads.
+3. Set `ts` to that observation's time, which is the later of
+   `bull_holder.hyperliquid.observed_at` and `bull_holder.lighter.observed_at`
+   in `/api/status` — **not** the producer's own `ts`. Those two clocks are
+   decoupled (`fetchBullHolder` refreshes the accounts on the server's poll
+   cycle while the status file keeps its own heartbeat), and the card's history
+   points are stamped with the account observation, so an anchor labelled with
+   the producer's `ts` is labelled with a moment the equity was never read at.
 4. Verify `config_fp` still equals the producer's, then apply the config with a
    dashboard-only restart.
+
+A correctly captured anchor shows an excess of roughly zero on the first
+refresh, because both sides are then the same book priced by the same marks. A
+visibly non-zero first reading means the three numbers came from different
+moments. Note that this check cannot catch a mislabelled `ts` on its own — the
+benchmark does not re-derive prices from `ts` — so step 3 has to be right by
+construction, not by inspection.
 
 **Any later deposit or withdrawal invalidates `funded_usd`** — the card would
 read the transfer as performance, in exactly the direction of the original bug.

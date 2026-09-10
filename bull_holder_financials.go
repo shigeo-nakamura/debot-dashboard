@@ -46,6 +46,23 @@ type HolderAnchorAsset struct {
 	Symbol     string  `yaml:"symbol" json:"symbol"`
 	SpotSymbol string  `yaml:"spot_symbol" json:"spot_symbol,omitempty"`
 	PriceUSD   float64 `yaml:"price_usd" json:"price_usd"`
+	// Units is the quantity of this leg the benchmark holds. Optional,
+	// and all-or-nothing across the anchor's assets.
+	//
+	// Without it the benchmark derives quantities by splitting the
+	// declared spot allocation equally and dividing by PriceUSD, which
+	// is only the bot's book when the bot bought everything at PriceUSD.
+	// It does not, when BULL_HOLDER_ENTRY_TRANCHES > 1: the bot's
+	// quantity is the sum of each tranche's USD at its own fill price,
+	// so a ladder that ran through moving prices leaves the two sides
+	// holding different amounts of the same asset. Every later move then
+	// shows up as "excess" even though it is a size difference, not the
+	// leverage and hedge the comparison is about (Codex, PR #51).
+	//
+	// Set it from the bot's actual per-leg spot quantity at the cutover
+	// and the benchmark holds the same exposure the bot does, with the
+	// perp leg and its margin left out, which is the whole point.
+	Units *float64 `yaml:"units" json:"units,omitempty"`
 }
 
 func (a HolderAnchorAsset) priceSymbol() string {
@@ -80,12 +97,25 @@ func (a HolderAnchor) validate() error {
 		}
 	}
 	seen := map[string]bool{}
+	withUnits := 0
 	for _, asset := range a.Assets {
 		if asset.Symbol == "" || seen[asset.Symbol] ||
 			finiteHolderValue(asset.PriceUSD) == nil || asset.PriceUSD <= 0 {
 			return errors.New("invalid bull_holder.investment.anchor asset")
 		}
+		if asset.Units != nil {
+			if finiteHolderValue(*asset.Units) == nil || *asset.Units <= 0 {
+				return errors.New("invalid bull_holder.investment.anchor asset units")
+			}
+			withUnits++
+		}
 		seen[asset.Symbol] = true
+	}
+	// All or nothing: a partial set would size some legs from the bot's
+	// real book and the rest from the declared allocation, which is two
+	// different benchmarks added together.
+	if withUnits != 0 && withUnits != len(a.Assets) {
+		return errors.New("bull_holder.investment.anchor: units must be set on every asset or none")
 	}
 	return nil
 }
@@ -168,9 +198,11 @@ type HolderBenchmarkAsset struct {
 // snapshot is fingerprint-bound to the running producer config.
 //
 // Legs are equal-weight by USD at the anchor, matching how the bot
-// deploys a tranche (the same tranche_spot_usd into every leg). A book
-// whose legs are not equal-weight would need explicit weights here
-// rather than a silently wrong benchmark.
+// deploys a tranche (the same tranche_spot_usd into every leg) -- unless
+// the anchor carries explicit per-leg `units`, which describe the book
+// the bot really ended up with and take over both the weights and the
+// cost. A book that is neither equal-weight nor unit-anchored would need
+// explicit weights here rather than a silently wrong benchmark.
 // holderBook is the set of legs the anchor has to cover. The producer
 // only fills `legs` once a tranche has, so before ARM the configured
 // universe is the only description of the book there is — and before ARM
@@ -227,7 +259,22 @@ func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64,
 	// cash beside it is whatever else was funded. Both sides of the
 	// comparison then start at the funded total, which is what the card
 	// reads off the live accounts (bot-strategy#963).
+	// Explicit per-leg quantities win: they describe the book the bot
+	// actually ended the entry ladder holding, and what that book cost at
+	// the anchor is then a consequence, not the declared allocation. The
+	// derived path below is only correct for a book bought in one go at
+	// PriceUSD (Codex, PR #51).
+	explicitUnits := len(anchor.Assets) > 0 && anchor.Assets[0].Units != nil
 	cost := investment.EquityUSD * investment.SpotFraction
+	if explicitUnits {
+		cost = 0
+		for _, asset := range anchor.Assets {
+			cost += *asset.Units * asset.PriceUSD
+		}
+		if finiteHolderValue(cost) == nil || cost <= 0 {
+			return nil, "Benchmark anchor units do not value"
+		}
+	}
 	funded := investment.EquityUSD
 	if anchor.FundedUSD != nil {
 		funded = *anchor.FundedUSD
@@ -254,6 +301,9 @@ func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64,
 			return nil, "Benchmark price unavailable for " + asset.Symbol
 		}
 		units := perLeg / asset.PriceUSD
+		if asset.Units != nil {
+			units = *asset.Units
+		}
 		value := units * price
 		if finiteHolderValue(units) == nil || finiteHolderValue(value) == nil {
 			return nil, "Benchmark valuation unavailable for " + asset.Symbol
