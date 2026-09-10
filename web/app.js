@@ -905,6 +905,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   );
   card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
+  card.classList.toggle("accumulator", accumulator !== null);
   card.style.animationDelay = `${index * 0.04}s`;
 
   const nameEl = card.querySelector('[data-field="name"]');
