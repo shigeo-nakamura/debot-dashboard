@@ -1001,9 +1001,20 @@ body::after {
   }
 }
 .bull-holder-view { margin-top: 16px; }
-/* Keep detailed holder and Arcus panels on their own full-width rows. */
+/* Keep detailed holder, Arcus, and accumulator panels on their own
+   full-width rows. Without this, an accumulator card sharing a bucket
+   with a bull-holder card (both "beta") gets stranded in a narrow
+   leftover single track: auto-fit sizes the grid's columns from the
+   whole bucket (bull-holder's full span keeps those columns from
+   collapsing), so the accumulator card — placed alone in the next row
+   — only fills its own ~270px track instead of stretching, leaving a
+   large blank gap beside it (bot-strategy debot-dashboard, reported
+   from a live screenshot after #48/#49). Full width also gives the
+   two-column detail grid inside the card (.row-grid) room to read
+   cleanly instead of squeezing into a half-width column. */
 .grid > .card.bull-holder,
-.grid > .card.arcus { grid-column: 1 / -1; }
+.grid > .card.arcus,
+.grid > .card.accumulator { grid-column: 1 / -1; }
 .card.bull-holder .risk-panel { display: none; }
 .bull-holder-view h3 { margin: 18px 0 10px; font-size: 15px; }
 .bull-holder-view h4 { margin: 0 0 10px; font-size: 14px; }
