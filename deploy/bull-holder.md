@@ -231,6 +231,15 @@ has completed:
 4. Verify `config_fp` still equals the producer's, then apply the config with a
    dashboard-only restart.
 
+The Hyperliquid account must hold nothing but the benchmark's legs and USDC.
+Anything else — an airdrop, a residual from an earlier strategy — is inside the
+equity captured as `funded_usd`, so the benchmark carries it as a constant while
+the bot's side marks it to market, and the difference is published as excess.
+The first reading still looks correct, which is why the card suppresses the
+benchmark and names the symbol instead (`Hyperliquid account holds X outside the
+benchmark book`) rather than showing a comparison that quietly drifts. Sweep it,
+or make it a leg of the bot and re-anchor.
+
 A correctly captured anchor shows an excess of roughly zero on the first
 refresh, because both sides are then the same book priced by the same marks. A
 visibly non-zero first reading means the three numbers came from different

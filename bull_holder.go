@@ -179,7 +179,7 @@ func fetchBullHolder(ctx context.Context, target TargetConfig, client *http.Clie
 	// Same rule for the benchmark: clear anything the payload carried
 	// before deriving it here from the verified snapshot and public marks.
 	b.Benchmark, b.BenchmarkError = nil, ""
-	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, holderBook(b))
+	b.Benchmark, b.BenchmarkError = holderBenchmarkFrom(b.Investment, marks, holderBook(b), b.HL.Holdings)
 	b.UnrealizedPnL = sumHolderPnL(b.HL, b.Lighter)
 	// Clear any value a future producer might supply before deriving the total.
 	b.TotalEquity = nil

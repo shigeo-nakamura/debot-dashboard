@@ -228,7 +228,7 @@ func holderBook(b *BullHolderStatus) map[string]struct{} {
 	return book
 }
 
-func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64, legs map[string]struct{}) (*HolderBenchmark, string) {
+func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64, legs map[string]struct{}, spot []HolderAsset) (*HolderBenchmark, string) {
 	if investment == nil {
 		return nil, "Verified startup investment settings not configured"
 	}
@@ -253,6 +253,26 @@ func holderBenchmarkFrom(investment *HolderInvestment, marks map[string]float64,
 			if _, ok := legs[asset.Symbol]; !ok {
 				return nil, "Benchmark anchor does not match the book's legs"
 			}
+		}
+	}
+	// Everything in the accounts that is not the benchmark's spot book has
+	// to behave like cash, because cash is what the benchmark holds beside
+	// its legs. A non-USDC Hyperliquid holding outside the book -- an
+	// airdrop, a residual from some earlier strategy -- does not: its value
+	// was inside the account equity the operator captured as funded_usd, so
+	// the benchmark carries it as a constant while the bot's side marks it
+	// to market, and the difference is published as excess. The first
+	// reading still looks right, which is what makes it worth suppressing
+	// rather than annotating (Codex, PR #51). Holdings already excludes
+	// USDC and zero balances, so anything here is a real position.
+	held := map[string]bool{}
+	for _, asset := range anchor.Assets {
+		held[asset.priceSymbol()] = true
+		held[asset.Symbol] = true
+	}
+	for _, asset := range spot {
+		if asset.Symbol != "" && !held[asset.Symbol] {
+			return nil, "Hyperliquid account holds " + asset.Symbol + " outside the benchmark book"
 		}
 	}
 	// The spot the strategy deploys comes from its declared capital; the
