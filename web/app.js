@@ -2864,8 +2864,15 @@ const benchmarkAnchorId = (data) => {
   // anchor price or a leg's spot symbol leaves those unchanged while
   // revaluing every point, and appending the new book to the old series
   // renders that step as return and drawdown (Codex, PR #41).
+  //
+  // The quantities belong in it for the same reason. An anchor can now
+  // carry explicit per-leg `units` (bot-strategy#963), and moving
+  // anchored value between two legs -- 0.02 BTC / 0.2 ETH corrected to
+  // 0.024 / 0.16 at the same anchor prices -- leaves cost, cash, the
+  // timestamp and every price identical while revaluing the book from
+  // the next mark onwards (Codex, PR #51).
   const assets = Array.isArray(benchmark.assets)
-    ? benchmark.assets.map((a) => `${a.symbol}@${a.anchor_price_usd}`).join(",")
+    ? benchmark.assets.map((a) => `${a.symbol}@${a.anchor_price_usd}x${a.units}`).join(",")
     : "";
   return `${benchmark.anchor_ts}|${benchmark.cost_usd}|${benchmark.cash_usd}|${assets}`;
 };

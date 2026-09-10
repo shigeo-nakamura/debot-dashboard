@@ -87,11 +87,11 @@ investment:
       - symbol: BTC
         spot_symbol: UBTC # Hyperliquid spot token used for the current price
         price_usd: 111000 # BTC price at `ts`
-        units: 0.0081     # what the bot actually holds at `ts` (optional)
+        units: 0.00432    # what the bot actually holds at `ts` (optional)
       - symbol: ETH
         spot_symbol: UETH
         price_usd: 4300
-        units: 0.209
+        units: 0.0989
 ```
 
 The anchor must list every leg the bot trades, checked against the producer's
@@ -127,6 +127,12 @@ which are now fetched whether or not an account is configured — a DRY_RUN bot
 owns nothing, and its benchmark still has to be priced. A leg the marks cannot
 price suppresses the whole benchmark rather than dropping that leg, since a
 partial benchmark reads as the bot beating buy & hold.
+
+The sample quantities above are consistent with the rest of the sample anchor:
+`0.00432 × 111000 + 0.0989 × 4300` is $904.79 of spot, inside the `funded_usd:
+1301` the account holds, with the remaining $396.21 as cash. A set of `units`
+worth more than `funded_usd` at the anchor prices is rejected as levered, so an
+example that does not add up is a runbook that suppresses the benchmark.
 
 `funded_usd` is what both sides start from, and it is **not** the same number as
 `equity_usd`. The card's bot side is live account equity — Hyperliquid spot plus

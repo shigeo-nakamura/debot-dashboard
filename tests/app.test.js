@@ -1078,6 +1078,42 @@ test("a changed benchmark anchor restarts the benchmark series without taking th
   assert.equal(context.__test.historyByKey.get(key).length, 2);
 });
 
+// An anchor can carry explicit per-leg quantities (bot-strategy#963), and
+// correcting them is a different book even when nothing else about it
+// moves: shifting anchored value between two legs at the same anchor
+// prices leaves the timestamp, cost, cash, symbols and prices identical
+// while revaluing the book from the next mark onwards (Codex, PR #51).
+test("re-anchored quantities restart the benchmark series even when cost and prices are unchanged", () => {
+  const key = "anchor-units";
+  const book = (btcUnits, ethUnits, equity, observedAt) => ({
+    ts: observedAt,
+    bull_holder: {
+      total_equity_usdc: 1000,
+      benchmark: {
+        anchor_ts: 1000,
+        cost_usd: 1200,
+        cash_usd: 101,
+        equity_usd: equity,
+        assets: [
+          { symbol: "BTC", anchor_price_usd: 50000, units: btcUnits },
+          { symbol: "ETH", anchor_price_usd: 1000, units: ethUnits },
+        ],
+      },
+      hyperliquid: { observed_at: observedAt },
+      lighter: { observed_at: observedAt },
+    },
+  });
+
+  context.__test.updateBenchmarkCache(key, book(0.02, 0.2, 1000, 1_700_000_000));
+  context.__test.updateBenchmarkCache(key, book(0.02, 0.2, 1100, 1_700_000_060));
+  assert.equal(context.__test.benchmarkByKey.get(key).length, 2);
+
+  // 0.024 BTC / 0.16 ETH is the same $1200 at the same anchor prices.
+  const after = context.__test.updateBenchmarkCache(key, book(0.024, 0.16, 1200, 1_700_000_120));
+  assert.equal(after.length, 1);
+  assert.equal(after[0].equity, 1200);
+});
+
 test("a DRY_RUN holder compares nothing, and its ticks stay out of the benchmark series", () => {
   const holder = {
     total_equity_usdc: 1301,
