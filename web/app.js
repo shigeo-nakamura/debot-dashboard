@@ -787,7 +787,7 @@ const createCard = (key) => {
           <div class="row" data-field="accumulator-staking-row"><span>Staking rewards (carry)</span><strong data-field="accumulator-staking"></strong></div>
           <div class="row"><span>Last trade</span><strong data-field="accumulator-last-trade"></strong></div>
           <div class="row"><span>Cadence</span><strong data-field="accumulator-cadence"></strong></div>
-          <div class="row"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
+          <div class="row row-full"><span>Balance observed</span><strong data-field="accumulator-observed"></strong></div>
         </div>
       </div>
       <div data-field="trading-view">

@@ -792,16 +792,29 @@ body::after {
 /* Trailing label/value rows on the HYPE accumulator card (last trade,
    cadence, staking carry, etc.) — two columns instead of one full-width
    row each, matching .accumulator-balances above so the card reads as
-   a compact grid rather than a long vertical list. Falls back to a
-   single column on narrow viewports. */
+   a compact grid rather than a long vertical list. Each cell stacks its
+   label above its value (rather than .row's usual side-by-side
+   space-between) because at half card width, longer labels ("Staking
+   rewards (carry)") and values ("Daily at 12:00:00 UTC") don't have
+   room to sit on one line and wrap badly when forced to. .row-full
+   opts a cell out of the split for values that are long regardless of
+   width (the balance-observed timestamp). Falls back to a single
+   column on narrow viewports. */
 .row-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0 16px;
+  gap: 10px 16px;
 }
 
 .row-grid .row {
-  margin: 8px 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin: 0;
+}
+
+.row-grid .row.row-full {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 480px) {
