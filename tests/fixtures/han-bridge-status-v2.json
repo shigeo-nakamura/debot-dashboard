@@ -42,6 +42,13 @@
     "venue_available_usd": 4952.06,
     "venue_equity_age_secs": 12,
     "venue_equity_stale": false,
-    "unrealized_pnl_usd_mid_estimate": 2.31
-  }
+    "unrealized_pnl_usd_mid_estimate": 2.31,
+    "exit_deadline_us": 1789047900000000,
+    "managed_position_open": true
+  },
+  "window": [
+    1788998400000000,
+    1789021800000000,
+    1789047000000000
+  ]
 }

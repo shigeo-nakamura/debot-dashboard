@@ -126,6 +126,42 @@ Three rules keep this from becoming a back door:
   (300 s) and before displaying it. An old balance is "unknown", not
   "unchanged".
 
+The session schedule is exempt on the same grounds. The card shows what
+this session is still waiting for -- `Entry 06:30 UTC · in 3h12m`,
+`Exit 13:30 UTC · in 2h33m` -- from the frozen trading calendar. It is
+the same three timestamps every session day, so it says nothing about
+how the study is going, and it answers the operational question this
+card otherwise leaves to tribal knowledge: when a restart is safe.
+
+Its real job is the third state. bot-strategy#917 closes an
+unconfirmable exit by leaving the position open on purpose -- a
+documented open position beats a close nobody can verify -- and that
+outcome had no signal anywhere but an e-mail and the journal. Past the
+scheduled exit the row reads `due 13:30 UTC · 5m late`, and once the
+engine has passed its emergency threshold, `force-closing since 13:45
+UTC · 1h late`. Both are warnings. A card that went on reading
+"Entered, holding" indefinitely was the alternative.
+
+Two things this row deliberately does not do:
+
+- **It never treats `has_position` as "Engine B is holding".** That flag
+  counts exposures adopted from the exchange or left behind by a former
+  primary symbol, so on a no-signal day it is true while Engine B opened
+  nothing -- and the row would have announced an exit for a position it
+  never took. `managed_position_open` answers the question the row
+  actually asks. The unrealized row keys on the same flag, since the
+  producer marks only the position it opened.
+- **It never claims an escalation the producer did not report.** The
+  emergency threshold is crossed on the *status document's* timestamp,
+  not the viewer's clock: a payload that froze before the threshold would
+  otherwise drift past it in the browser and the card would report a
+  force-close the engine may never have started. Then it stays on the
+  plain overdue reading.
+
+Times are stated in UTC and labelled as such, because the calendar, the
+runbook and the journal all are; a time silently rendered in the
+viewer's zone would be read against a runbook that means something else.
+
 Realized PnL, the equity chart and the lifetime stats stay hidden. So
 does the halt reason.
 
