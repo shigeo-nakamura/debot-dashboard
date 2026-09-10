@@ -208,17 +208,26 @@ has completed:
 
 1. Confirm the ladder is done from the producer status: `tranches_remaining` is
    `0` and every configured symbol has a leg.
-2. Take **one** dashboard observation and read everything from it: total account
-   equity (Hyperliquid spot + Lighter) as `funded_usd`, each leg's spot quantity
-   as `units`, and each leg's mark as `price_usd`. The equity includes the perp
-   leg's margin buffer on purpose — it is what the card's bot side reads.
+2. Take **one** `/api/status` response and read every number out of that raw
+   JSON — not off the rendered card, which rounds token quantities to four
+   decimal places (`AMOUNT_DIGITS`). On the sample anchor above, that rounding
+   turns `0.00432` BTC into `0.0043`, about $2.22 of exposure the benchmark
+   would then be missing, and every later BTC move would show up as excess.
+   From `bull_holder`:
+   - `funded_usd` = `hyperliquid.equity_usdc` + `lighter.equity_usdc`. It
+     includes the perp leg's margin buffer on purpose — it is what the card's
+     bot side reads.
+   - `units` and `price_usd` per leg = `hyperliquid.holdings[].size` and
+     `.price_usdc` for that leg's spot token (`UBTC`, `UETH`), at full
+     precision. The benchmark holds spot only, so the Lighter perp positions
+     are deliberately not part of it.
 3. Set `ts` to that observation's time, which is the later of
-   `bull_holder.hyperliquid.observed_at` and `bull_holder.lighter.observed_at`
-   in `/api/status` — **not** the producer's own `ts`. Those two clocks are
-   decoupled (`fetchBullHolder` refreshes the accounts on the server's poll
-   cycle while the status file keeps its own heartbeat), and the card's history
-   points are stamped with the account observation, so an anchor labelled with
-   the producer's `ts` is labelled with a moment the equity was never read at.
+   `hyperliquid.observed_at` and `lighter.observed_at` in the same response —
+   **not** the producer's own `ts`. Those two clocks are decoupled
+   (`fetchBullHolder` refreshes the accounts on the server's poll cycle while
+   the status file keeps its own heartbeat), and the card's history points are
+   stamped with the account observation, so an anchor labelled with the
+   producer's `ts` is labelled with a moment the equity was never read at.
 4. Verify `config_fp` still equals the producer's, then apply the config with a
    dashboard-only restart.
 
