@@ -133,7 +133,8 @@ so those balances are the untouched deposit: the bot's side is a constant and an
 "excess" would only track the market falling. The four rows read "-" with that
 reason, and no benchmark samples are cached, so the drawdown comparison begins
 at the moment the bot goes live rather than dragging in a flat pre-live stretch.
-The anchor can be configured before then; it simply stays dormant.
+The anchor is accepted before then and simply stays dormant, but the values to
+put in it do not exist yet — see below.
 
 Four rows are shown. **Excess vs b&h** is current combined equity minus the
 benchmark, in USDC and percent. **Max DD** and **Calmar** are computed for both
@@ -154,6 +155,56 @@ perp notional target is capital × perp fraction. They are NOT account balances,
 required margin, remaining tranche amounts, or an enforced investment cap.
 ADD can extend the cycle beyond the initial allocation. These settings only
 control dashboard labels; changing them does not change the bot's investment.
+
+#### Anchoring at the live cutover (bot-strategy#963)
+
+The anchor is not set yet, and it must not be set from the DRY_RUN run: while
+`dry_run: true` the accounts hold the untouched deposit, so any `funded_usd`
+and prices captured then describe a portfolio the bot never bought.
+
+**Anchor when the last entry tranche fills, not when the bot goes live.** The
+bot builds the book in `BULL_HOLDER_ENTRY_TRANCHES` equal daily tranches (read
+the count off the `tranches=` field of the running bot's `[CONFIG]` line; it was
+5 as of 2026-09-10) while the
+benchmark above buys the entire spot allocation at one price, at `ts`. Anchoring
+at the first tranche therefore gives buy & hold the whole ladder's worth of
+full exposure
+against a bot that is still averaging in: in a rising ramp the benchmark wins by
+construction and in a falling one the bot does, by an amount that is the same
+order as the excess the card exists to measure. It is the same shape of artifact
+as the $310 phantom outperformance this issue started from — a comparison whose
+two sides do not start from the same thing.
+
+Anchoring at the **last** tranche makes both sides start fully deployed, from
+the same capital, at the same instant. What it gives up is that the ramp window
+itself is not measured against buy & hold; it is simply part of the capital the
+comparison begins with. That is the honest trade, and it needs no per-tranche
+schema.
+
+The procedure, once the owner has flipped the unit out of DRY_RUN and the ladder
+has completed:
+
+1. Confirm the ladder is done from the producer status: `tranches_remaining` is
+   `0` and every configured symbol has a leg. Note the `ts` of that status
+   sample — that is the anchor `ts`.
+2. Read total account equity at that moment (Hyperliquid spot + Lighter) from
+   the card's own account rows, and use it as `funded_usd`. It includes the perp
+   leg's margin buffer on purpose: it is what the card's bot side reads.
+3. Read each leg's price at that `ts` — the same `spotMetaAndAssetCtxs` marks
+   the card prices the benchmark from, so the two agree at `ts` by construction
+   and the first sample shows an excess of ~0. A visibly non-zero excess on the
+   first refresh means the anchor was captured at a different moment than the
+   equity was.
+4. Verify `config_fp` still equals the producer's, then apply the config with a
+   dashboard-only restart.
+
+**Any later deposit or withdrawal invalidates `funded_usd`** — the card would
+read the transfer as performance, in exactly the direction of the original bug.
+There is no way to net a transfer out of a single-anchor benchmark, so re-anchor
+at the transfer using the same four steps. Re-anchoring restarts the comparison:
+the old excess and the cached drawdown window are discarded, and the card begins
+again from ~0. Record when and why in the issue, so a discontinuity in the
+series is not later read as a jump in performance.
 
 ### Actual unrealized PnL
 
