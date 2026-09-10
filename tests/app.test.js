@@ -2099,6 +2099,16 @@ test("absent, null and zero equity are three different things", () => {
   assert.equal(broke.venueEquity.label, "$0.00");
 });
 
+test("an unmanaged exposure gets no unrealized row either", () => {
+  // The producer marks only the position it opened, so a "-" here on a
+  // day Engine B took nothing would read as "holding, cannot mark".
+  const model = context.__test.hanBridgeViewModel(
+    { unrealized_pnl_usd_mid_estimate: null },
+    { hasPosition: true },
+  );
+  assert.equal(model.unrealized, null);
+});
+
 test("unrealized shows only while holding, and null then is itself the finding", () => {
   assert.equal(
     context.__test.hanBridgeViewModel(
@@ -2109,7 +2119,7 @@ test("unrealized shows only while holding, and null then is itself the finding",
     "flat: no row at all",
   );
   const noMark = context.__test.hanBridgeViewModel(
-    { unrealized_pnl_usd_mid_estimate: null },
+    { managed_position_open: true, unrealized_pnl_usd_mid_estimate: null },
     { hasPosition: true },
   );
   assert.equal(
@@ -2118,7 +2128,7 @@ test("unrealized shows only while holding, and null then is itself the finding",
     "holding with no trustworthy mark must stay visible",
   );
   const losing = context.__test.hanBridgeViewModel(
-    { unrealized_pnl_usd_mid_estimate: -4.5 },
+    { managed_position_open: true, unrealized_pnl_usd_mid_estimate: -4.5 },
     { hasPosition: true },
   );
   assert.equal(losing.unrealized.label, "-$4.50");
@@ -2149,7 +2159,7 @@ test("the schedule row counts down to whatever the session is still waiting for"
   // Holding, exit still ahead.
   const holding = schedule({
     window: SESSION.window,
-    hasPosition: true,
+    managedPositionOpen: true,
     dayEntered: true,
     nowSecs: SESSION.t2 - 2 * 3600 - 33 * 60,
   });
@@ -2162,29 +2172,65 @@ test("an exit that was due and has not happened is the row's real job", () => {
   const schedule = context.__test.hanBridgeScheduleViewModel;
   const deadline = SESSION.t2 + 900;
 
-  // Past the scheduled exit, still retrying.
+  // Past the scheduled exit, still inside its window.
   const late = schedule({
     window: SESSION.window,
-    hasPosition: true,
+    managedPositionOpen: true,
     dayEntered: true,
     exitDeadlineSecs: deadline,
+    statusTsSecs: SESSION.t2 + 5 * 60,
     nowSecs: SESSION.t2 + 5 * 60,
   });
   assert.equal(late.text, "due 13:30 UTC · 5m late");
   assert.equal(late.tone, "warn");
 
-  // Past the deadline: the engine has stopped retrying and the position
-  // stays open by design (bot-strategy#917). Without this row nothing on
-  // the card ever says so.
-  const abandoned = schedule({
+  // Past the emergency threshold, and the producer was running then:
+  // the engine has stopped waiting for the boundary and is forcing a
+  // close. An escalation, not an abandonment -- it retries harder past
+  // this point, not less (pairtrade#319 Codex review).
+  const escalating = schedule({
     window: SESSION.window,
-    hasPosition: true,
+    managedPositionOpen: true,
     dayEntered: true,
     exitDeadlineSecs: deadline,
+    statusTsSecs: SESSION.t2 + 3600,
     nowSecs: SESSION.t2 + 3600,
   });
-  assert.equal(abandoned.text, "abandoned, still open 13:30 UTC · 1h late");
-  assert.equal(abandoned.tone, "warn");
+  assert.equal(escalating.text, "force-closing since 13:45 UTC · 1h late");
+  assert.equal(escalating.tone, "warn");
+});
+
+test("escalation is only claimed when the producer was still running for it", () => {
+  // The payload froze five minutes after t2 and the browser clock has
+  // since run past the threshold. The engine may never have reached it,
+  // so the honest reading is the plain overdue one (PR #47 Codex review).
+  const frozen = context.__test.hanBridgeScheduleViewModel({
+    window: SESSION.window,
+    managedPositionOpen: true,
+    dayEntered: true,
+    exitDeadlineSecs: SESSION.t2 + 900,
+    statusTsSecs: SESSION.t2 + 5 * 60,
+    nowSecs: SESSION.t2 + 3600,
+  });
+  assert.equal(frozen.text, "due 13:30 UTC · 1h late");
+  assert.equal(frozen.tone, "warn");
+});
+
+test("an unmanaged exposure is not an Engine B exit", () => {
+  // `has_position` counts exposures adopted from the exchange or left
+  // by a former primary symbol. On a no-signal day that flag is true
+  // while Engine B opened nothing, and this row must stay silent rather
+  // than announce an exit for a position it never took.
+  assert.equal(
+    context.__test.hanBridgeScheduleViewModel({
+      window: SESSION.window,
+      managedPositionOpen: false,
+      dayEntered: true,
+      dayExited: false,
+      nowSecs: SESSION.t2 + 3600,
+    }),
+    null,
+  );
 });
 
 test("the schedule row is absent whenever nothing is pending", () => {
@@ -2205,7 +2251,7 @@ test("the schedule row is absent whenever nothing is pending", () => {
       window: SESSION.window,
       dayEntered: true,
       dayExited: true,
-      hasPosition: true,
+      managedPositionOpen: true,
       nowSecs: SESSION.t2 + 60,
     }),
     null,
@@ -2218,7 +2264,7 @@ test("the schedule row is absent whenever nothing is pending", () => {
     schedule({
       window: SESSION.window,
       dayEntered: true,
-      hasPosition: false,
+      managedPositionOpen: false,
       nowSecs: SESSION.t1 + 60,
     }),
     null,
@@ -2229,7 +2275,7 @@ test("the schedule is stated in UTC, matching the runbook and the journal", () =
   const schedule = context.__test.hanBridgeScheduleViewModel;
   const row = schedule({
     window: SESSION.window,
-    hasPosition: true,
+    managedPositionOpen: true,
     dayEntered: true,
     nowSecs: SESSION.t2 - 60,
   });

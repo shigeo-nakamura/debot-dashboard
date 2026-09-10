@@ -1334,11 +1334,12 @@ const updateCard = (card, target, pollSecs, index, key) => {
         nowSecs,
         schedule: hanBridgeScheduleViewModel({
           window: data.window,
-          hasPosition: Boolean(data.has_position),
+          managedPositionOpen: hanBridge.managed_position_open === true,
           dayEntered: Boolean(hanBridge.day_entered),
           dayExited: Boolean(hanBridge.day_exited),
           exitDeadlineSecs:
             exitDeadlineUs === null ? null : Math.floor(exitDeadlineUs / 1e6),
+          statusTsSecs: holderNumber(data.ts),
           nowSecs,
         }),
         killSwitchActive: target.kill_switch_active === true,
@@ -2282,10 +2283,11 @@ const utcHm = (secs) => {
 // happen is worse than no row.
 const hanBridgeScheduleViewModel = ({
   window = null,
-  hasPosition = false,
+  managedPositionOpen = false,
   dayEntered = false,
   dayExited = false,
   exitDeadlineSecs = null,
+  statusTsSecs = null,
   nowSecs,
 }) => {
   if (!Array.isArray(window) || window.length < 3) return null;
@@ -2293,7 +2295,12 @@ const hanBridgeScheduleViewModel = ({
   const t1 = Math.floor(t1Us / 1e6);
   const t2 = Math.floor(t2Us / 1e6);
   if (dayExited) return null;
-  if (hasPosition) {
+  // `managed_position_open`, never the document's `has_position`: that
+  // one counts exposures adopted from the exchange or left by a former
+  // primary symbol, so on a no-signal day it would have this row
+  // announcing an exit for a position Engine B never opened
+  // (PR #47 Codex review).
+  if (managedPositionOpen) {
     if (nowSecs < t2) {
       return {
         label: "Exit",
@@ -2301,14 +2308,26 @@ const hanBridgeScheduleViewModel = ({
         tone: "neutral",
       };
     }
-    // Past the scheduled exit and still holding. Before the deadline
-    // the engine is still retrying; after it, it has stopped and the
-    // position stays open by design (bot-strategy#917). Both are worth
-    // seeing, and the second is the one nobody would otherwise notice.
-    const gaveUp = exitDeadlineSecs !== null && nowSecs >= exitDeadlineSecs;
+    // Past the scheduled exit and still holding. Past the emergency
+    // threshold the engine stops waiting for the boundary and forces a
+    // close -- it tries *harder*, so this is an escalation, not an
+    // abandonment (pairtrade#319 Codex review).
+    //
+    // And it is claimed only when the producer itself was still running
+    // at that point. A payload that froze before the threshold would
+    // otherwise cross it on the viewer's clock alone, and the card would
+    // report an escalation the engine may never have reached
+    // (PR #47 Codex review). Then the honest reading is the plain
+    // overdue one.
+    const escalating =
+      exitDeadlineSecs !== null &&
+      statusTsSecs !== null &&
+      statusTsSecs >= exitDeadlineSecs;
     return {
       label: "Exit",
-      text: `${gaveUp ? "abandoned, still open" : "due"} ${utcHm(t2)} · ${formatAge((nowSecs - t2) * 1000)} late`,
+      text: escalating
+        ? `force-closing since ${utcHm(exitDeadlineSecs)} · ${formatAge((nowSecs - t2) * 1000)} late`
+        : `due ${utcHm(t2)} · ${formatAge((nowSecs - t2) * 1000)} late`,
       tone: "warn",
     };
   }
@@ -2323,6 +2342,8 @@ const hanBridgeScheduleViewModel = ({
 };
 
 const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false, statusTsSecs = null, nowSecs = Math.floor(Date.now() / 1000) } = {}) => {
+  // "Engine B is holding", as opposed to "the account holds something".
+  const managedPositionOpen = hanBridge.managed_position_open === true;
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -2400,11 +2421,15 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
               : hanBridgeUsd(equityUsd),
           tone: stale ? "warn" : "neutral",
         };
-  // Unrealized is shown only while a position is held. Null then is
-  // itself the finding -- holding with no trustworthy mark -- so the row
-  // stays and reads "-" instead of disappearing.
+  // Shown only while *this engine's own* position is held, for the same
+  // reason the schedule row is: the producer computes this mark from
+  // the managed position alone and has no cost basis for an exposure it
+  // did not open, so on a day when only an unmanaged exposure exists
+  // `has_position` is true and this row would read "-" as though Engine
+  // B were holding something it cannot mark. Null while genuinely
+  // holding is itself the finding, so the row stays and reads "-" then.
   const unrealizedUsd = holderNumber(hanBridge.unrealized_pnl_usd_mid_estimate);
-  const unrealized = !hasPosition
+  const unrealized = !managedPositionOpen
     ? null
     : {
         label: unrealizedUsd === null ? "-" : hanBridgeUsd(unrealizedUsd),

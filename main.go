@@ -212,12 +212,17 @@ type HanBridgeStatus struct {
 	// mark is available. Not the exchange's unrealized figure and not
 	// reconcilable against an account statement (bot-strategy#919).
 	UnrealizedPnlUsdMidEstimate *float64 `json:"unrealized_pnl_usd_mid_estimate"`
-	// When today's exit stops being retried and the day is abandoned
-	// with the position still open (microseconds). Nil when nothing is
-	// open. bot-strategy#917 leaves an unconfirmable close open on
-	// purpose, so "the exit was due and did not happen" is a real state
-	// with no other signal on this card.
+	// The emergency-close threshold for the open position
+	// (microseconds), nil when nothing is open. NOT "when retrying
+	// stops": past it the engine stops waiting for the scheduled
+	// boundary and force-closes, trying harder rather than less
+	// (pairtrade#319 Codex review).
 	ExitDeadlineUs *int64 `json:"exit_deadline_us"`
+	// A position this engine opened and manages is open. Distinct from
+	// the top-level HasPosition, which counts exposures adopted from the
+	// exchange or left behind by a former primary symbol -- those make
+	// the account flag true on a day Engine B opened nothing.
+	ManagedPositionOpen bool `json:"managed_position_open"`
 }
 
 // BookDecision is one entry of the book runtime's decision history: the

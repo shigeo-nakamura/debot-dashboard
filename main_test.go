@@ -125,6 +125,22 @@ func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
 	if hb.ExitDeadlineUs == nil || *hb.ExitDeadlineUs != 1789047900000000 {
 		t.Fatalf("exit_deadline_us = %v, want 1789047900000000", hb.ExitDeadlineUs)
 	}
+	if !hb.ManagedPositionOpen {
+		t.Fatal("managed_position_open decoded as false, want true")
+	}
+	// The two position questions must stay separable end to end: the
+	// account holds something (top level) is not the same as Engine B
+	// opened it (han_bridge).
+	unmanagedOnly, err := decodeStatusPayload([]byte(`{"id":"engine-b-live","has_position":true,"han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"managed_position_open":false}}`))
+	if err != nil {
+		t.Fatalf("decode unmanaged-only payload: %v", err)
+	}
+	if !unmanagedOnly.HasPosition {
+		t.Fatal("has_position decoded as false, want true")
+	}
+	if unmanagedOnly.HanBridge.ManagedPositionOpen {
+		t.Fatal("managed_position_open decoded as true, want false")
+	}
 	// A producer reporting that its last read failed must survive the
 	// round trip: this is the exact signal the card warns on, and the
 	// age is only an approximation beside it.
