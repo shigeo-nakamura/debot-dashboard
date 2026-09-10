@@ -192,6 +192,11 @@ type HanBridgeStatus struct {
 	// failed refresh and lets this grow rather than blanking it, so a
 	// large age means "unknown", not "unchanged".
 	VenueEquityAgeSecs *int64 `json:"venue_equity_age_secs,omitempty"`
+	// The producer's own verdict that its last read failed -- exact,
+	// where the age is an approximation of the venue sample's age. The
+	// frontend treats either one as reason to stop calling the figure
+	// current.
+	VenueEquityStale bool `json:"venue_equity_stale,omitempty"`
 	// Mark-to-mid PnL of the managed position: no fees, no funding, and
 	// null when flat, when the cost basis is unknown, or when no fresh
 	// mark is available. Not the exchange's unrealized figure and not

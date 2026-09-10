@@ -2020,13 +2020,57 @@ test("a stale equity reading is annotated with its age, not shown bare", () => {
   assert.equal(stale.venueEquity.tone, "warn");
 });
 
-test("a missing or null equity is unknown, never $0.00", () => {
-  // A bot predating #919, and one whose first read has not landed.
-  for (const hanBridge of [{}, { venue_equity_usd: null, venue_available_usd: null }]) {
-    const model = context.__test.hanBridgeViewModel(hanBridge);
-    assert.equal(model.venueEquity, null);
-    assert.equal(model.venueAvailable, null);
-  }
+test("the producer's own stale flag is enough, whatever the age says", () => {
+  // The age is an approximation of the venue sample's age; the flag is
+  // exact. A one-second-old reading whose last refresh failed is not
+  // current (pairtrade#316 Codex P2).
+  const model = context.__test.hanBridgeViewModel({
+    venue_equity_usd: 5000,
+    venue_equity_age_secs: 1,
+    venue_equity_stale: true,
+  });
+  assert.equal(model.venueEquity.tone, "warn");
+});
+
+test("a frozen status payload cannot keep a reading looking current", () => {
+  // Emitted at age 290 s, then the producer stopped writing an hour ago.
+  // Judging on the published age alone would call this current forever.
+  const hanBridge = { venue_equity_usd: 5000, venue_equity_age_secs: 290 };
+  const now = 1_800_000_000;
+  const live = context.__test.hanBridgeViewModel(hanBridge, {
+    statusTsSecs: now,
+    nowSecs: now,
+  });
+  assert.equal(live.venueEquity.tone, "neutral", "just written: still current");
+
+  const frozen = context.__test.hanBridgeViewModel(hanBridge, {
+    statusTsSecs: now - 3600,
+    nowSecs: now,
+  });
+  assert.equal(frozen.venueEquity.tone, "warn");
+  assert.equal(
+    frozen.venueEquity.label,
+    "$5,000.00 · 1h4m old",
+    "the displayed age counts the time the document sat still",
+  );
+});
+
+test("absent, null and zero equity are three different things", () => {
+  // A producer predating #919 has no such concept: no row at all.
+  const older = context.__test.hanBridgeViewModel({});
+  assert.equal(older.venueEquity, null);
+  assert.equal(older.venueAvailable, null);
+
+  // A current producer that has not read the account yet: solvency is
+  // UNKNOWN, which is a finding and must stay on screen.
+  const unknown = context.__test.hanBridgeViewModel({
+    venue_equity_usd: null,
+    venue_available_usd: null,
+  });
+  assert.equal(unknown.venueEquity.label, "-");
+  assert.equal(unknown.venueEquity.tone, "warn");
+  assert.equal(unknown.venueAvailable, "-");
+
   // A real zero is an alarm and must render as one.
   const broke = context.__test.hanBridgeViewModel({ venue_equity_usd: 0 });
   assert.equal(broke.venueEquity.label, "$0.00");

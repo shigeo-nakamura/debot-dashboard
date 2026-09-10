@@ -96,15 +96,25 @@ Three rules keep this from becoming a back door:
 
 - **Only the venue's own figures.** No equity *curve*, no drawdown, no
   win rate, no PnL series -- a point-in-time balance, not a track record.
-- **Null is not zero.** The bot publishes `null` for "not read yet" and
-  the card renders "-". A row reading "$0.00" therefore always means a
-  real, empty account. Collapsing the two would either manufacture a
-  solvency alarm or hide one (`Number(null) === 0` in JS made exactly
-  this mistake once; a test pins it).
-- **Age travels with the value.** A failed refresh keeps the last reading
-  and lets its age grow rather than restamping it; past
-  `HAN_BRIDGE_EQUITY_STALE_SECS` (300 s) the card annotates it and tones
-  it as a warning. An old balance is "unknown", not "unchanged".
+- **Absent, null and zero are three different things.** A producer that
+  predates #919 omits the field and gets no row. A current producer that
+  has not read its account yet publishes `null`, and the card shows the
+  row as "-" toned as a warning -- unknown solvency is a finding, not a
+  reason to hide the row. Only a number renders as money, so "$0.00"
+  always means a real, empty account. Collapsing any two of these would
+  either manufacture a solvency alarm or hide one (`Number(null) === 0`
+  in JS made exactly that mistake once; a test pins it).
+- **Staleness is judged on the producer's flag first.** `venue_equity_stale`
+  is exact: it says the last read failed. The age beside it is an
+  approximation -- the connector may have served a cached sample -- so it
+  is a secondary signal, and either one tones the row as a warning.
+- **The age counts the time the status document sat still.** A payload
+  that stops arriving freezes `venue_equity_age_secs` at whatever it was
+  when written, so a reading emitted at 290 s would otherwise read as
+  current forever. The card adds the elapsed time since the status
+  timestamp before judging against `HAN_BRIDGE_EQUITY_STALE_SECS`
+  (300 s) and before displaying it. An old balance is "unknown", not
+  "unchanged".
 
 Realized PnL, the equity chart and the lifetime stats stay hidden. So
 does the halt reason.

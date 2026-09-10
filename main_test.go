@@ -106,6 +106,19 @@ func TestHanBridgeVenueSolvencyDecodes(t *testing.T) {
 	if hb.UnrealizedPnlUsdMidEstimate == nil || *hb.UnrealizedPnlUsdMidEstimate != 2.31 {
 		t.Fatalf("unrealized = %v, want 2.31", hb.UnrealizedPnlUsdMidEstimate)
 	}
+	if hb.VenueEquityStale {
+		t.Fatal("venue_equity_stale decoded as true, want false")
+	}
+	// A producer reporting that its last read failed must survive the
+	// round trip: this is the exact signal the card warns on, and the
+	// age is only an approximation beside it.
+	failing, err := decodeStatusPayload([]byte(`{"id":"engine-b-live","han_bridge":{"kr_primary_symbol":"SKHY","us_primary_symbol":"SNDK","ineligible_reasons":[],"venue_equity_usd":5000,"venue_equity_stale":true}}`))
+	if err != nil {
+		t.Fatalf("decode failing payload: %v", err)
+	}
+	if !failing.HanBridge.VenueEquityStale {
+		t.Fatal("venue_equity_stale decoded as false, want true")
+	}
 }
 
 // The whole point of the pointer types: "not reported" and "reported as

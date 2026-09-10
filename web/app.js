@@ -1325,6 +1325,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     if (hanBridge) {
       renderHanBridgeStatus(card, hanBridge, {
         hasPosition: Boolean(data.has_position),
+        // So the equity reading's age counts the time this document has
+        // been sitting still, not only the age it claimed when written.
+        statusTsSecs: holderNumber(data.ts),
         killSwitchActive: target.kill_switch_active === true,
         // Engine B is an α candidate, and this view copies the
         // producer's halt reason verbatim (Codex, PR #40).
@@ -2227,6 +2230,12 @@ const isHanBridgeHalted = (data) =>
 // (bot-strategy#919), which is only honest if the age is surfaced.
 const HAN_BRIDGE_EQUITY_STALE_SECS = 300;
 
+// "The producer did not send this field" vs "the producer sent null".
+// Reading the property alone cannot tell them apart, and the difference
+// decides whether a row is hidden or shown as unknown.
+const hasOwn = (obj, key) =>
+  obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+
 // Cents, deliberately, where the rest of the dashboard uses MONEY_DIGITS
 // (1). Those panels report thousands, where a tenth is noise; Engine B
 // trades a $100 lot whose whole result lives in cents -- at one digit a
@@ -2242,7 +2251,7 @@ const hanBridgeUsd = (value) =>
     maximumFractionDigits: 2,
   });
 
-const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false } = {}) => {
+const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive = false, blindResult = false, statusTsSecs = null, nowSecs = Math.floor(Date.now() / 1000) } = {}) => {
   const reasons = Array.isArray(hanBridge.ineligible_reasons)
     ? hanBridge.ineligible_reasons
     : [];
@@ -2267,29 +2276,55 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
   // margin is a study that stopped sampling, not a result being peeked
   // at (deploy/alpha-gate.md, bot-strategy#919).
   //
-  // Nothing here infers a value it was not given. `venue_equity_usd` is
-  // absent on a bot that predates #919 and null while the first read has
-  // not succeeded; both render "-" rather than "$0.00", because an
-  // equity row reading zero is an alarm and must never be manufactured
-  // from a missing field.
-  // `holderNumber`, not `parseNumber`: `Number(null)` is 0, so a field
-  // the bot explicitly published as null would render as "$0.00" -- an
-  // account-drained alarm manufactured out of "not known". A test pins
-  // this.
+  // Three distinct states, and collapsing any two of them loses
+  // something an operator needs:
+  //   field absent  -> a producer predating #919. It has no concept of
+  //                    venue equity, so the row does not belong on its
+  //                    card at all: hide it.
+  //   field null    -> a current producer that has not read the account
+  //                    yet, or whose reads are failing. Solvency is
+  //                    UNKNOWN, which is a finding: show the row as "-"
+  //                    and tone it as a warning (PR #46 Codex review).
+  //   a number      -> render it. "$0.00" therefore always means a real,
+  //                    empty account.
+  // `holderNumber`, not `parseNumber`: `Number(null)` is 0, so an
+  // explicitly-null field would otherwise render as "$0.00" -- an
+  // account-drained alarm manufactured out of "not known".
+  const reportsEquity = hasOwn(hanBridge, "venue_equity_usd");
+  const reportsAvailable = hasOwn(hanBridge, "venue_available_usd");
   const equityUsd = holderNumber(hanBridge.venue_equity_usd);
   const availableUsd = holderNumber(hanBridge.venue_available_usd);
-  const ageSecs = holderNumber(hanBridge.venue_equity_age_secs);
-  const stale = ageSecs !== null && ageSecs > HAN_BRIDGE_EQUITY_STALE_SECS;
-  const venueEquity =
-    equityUsd === null
+  const publishedAgeSecs = holderNumber(hanBridge.venue_equity_age_secs);
+  // `venue_equity_age_secs` is the age *as of when the status document
+  // was written*. A payload that stops arriving freezes it, so a reading
+  // emitted at 290 s would read as current forever; and even a healthy
+  // card is polled somewhere between the producer's refreshes. Add the
+  // time since the status timestamp before judging or displaying it
+  // (PR #46 Codex review).
+  const statusElapsedSecs =
+    statusTsSecs === null ? 0 : Math.max(0, nowSecs - statusTsSecs);
+  const readingAgeSecs =
+    publishedAgeSecs === null
       ? null
+      : Math.max(0, publishedAgeSecs) + statusElapsedSecs;
+  // The producer's own flag is exact -- it says the last read failed --
+  // where the age is an approximation of the venue sample's age. Either
+  // one is enough to stop calling the figure current.
+  const stale =
+    hanBridge.venue_equity_stale === true ||
+    (readingAgeSecs !== null && readingAgeSecs > HAN_BRIDGE_EQUITY_STALE_SECS);
+  const venueEquity = !reportsEquity
+    ? null
+    : equityUsd === null
+      ? { label: "-", tone: "warn" }
       : {
           // The age is appended only once it means something. A fresh
           // reading needs no annotation; a stale one must not pass as
           // current.
-          label: stale
-            ? `${hanBridgeUsd(equityUsd)} · ${formatAge(ageSecs * 1000)} old`
-            : hanBridgeUsd(equityUsd),
+          label:
+            stale && readingAgeSecs !== null
+              ? `${hanBridgeUsd(equityUsd)} · ${formatAge(readingAgeSecs * 1000)} old`
+              : hanBridgeUsd(equityUsd),
           tone: stale ? "warn" : "neutral",
         };
   // Unrealized is shown only while a position is held. Null then is
@@ -2312,7 +2347,11 @@ const hanBridgeViewModel = (hanBridge, { hasPosition = false, killSwitchActive =
     today,
     reasons,
     venueEquity,
-    venueAvailable: availableUsd === null ? null : hanBridgeUsd(availableUsd),
+    venueAvailable: !reportsAvailable
+      ? null
+      : availableUsd === null
+        ? "-"
+        : hanBridgeUsd(availableUsd),
     unrealized,
     // Engine B is an α candidate, and a producer's halt reason can embed
     // the loss that caused it. A blinded card names the state; every

@@ -40,6 +40,7 @@
     "venue_equity_usd": 5002.31,
     "venue_available_usd": 4952.06,
     "venue_equity_age_secs": 12,
+    "venue_equity_stale": false,
     "unrealized_pnl_usd_mid_estimate": 2.31
   }
 }
