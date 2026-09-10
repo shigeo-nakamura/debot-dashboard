@@ -789,6 +789,27 @@ body::after {
   gap: 8px 16px;
 }
 
+/* Trailing label/value rows on the HYPE accumulator card (last trade,
+   cadence, staking carry, etc.) — two columns instead of one full-width
+   row each, matching .accumulator-balances above so the card reads as
+   a compact grid rather than a long vertical list. Falls back to a
+   single column on narrow viewports. */
+.row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.row-grid .row {
+  margin: 8px 0;
+}
+
+@media (max-width: 480px) {
+  .row-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .card.degraded .equity-headline {
   background: rgba(220, 38, 38, 0.06);
 }
