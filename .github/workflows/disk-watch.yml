@@ -32,6 +32,15 @@ jobs:
             region: eu-central-1
           - name: arcus
             region: eu-central-1
+          # Tokyo Robinhood Lighter host (i-0095af4fe0efbc5dd): engine-b-live,
+          # the Engine B Phase 0 observer (~5 GB/day of SQLite, hourly S3
+          # archive with 24 h retention -- bot-strategy#915) and the
+          # book-runtime DRY_RUN. Added when the Grafana disk alert was
+          # retired (bot-strategy#1014); the hourly archiver's preflight
+          # stops draining when free space drops below ~4x a partition,
+          # so a page here means the observer will fill the root volume.
+          - name: robinhood
+            region: ap-northeast-1
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -44,11 +53,18 @@ jobs:
         env:
           FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
           ARCUS_INSTANCE_ID: ${{ secrets.ARCUS_INSTANCE_ID }}
+          ROBINHOOD_INSTANCE_ID: ${{ secrets.ROBINHOOD_INSTANCE_ID }}
         run: |
           case "${{ matrix.name }}" in
-            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
-            arcus) echo "id=$ARCUS_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            frankfurt) id="$FRANKFURT_INSTANCE_ID" ;;
+            arcus) id="$ARCUS_INSTANCE_ID" ;;
+            robinhood) id="$ROBINHOOD_INSTANCE_ID" ;;
           esac
+          if [ -z "$id" ]; then
+            echo "::error::instance-ID secret for ${{ matrix.name }} is not set in the disk-watch environment"
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Run disk check via SSM
         id: ssm
@@ -141,8 +157,10 @@ jobs:
           set -euo pipefail
 
           # Route auto-created issues to the GitHub Projects v2 board.
-          # frankfurt goes to project #3 (pairtrade); arcus goes to
-          # project #6 (Arcus, bot-strategy#758). PROJECTS_TOKEN is a
+          # frankfurt goes to project #5 (strategy; the old #3 pairtrade
+          # board was deleted 2026-09-08), arcus to #6 (Arcus,
+          # bot-strategy#758), robinhood to #8 (Engine B, whose observer
+          # is what fills that host). PROJECTS_TOKEN is a
           # fine-grained PAT with user-account Projects RW; the default
           # GITHUB_TOKEN cannot write user-scope projects.
           add_to_project() {
@@ -151,9 +169,10 @@ jobs:
               echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
               return 0
             fi
-            local project_num=3
+            local project_num=5
             case "$NAME" in
               arcus) project_num=6 ;;
+              robinhood) project_num=8 ;;
             esac
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \

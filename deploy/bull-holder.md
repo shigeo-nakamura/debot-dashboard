@@ -299,7 +299,7 @@ reflected in equity and is never added to equity a second time.
   USDC as the numeraire; they do not model USDC/USD depegging.
 - Actual account assets remain separate from simulated bot holdings in DRY_RUN.
   Holder values are excluded from the existing fleet trading PnL, return,
-  drawdown, position aggregates and generic trading Prometheus metrics.
+  drawdown and position aggregates.
   Fleet target/health counts still include the card. Missing account data or
   a bot halt makes it degraded. Producer `ts` controls liveness independently
   of account queries (180 seconds), so fresh balances cannot hide a stale bot.
