@@ -62,28 +62,3 @@ func TestArcusSchemaAndFreshnessConfig(t *testing.T) {
 		t.Fatal("negative threshold accepted")
 	}
 }
-
-func TestArcusMetricsExcludeInventedTradingValues(t *testing.T) {
-	mc := newMetricsCollector()
-	mc.Update(DashboardSnapshot{Targets: []TargetStatus{{Name: "Arcus", ServiceStatus: "degraded", Status: &StatusData{TS: time.Now().Unix(), Arcus: &arcusstatus.Status{}, PnlTotal: 3000, PnlToday: 50, PositionCount: 2}}}})
-	families, err := mc.registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seenAge := false
-	for _, f := range families {
-		switch f.GetName() {
-		case "debot_pnl_total_usd", "debot_pnl_today_usd", "debot_position_count", "debot_kill_switch_active":
-			t.Fatalf("invented Arcus metric %s", f.GetName())
-		case "debot_status_age_seconds":
-			seenAge = true
-		case "debot_service_active":
-			if f.Metric[0].Gauge.GetValue() != 0 {
-				t.Fatal("degraded Arcus counted as active")
-			}
-		}
-	}
-	if !seenAge {
-		t.Fatal("missing operational freshness")
-	}
-}

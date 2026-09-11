@@ -596,14 +596,12 @@ func main() {
 
 	cache := &StatusCache{}
 	s3pool := &S3ClientPool{clients: map[string]*s3.Client{}}
-	mc := newMetricsCollector()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pollLoop(ctx, cfg, s3pool, cache, mc)
+	go pollLoop(ctx, cfg, s3pool, cache)
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", mc.Handler())
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		rangeParam := strings.TrimSpace(r.URL.Query().Get("range"))
 		includeHistory, cutoffMs := historyCutoff(rangeParam)
@@ -772,14 +770,11 @@ func matchBasicAuth(user, pass string, auth BasicAuth) bool {
 	return userMatch && passMatch
 }
 
-func pollLoop(ctx context.Context, cfg Config, s3pool *S3ClientPool, cache *StatusCache, mc *metricsCollector) {
+func pollLoop(ctx context.Context, cfg Config, s3pool *S3ClientPool, cache *StatusCache) {
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
 	fetch := func() {
 		snapshot := fetchAll(ctx, cfg, s3pool, false, 0)
 		cache.Set(snapshot)
-		if mc != nil {
-			mc.Update(snapshot)
-		}
 	}
 	fetch()
 	ticker := time.NewTicker(pollInterval)

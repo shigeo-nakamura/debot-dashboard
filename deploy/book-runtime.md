@@ -49,21 +49,6 @@ count when any of these hold:
 A `pending_residual` is deliberately *not* a halt: the runtime is still
 working the window and will retry inside it.
 
-## Prometheus
-
-The collector dispatches book targets the same way the UI does:
-
-| Gauge | Book source |
-|---|---|
-| `debot_pnl_total_usd` (documented as total equity) | `book.equity_usd`, not the top-level `pnl_total` (which is PnL against the equity reference) |
-| `debot_current_equity_usd` | `book.equity_usd` |
-| `debot_session_halted` | `book.session_halted` **or** `book.equity_ready == false` — an equity outage blocks every opening intent, which is what an alert on this gauge is asking about |
-| `debot_daily_risk_halted` | `book.daily_halted` |
-
-A book payload has no `session_risk` / `daily_risk` block, so without this
-mapping its halts would never reach Prometheus even while the card is
-marked unhealthy.
-
 ## Fleet aggregates
 
 - **Equity total** takes `book.equity_usd`, not the top-level `pnl_total`

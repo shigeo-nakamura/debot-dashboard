@@ -42,7 +42,8 @@ jobs:
               echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
               return 0
             fi
-            local project_num=3
+            # Project #3 (pairtrade) was deleted 2026-09-08; #5 is the strategy board.
+            local project_num=5
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \
               || echo "::warning::Failed to add $issue_url to project #$project_num"
@@ -310,7 +311,8 @@ jobs:
               echo "::warning::PROJECTS_TOKEN unset — skipping project link for $issue_url"
               return 0
             fi
-            local project_num=3
+            # Project #3 (pairtrade) was deleted 2026-09-08; #5 is the strategy board.
+            local project_num=5
             GH_TOKEN="$PROJECTS_TOKEN" gh project item-add "$project_num" \
               --owner shigeo-nakamura --url "$issue_url" \
               || echo "::warning::Failed to add $issue_url to project #$project_num"
