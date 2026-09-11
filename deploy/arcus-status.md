@@ -56,8 +56,8 @@ read-only. There are no trading controls in the dashboard.
   balances/limits/losses display unknown rather than zero. Quote time is
   available only for a matching rotation plan; an observation is not a quote.
 - Inventory and loss values do not enter fleet trading PnL, CAGR, win rate,
-  position counts, charts or trading Prometheus gauges. Arcus participates
-  in fleet health, halt counts and operational metrics.
+  position counts or charts. Arcus participates in fleet health and halt
+  counts.
 - Source contracts: runtime checkpoint v1, execution ledger v2, event
   envelope v1. Unknown versions degrade monitoring. The public payload is
   schema v1. Projection uses floating point only for display, never orders.
