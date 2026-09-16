@@ -162,6 +162,13 @@ func (a *AccumulatorStatus) StakingRewards() float64 {
 // itself a PnL figure.
 type AccumulatorOperations struct {
 	SpentUSDC float64 `json:"spent_usdc"`
+	// LastDecisionAt is the boundary of the newest pacing decision the
+	// durable runtime holds (RFC 3339). With the decision slot handed to
+	// the scheduled live unit (bot-strategy#1028) nothing else records
+	// one, so a day on which that unit silently failed leaves this value a
+	// day old — see applyAccumulatorDecisionStaleness. Pointer: the bot
+	// emits null before its first decision.
+	LastDecisionAt *string `json:"last_decision_at"`
 }
 
 // HanBridgeStatus is the Engine B (bot-strategy#866/#872, codename "Han
@@ -816,6 +823,7 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			}
 			results[i].Gate = resolveGate(target.Gate, gate, time.Now())
 			applyAccumulatorDCA(ctx, results[i].Status, target.Accumulator, http.DefaultClient, time.Now())
+			applyAccumulatorDecisionStaleness(results[i].Status, time.Now())
 		}()
 	}
 	wg.Wait()

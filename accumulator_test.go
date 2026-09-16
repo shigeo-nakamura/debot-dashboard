@@ -252,3 +252,94 @@ func TestDailyClosesDropTheStillOpenCandleAndRetryAfterAFailure(t *testing.T) {
 		t.Fatalf("failure held past its TTL: %q %v", msg, closes)
 	}
 }
+
+func TestApplyAccumulatorDecisionStalenessDegradesOnlyAMissedDailyDecision(t *testing.T) {
+	last := "2026-09-15T12:00:00Z"
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	fresh := func() *StatusData {
+		return &StatusData{
+			Accumulator:    &AccumulatorStatus{Healthy: true, TradeCadence: "Daily at 12:00 UTC"},
+			AccumulatorOps: &AccumulatorOperations{LastDecisionAt: &last},
+		}
+	}
+
+	// Within a day and one hour of the last decision: nothing changes —
+	// the next decision is not due yet, or may still be in its restart
+	// window.
+	s := fresh()
+	applyAccumulatorDecisionStaleness(s, at("2026-09-16T13:00:00Z"))
+	if !s.Accumulator.Healthy || s.Accumulator.HealthReason != nil {
+		t.Fatalf("25h after the last decision must still be healthy: %+v", s.Accumulator)
+	}
+
+	// Past that: degraded, with the age and the unit to check.
+	s = fresh()
+	applyAccumulatorDecisionStaleness(s, at("2026-09-16T13:00:01Z"))
+	if s.Accumulator.Healthy || s.Accumulator.HealthReason == nil {
+		t.Fatalf("a missed daily decision must degrade the card: %+v", s.Accumulator)
+	}
+	if !strings.Contains(*s.Accumulator.HealthReason, "no pacing decision since 2026-09-15T12:00:00Z") ||
+		!strings.Contains(*s.Accumulator.HealthReason, "hype-accumulator-live.service") {
+		t.Fatalf("reason must name the last decision and the unit: %q", *s.Accumulator.HealthReason)
+	}
+
+	// A bot-reported reason is never overwritten.
+	s = fresh()
+	own := "HYPE attribution unavailable"
+	s.Accumulator.Healthy, s.Accumulator.HealthReason = false, &own
+	applyAccumulatorDecisionStaleness(s, at("2026-09-20T12:00:00Z"))
+	if s.Accumulator.HealthReason != &own {
+		t.Fatalf("bot-reported reason overwritten: %q", *s.Accumulator.HealthReason)
+	}
+
+	// Not a daily cadence, no operations block, no decision yet, or an
+	// unparseable timestamp: never accused of missing a day.
+	s = fresh()
+	s.Accumulator.TradeCadence = "Weekly on Mondays"
+	applyAccumulatorDecisionStaleness(s, at("2026-09-20T12:00:00Z"))
+	if !s.Accumulator.Healthy {
+		t.Fatal("non-daily cadence must not be degraded")
+	}
+	s = fresh()
+	s.AccumulatorOps = nil
+	applyAccumulatorDecisionStaleness(s, at("2026-09-20T12:00:00Z"))
+	if !s.Accumulator.Healthy {
+		t.Fatal("hype-status payload without operations must not be degraded")
+	}
+	s = fresh()
+	s.AccumulatorOps.LastDecisionAt = nil
+	applyAccumulatorDecisionStaleness(s, at("2026-09-20T12:00:00Z"))
+	if !s.Accumulator.Healthy {
+		t.Fatal("a bot that has not decided yet must not be degraded")
+	}
+	s = fresh()
+	garbage := "yesterday"
+	s.AccumulatorOps.LastDecisionAt = &garbage
+	applyAccumulatorDecisionStaleness(s, at("2026-09-20T12:00:00Z"))
+	if !s.Accumulator.Healthy {
+		t.Fatal("an unparseable timestamp must not be degraded")
+	}
+	applyAccumulatorDecisionStaleness(nil, at("2026-09-20T12:00:00Z"))
+}
+
+func TestAccumulatorOperationsParsesLastDecisionAt(t *testing.T) {
+	var ops AccumulatorOperations
+	if err := json.Unmarshal([]byte(`{"spent_usdc": 49.18287, "last_decision_at": "2026-09-14T12:00:00Z", "last_fill_at": null}`), &ops); err != nil {
+		t.Fatal(err)
+	}
+	if ops.LastDecisionAt == nil || *ops.LastDecisionAt != "2026-09-14T12:00:00Z" {
+		t.Fatalf("last_decision_at not parsed: %+v", ops)
+	}
+	if err := json.Unmarshal([]byte(`{"spent_usdc": 0, "last_decision_at": null}`), &ops); err != nil {
+		t.Fatal(err)
+	}
+	if ops.LastDecisionAt != nil {
+		t.Fatal("null must parse as absent")
+	}
+}

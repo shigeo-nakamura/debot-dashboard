@@ -416,3 +416,48 @@ func applyAccumulatorDCA(ctx context.Context, status *StatusData, cfg *Accumulat
 		status.Accumulator, status.AccumulatorOps, cfg.DCA, closes, closesErr, now,
 	)
 }
+
+// missedDecisionAfter is how long after the newest pacing decision the
+// next one is considered missed. The cadence is one decision per UTC day at
+// the schedule boundary (12:00 UTC on the live host), so the next decision is
+// expected exactly 24h after the last; the extra hour covers the timer's
+// 30 s offset, a bounded restart series (4 × 120 s) and clock skew, without
+// letting a genuinely missed day masquerade as "still pending".
+const missedDecisionAfter = 25 * time.Hour
+
+// applyAccumulatorDecisionStaleness degrades the HYPE accumulator card when
+// the bot has gone more than a day without recording a pacing decision
+// (bot-strategy#1028). The bot's own `healthy` flag covers balances and
+// attribution only; once the recurring cycle observes instead of deciding,
+// a scheduled live unit that never ran leaves the day's slot silently open
+// — nothing in the payload flips, `last_decision_at` just ages. This is the
+// one place that ageing becomes visible to an operator. It only ever
+// degrades a card that reports itself healthy and only for a daily cadence,
+// so a bot-reported reason is never overwritten and a bot that does not
+// decide daily is never accused of missing a day.
+func applyAccumulatorDecisionStaleness(status *StatusData, now time.Time) {
+	if status == nil || status.Accumulator == nil || status.AccumulatorOps == nil {
+		return
+	}
+	a := status.Accumulator
+	if !a.Healthy || !strings.HasPrefix(strings.ToLower(a.TradeCadence), "daily") {
+		return
+	}
+	if status.AccumulatorOps.LastDecisionAt == nil {
+		return
+	}
+	last, err := time.Parse(time.RFC3339Nano, *status.AccumulatorOps.LastDecisionAt)
+	if err != nil {
+		return
+	}
+	age := now.Sub(last)
+	if age <= missedDecisionAfter {
+		return
+	}
+	reason := fmt.Sprintf(
+		"no pacing decision since %s (%.1fh ago; cadence %s) — the scheduled live unit may have failed, check hype-accumulator-live.service",
+		last.UTC().Format(time.RFC3339), age.Hours(), a.TradeCadence,
+	)
+	a.Healthy = false
+	a.HealthReason = &reason
+}
