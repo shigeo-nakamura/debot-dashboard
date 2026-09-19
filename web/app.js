@@ -924,6 +924,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.classList.toggle("accumulator", accumulator !== null);
+  // Full-row card like the other two-venue holders: the points-hedge
+  // section plus the KPI panel and positions do not read in a quarter
+  // track (bot-strategy#1046).
+  card.classList.toggle("hedge-holder", isHedgeHolderStatus(data));
   card.style.animationDelay = `${index * 0.04}s`;
 
   const nameEl = card.querySelector('[data-field="name"]');
