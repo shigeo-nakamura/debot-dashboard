@@ -2394,4 +2394,14 @@ test("hedge holder renders into the card rows and counts as a fleet halt", () =>
   assert.equal(fleetValue("fleet-halts"), "1");
   // Two legs on two venues are one hedge, not two pairtrade pairs.
   assert.equal(fleetValue("fleet-positions-total"), "1");
+  // ... and so is a single leg (mid-build, or one side closed by a guard):
+  // never the pairtrade "0.5 pairs".
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { ...fixture, position_count: 1, positions: [fixture.positions[0]] } },
+  ]);
+  assert.equal(fleetValue("fleet-positions-total"), "1");
+  assert.equal(fleetValue("fleet-halts"), "0");
+  // A halted holder is an unhealthy target (services down), like a halted book.
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } }), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
 });

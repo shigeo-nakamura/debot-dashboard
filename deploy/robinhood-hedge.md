@@ -17,7 +17,12 @@ position per leg, `kill_switch_active`) and adds:
 - the `subsidy` block (`deploy/subsidy-kpi.md`), so the KPI panel reads
   **cost per point since ARM**: `units_total` = the long account's live points
   since ARM (from the points collector's history, bot-strategy#938),
-  `cost_total_usd` = −(equity change since ARM);
+  `cost_total_usd` = −(equity change since ARM). The panel's generic labels
+  say "since start" / "Cumulative": on this card that means **the current
+  book**, from its ARM. A DISARM followed by a new ARM resets both figures
+  (the bot re-bases points and equity at every ARM), so the cost of an
+  earlier book is not in the number — the per-book readout on
+  bot-strategy#1046 is where cycles are compared;
 - a `hedge_holder` block rendered as an extra section: mode
   (Off / Building / Holding / Unwinding / Halted), the two leg sizes against
   the target, whether the legs are equal (warn past the bot's tolerance),

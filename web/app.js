@@ -566,9 +566,13 @@ const updateFleetSummary = (targets) => {
     if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
       if (data.positions_ready !== false && typeof data.position_count === "number") {
         // A cross-sectional book holds one position per symbol; only
-        // pairtrade's legs come in pairs (see the halving below).
+        // pairtrade's legs come in pairs (see the halving below). The
+        // cross-venue hedge is one position whether it currently holds
+        // both legs or, mid-build or after a guard, only one.
         if (isBookStatus(data)) {
           bookPositionsTotal += data.position_count;
+        } else if (isHedgeHolderStatus(data)) {
+          bookPositionsTotal += data.position_count > 0 ? 1 : 0;
         } else {
           positionsTotal += data.position_count;
         }
@@ -1118,6 +1122,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (data.circuit_breaker && data.circuit_breaker.active === true) ||
     isHanBridgeHalted(data) ||
     isBookHalted(data) ||
+    isHedgeHolderHalted(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
@@ -2784,7 +2789,8 @@ const isTargetUnhealthy = (target) => {
   return serviceUnhealthy || Boolean(target.error) || (accumulator !== null && accumulator.healthy !== true)
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
     || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)))
-    || isBookHalted(target.status);
+    || isBookHalted(target.status)
+    || isHedgeHolderHalted(target.status);
 };
 
 const formatHype = (value) => {
