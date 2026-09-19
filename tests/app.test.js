@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, hedgeHolderViewModel, renderHedgeHolderStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2320,4 +2320,88 @@ test("the schedule is stated in UTC, matching the runbook and the journal", () =
     /^13:30 UTC/,
     "a time silently rendered in the viewer's zone would be read against a runbook that means something else",
   );
+});
+
+test("hedge holder view model: holding, lopsided, halted, flat", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/hedge-holder-status-v1.json`, "utf8"));
+  assert.equal(context.__test.isHedgeHolderStatus(fixture), true);
+  assert.equal(context.__test.isHedgeHolderHalted(fixture), false);
+  const held = context.__test.hedgeHolderViewModel(fixture.hedge_holder);
+  assert.equal(held.mode.label, "Holding");
+  assert.equal(held.mode.tone, "ok");
+  assert.equal(held.book, "0.247 / 0.247 BTC (target 0.247 ≈ 20,000.0 USDC)");
+  assert.equal(held.net.label, "yes");
+  assert.equal(held.net.tone, "ok");
+  assert.equal(held.headroom.label, "21.1% / 18.8%");
+  assert.equal(held.headroom.tone, "neutral");
+  assert.equal(held.basis, "+3.10 bps");
+  assert.equal(held.pnl, "-4.0 USDC");
+  assert.equal(held.halt, null);
+
+  // Mid-build: one clip filled long only → Building, legs not equal (warn past tolerance).
+  const building = context.__test.hedgeHolderViewModel({
+    ...fixture.hedge_holder,
+    net_qty: 0.123,
+    net_usd: 10000,
+    legs: { long: { ...fixture.hedge_holder.legs.long, qty: 0.123 }, short: { ...fixture.hedge_holder.legs.short, qty: 0, liq_headroom_pct: null } },
+  });
+  assert.equal(building.mode.label, "Building");
+  assert.equal(building.net.tone, "warn");
+  assert.equal(building.net.label, "off by +10,000.0 USDC (tol 500.0 USDC)");
+  assert.equal(building.headroom.label, "21.1% / -");
+
+  // Liquidation guard fired: halted, Exited, low headroom flagged, halt row carries the reason.
+  const halted = context.__test.hedgeHolderViewModel({
+    ...fixture.hedge_holder,
+    mode: "Exited",
+    exit_reason: "liq_guard",
+    halted: true,
+    halt_reason: "liq_guard: short venue headroom 7.9% < 8.0%",
+    legs: { ...fixture.hedge_holder.legs, short: { ...fixture.hedge_holder.legs.short, liq_headroom_pct: 7.9 } },
+  });
+  assert.equal(halted.mode.label, "Halted (Exited)");
+  assert.equal(halted.mode.tone, "warn");
+  assert.equal(halted.headroom.tone, "warn");
+  assert.equal(halted.halt, "liq_guard: short venue headroom 7.9% < 8.0%");
+  assert.equal(context.__test.isHedgeHolderHalted({ hedge_holder: { halted: true } }), true);
+
+  // Flat and Off: nothing held, no target.
+  const flat = context.__test.hedgeHolderViewModel({ mode: "Off", halted: false, target_qty: 0, legs: {} });
+  assert.equal(flat.mode.label, "Off");
+  assert.equal(flat.mode.tone, "neutral");
+  assert.equal(flat.book, "flat");
+  assert.equal(flat.headroom.label, "- / -");
+  assert.equal(flat.pnl, "-");
+});
+
+test("hedge holder renders into the card rows and counts as a fleet halt", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/hedge-holder-status-v1.json`, "utf8"));
+  const fields = new Map();
+  const card = { querySelector(selector) {
+    if (!fields.has(selector)) fields.set(selector, { textContent: "", hidden: null, classList: { add() {}, remove() {} } });
+    return fields.get(selector);
+  } };
+  context.__test.renderHedgeHolderStatus(card, fixture.hedge_holder);
+  const value = (name) => fields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("hedge-mode"), "Holding");
+  assert.equal(value("hedge-basis"), "+3.10 bps");
+  assert.equal(fields.get('[data-field="hedge-halt-row"]').hidden, true);
+
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } },
+  ]);
+  const fleetValue = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(fleetValue("fleet-halts"), "1");
+  // Two legs on two venues are one hedge, not two pairtrade pairs.
+  assert.equal(fleetValue("fleet-positions-total"), "1");
+  // ... and so is a single leg (mid-build, or one side closed by a guard):
+  // never the pairtrade "0.5 pairs".
+  context.__test.updateFleetSummary([
+    { service_status: "active", status: { ...fixture, position_count: 1, positions: [fixture.positions[0]] } },
+  ]);
+  assert.equal(fleetValue("fleet-positions-total"), "1");
+  assert.equal(fleetValue("fleet-halts"), "0");
+  // A halted holder is an unhealthy target (services down), like a halted book.
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } }), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
 });

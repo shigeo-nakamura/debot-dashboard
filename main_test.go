@@ -413,3 +413,79 @@ func assertNoForbiddenFields(t *testing.T, value any, path string) {
 		}
 	}
 }
+
+const hedgeHolderV1FixturePath = "tests/fixtures/hedge-holder-status-v1.json"
+
+// The cross-venue points hedge (bot-strategy#1046) publishes the generic
+// top level the card already renders plus a hedge_holder block. Both
+// halves must survive the decode: the top-level subsidy block is the
+// cost-per-point KPI's denominator, and the block's nullable fields must
+// stay nullable across the /api/status re-encode.
+func TestHedgeHolderDecodes(t *testing.T) {
+	payload, err := os.ReadFile(hedgeHolderV1FixturePath)
+	if err != nil {
+		t.Fatalf("read hedge_holder fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	h := status.HedgeHolder
+	if h == nil {
+		t.Fatal("hedge_holder status missing")
+	}
+	if h.Mode != "On" || h.Halted || h.HaltReason != nil {
+		t.Fatalf("mode/halt = %q/%v/%v, want On/false/nil", h.Mode, h.Halted, h.HaltReason)
+	}
+	if h.PnlSinceArmUsd == nil || *h.PnlSinceArmUsd != -4.0 {
+		t.Fatalf("pnl_since_arm_usd = %v, want -4", h.PnlSinceArmUsd)
+	}
+	long, ok := h.Legs["long"]
+	if !ok || long.Instance != "rh" || long.Qty != 0.247 {
+		t.Fatalf("long leg = %+v, want rh 0.247", long)
+	}
+	if long.LiqHeadroomPct == nil || *long.LiqHeadroomPct != 21.096 {
+		t.Fatalf("long liq_headroom_pct = %v, want 21.096", long.LiqHeadroomPct)
+	}
+	// Generic half: equity as pnl_total, two positions, the subsidy ledger.
+	if status.PnlTotal != 8490.0 || status.PositionCount != 2 || len(status.Positions) != 2 {
+		t.Fatalf("generic top level = pnl_total %v positions %d/%d", status.PnlTotal, status.PositionCount, len(status.Positions))
+	}
+	if status.Subsidy == nil || status.Subsidy.UnitsTotal == nil || *status.Subsidy.UnitsTotal != 7.0 {
+		t.Fatalf("subsidy = %+v, want units_total 7", status.Subsidy)
+	}
+	if status.Subsidy.CostTotalUSD == nil || *status.Subsidy.CostTotalUSD != 4.0 {
+		t.Fatalf("subsidy cost_total_usd = %v, want 4", status.Subsidy.CostTotalUSD)
+	}
+	// Re-encode: an empty leg's null headroom must reach the browser as
+	// null, not vanish (the frontend renders "-" for null and would
+	// otherwise show nothing).
+	empty, err := decodeStatusPayload([]byte(`{"id":"xvenue_hedge_holder","hedge_holder":{"mode":"Off","halted":true,"halt_reason":"liq_guard: short venue headroom 7.9% < 8%","legs":{"long":{"instance":"rh","side":"long","qty":0,"notional_usd":0,"mark":81000,"equity_usd":4000,"liq_headroom_pct":null}}}}`))
+	if err != nil {
+		t.Fatalf("decode empty-leg payload: %v", err)
+	}
+	out, err := json.Marshal(empty.HedgeHolder)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if !strings.Contains(string(out), `"liq_headroom_pct":null`) {
+		t.Fatalf("null headroom did not survive re-encode: %s", out)
+	}
+	var back HedgeHolderStatus
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("decode re-encoded block: %v", err)
+	}
+	if back.HaltReason == nil || *back.HaltReason != "liq_guard: short venue headroom 7.9% < 8%" {
+		t.Fatalf("halt_reason did not survive re-encode: %v", back.HaltReason)
+	}
+	// Bucket taxonomy: the new service is a subsidy bot, so an undeclared
+	// target inherits it and a contradicting declaration is refused.
+	target := TargetConfig{Service: "debot-xvenue-hedge-holder"}
+	if err := resolveBucket(&target); err != nil || target.Bucket != BucketSubsidy {
+		t.Fatalf("resolveBucket = %v / %q, want nil / %q", err, target.Bucket, BucketSubsidy)
+	}
+	target = TargetConfig{Service: "debot-xvenue-hedge-holder", Bucket: BucketBeta}
+	if err := resolveBucket(&target); err == nil {
+		t.Fatal("a beta declaration for the hedge holder was accepted")
+	}
+}

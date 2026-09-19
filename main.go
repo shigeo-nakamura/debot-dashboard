@@ -232,6 +232,54 @@ type HanBridgeStatus struct {
 	ManagedPositionOpen bool `json:"managed_position_open"`
 }
 
+// HedgeHolderLeg is one side of the cross-venue points hedge
+// (bot-strategy#1046): the leg's size and the venue's own equity behind it.
+type HedgeHolderLeg struct {
+	Instance    string  `json:"instance"`
+	Side        string  `json:"side"`
+	Qty         float64 `json:"qty"`
+	NotionalUsd float64 `json:"notional_usd"`
+	Mark        float64 `json:"mark"`
+	EquityUsd   float64 `json:"equity_usd"`
+	// Percentage points of notional between the venue's equity and its
+	// maintenance requirement; nil while the leg is empty. Pointer without
+	// omitempty so the producer's null re-encodes as null (the han_bridge
+	// lesson: a vanished field reads as "no such concept").
+	LiqHeadroomPct *float64 `json:"liq_headroom_pct"`
+}
+
+// HedgeHolderStatus is the xvenue_hedge_holder block (bot-strategy#1046):
+// a BTC long on Lighter on Robinhood Chain hedged by an equal short on
+// Lighter Core, held for the weekly points drop. Like han_bridge it is an
+// *additional* section beside the generic trading view: the producer's
+// top level already carries equity as pnl_total, one position per leg and
+// the subsidy (points / cost since ARM) block. The questions specific to
+// a hedge are whether the two legs are still equal, how far each venue is
+// from liquidating its side, and what the book has cost since it was
+// armed.
+type HedgeHolderStatus struct {
+	Mode              string                    `json:"mode"`
+	Halted            bool                      `json:"halted"`
+	HaltReason        *string                   `json:"halt_reason"`
+	KillSwitch        bool                      `json:"kill_switch"`
+	TargetQty         float64                   `json:"target_qty"`
+	TargetNotionalUsd float64                   `json:"target_notional_usd"`
+	ArmedAt           *int64                    `json:"armed_at"`
+	ExitedAt          *int64                    `json:"exited_at"`
+	ExitReason        *string                   `json:"exit_reason"`
+	Cycles            uint64                    `json:"cycles"`
+	NetQty            float64                   `json:"net_qty"`
+	NetUsd            float64                   `json:"net_usd"`
+	NetToleranceUsd   float64                   `json:"net_tolerance_usd"`
+	BasisBps          float64                   `json:"basis_bps"`
+	EquityTotalUsd    float64                   `json:"equity_total_usd"`
+	EquityAtArmUsd    *float64                  `json:"equity_at_arm_usd"`
+	PnlSinceArmUsd    *float64                  `json:"pnl_since_arm_usd"`
+	PointsAtArm       *float64                  `json:"points_at_arm"`
+	ConfigFp          string                    `json:"config_fp"`
+	Legs              map[string]HedgeHolderLeg `json:"legs"`
+}
+
 // BookDecision is one entry of the book runtime's decision history: the
 // key it acted on, what came of it, and the hash of the signal file that
 // produced it. `outcome` is applied | partial | rejected | skipped |
@@ -335,6 +383,7 @@ type StatusData struct {
 	AccumulatorOps      *AccumulatorOperations `json:"operations,omitempty"`
 	BullHolder          *BullHolderStatus      `json:"bull_holder,omitempty"`
 	HanBridge           *HanBridgeStatus       `json:"han_bridge,omitempty"`
+	HedgeHolder         *HedgeHolderStatus     `json:"hedge_holder,omitempty"`
 	// Engine B's frozen session boundaries for the current date --
 	// (t0, t1, t2) in microseconds: the KRX-open reference snapshot, the
 	// entry decision, and the scheduled exit. A fixed schedule from the
@@ -956,7 +1005,7 @@ func decodeStatusPayload(payload []byte) (StatusData, error) {
 	if err := json.Unmarshal(payload, &status); err != nil {
 		return StatusData{}, err
 	}
-	if status.Arcus != nil && (status.SchemaVersion != arcusstatus.SchemaVersion || status.Accumulator != nil || status.BullHolder != nil || status.HanBridge != nil) {
+	if status.Arcus != nil && (status.SchemaVersion != arcusstatus.SchemaVersion || status.Accumulator != nil || status.BullHolder != nil || status.HanBridge != nil || status.HedgeHolder != nil) {
 		return StatusData{}, errors.New("unsupported or ambiguous Arcus status schema")
 	}
 	if status.Accumulator != nil && status.SchemaVersion != accumulatorSchemaVersion {

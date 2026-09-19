@@ -1,0 +1,69 @@
+{
+  "ts": 1789812142,
+  "updated_at": "2026-09-19T10:02:22+00:00",
+  "process_started_at": 1789811000,
+  "bot": "xvenue_hedge_holder",
+  "id": "xvenue_hedge_holder",
+  "dex": "Lighter (Robinhood Chain) / Lighter Core",
+  "symbol": "BTC",
+  "dry_run": false,
+  "kill_switch_active": false,
+  "pnl_total": 8490.0,
+  "pnl_today": -4.0,
+  "pnl_source": "equity",
+  "positions_ready": true,
+  "position_count": 2,
+  "has_position": true,
+  "positions": [
+    { "symbol": "BTC (rh)", "side": "long", "size": "0.247", "entry_price": null },
+    { "symbol": "BTC (core)", "side": "short", "size": "0.247", "entry_price": null }
+  ],
+  "subsidy": {
+    "unit": "points",
+    "units_total": 7.0,
+    "units_7d": 7.0,
+    "cost_total_usd": 4.0,
+    "as_of_ts": 1789812000
+  },
+  "hedge_holder": {
+    "mode": "On",
+    "halted": false,
+    "halt_reason": null,
+    "kill_switch": false,
+    "target_qty": 0.247,
+    "target_notional_usd": 20000.0,
+    "armed_at": 1789811884,
+    "exited_at": null,
+    "exit_reason": null,
+    "cycles": 1,
+    "net_qty": 0.0,
+    "net_usd": 0.0,
+    "net_tolerance_usd": 500.0,
+    "basis_bps": 3.0987,
+    "equity_total_usd": 8490.0,
+    "equity_at_arm_usd": 8494.0,
+    "pnl_since_arm_usd": -4.0,
+    "points_at_arm": 72.1785,
+    "config_fp": "0123456789ab",
+    "legs": {
+      "long": {
+        "instance": "rh",
+        "side": "long",
+        "qty": 0.247,
+        "notional_usd": 20093.3018,
+        "mark": 81349.4,
+        "equity_usd": 4480.0,
+        "liq_headroom_pct": 21.096
+      },
+      "short": {
+        "instance": "core",
+        "side": "short",
+        "qty": 0.247,
+        "notional_usd": 20087.0774,
+        "mark": 81324.2,
+        "equity_usd": 4010.0,
+        "liq_headroom_pct": 18.763
+      }
+    }
+  }
+}

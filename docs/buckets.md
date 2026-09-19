@@ -18,7 +18,8 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 |---|---|---|---|
 | Bull-holder | `debot-bull-holder` | `beta` | #893 / #909 / #910。benchmark は spot buy & hold (#955) |
 | HYPE Accumulator | `hype-accumulator` | `beta` | #849。β + carry — staking 利回りは価格 β と分けて計上する (#956) |
-| Robinhood Freq / B | `debot-pair-robinhood-lighter` | `subsidy` | #798 / #938。points 捕獲。signal の α はゼロ判定 (#935) |
+| Robinhood Freq / B | `debot-pair-robinhood-lighter` | `subsidy` | #798 / #938。points 捕獲。signal の α はゼロ判定 (#935)。2026-09-19 停止 (#1046、bleed) |
+| Robinhood Hedge | `debot-xvenue-hedge-holder` | `subsidy` | #1046。RH long / Core short の hedged hold で points 捕獲。cost = ARM 以降の equity 変化 |
 | Arcus SPY/QQQ | `arcus-spot-live-tick` | `subsidy` | #902 / #938。activity → Perps アクセス。price edge 無し (0/362 pairs) |
 | Han Bridge (Engine B) | `engine-b-live` | `alpha_candidate` | #866。gate 未通過 |
 | XSMOM | `book-runtime-xsmom-695` | `alpha_candidate` | #695。readout 2026-10-02、途中の PnL は出さない (#958) |

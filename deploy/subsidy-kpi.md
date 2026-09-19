@@ -1,7 +1,7 @@
 # Subsidy bots: cost per unit instead of PnL
 
-Robinhood Freq / Robinhood B and Arcus SPY/QQQ are subsidy-capture bots
-(`docs/buckets.md`). Their PnL is negative by design: they pay fees, slippage
+Robinhood Hedge (and, until 2026-09-19, Robinhood Freq / B) and Arcus
+SPY/QQQ are subsidy-capture bots (`docs/buckets.md`). Their PnL is negative by design: they pay fees, slippage
 and adverse selection to earn something the venue is deliberately handing out
 (points, qualifying activity). Reading that PnL as a result invites tuning a
 signal that has no edge to begin with — 0/362 pairs on Arcus, bot-strategy#935
@@ -36,8 +36,12 @@ taxonomy §4.2).
 
 ## Where the numbers come from
 
-The denominator — units earned — comes from the bot's own daily subsidy ledger,
-which bot-strategy#938 is producing. Until a bot emits it, the card renders
+The denominator — units earned — comes from the bot's own subsidy ledger.
+The Robinhood hedge holder (bot-strategy#1046) emits it on every status
+write: `units_total` is the long account's live points since ARM (read from
+the points collector's history, bot-strategy#938), `cost_total_usd` is
+−(both venues' equity change since ARM), `as_of_ts` the newest collector row.
+Until a bot emits it, the card renders
 "-" for every row that needs a denominator, and says so in a note. Nothing is
 inferred from the other half: a cost with no units earned is shown as a cost,
 never as a cost per unit.
