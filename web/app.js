@@ -578,6 +578,7 @@ const updateFleetSummary = (targets) => {
       if (data.circuit_breaker && data.circuit_breaker.active === true) halts += 1;
       if (isHanBridgeHalted(data)) halts += 1;
       if (isBookHalted(data)) halts += 1;
+      if (isHedgeHolderHalted(data)) halts += 1;
       if (Array.isArray(data.risk_history)) {
         for (const ev of data.risk_history) {
           if (ev.event_type === "activated" && ev.ts >= cutoff24hSec) {
@@ -831,6 +832,16 @@ const createCard = (key) => {
         <div class="row"><span>Next decision</span><strong data-field="book-next"></strong></div>
         <div class="row" data-field="book-note-row" hidden><span>Note</span><strong class="tone-warn" data-field="book-note"></strong></div>
       </div>
+      <div class="han-bridge-view" data-field="hedge-view" hidden>
+        <div class="han-bridge-header" title="bot-strategy#1046: BTC long on Lighter on Robinhood Chain hedged by an equal short on Lighter Core, held for the weekly points drop. Funding nets out across the two deployments, so the cost is the round trips and the basis.">Points hedge (RH long / Core short)</div>
+        <div class="row"><span>Mode</span><strong class="tone-neutral" data-field="hedge-mode"></strong></div>
+        <div class="row"><span>Book</span><strong data-field="hedge-book"></strong></div>
+        <div class="row"><span>Legs equal</span><strong data-field="hedge-net"></strong></div>
+        <div class="row" title="Percentage points of notional between each venue's equity and its maintenance requirement. Margin is not shared across venues: the lower side is the one that liquidates first."><span>Liq. headroom (RH / Core)</span><strong data-field="hedge-headroom"></strong></div>
+        <div class="row" title="Robinhood-chain mark vs Lighter Core mark. Phase 0 mean −1.3 bps, sd 1 bps; the book was opened at +3.1 bps."><span>Basis (RH − Core)</span><strong data-field="hedge-basis"></strong></div>
+        <div class="row" title="Both venues' equity now minus at ARM: the price paid for the points earned since ARM (the KPI panel above divides the two)."><span>Since ARM</span><strong data-field="hedge-pnl"></strong></div>
+        <div class="row" data-field="hedge-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="hedge-halt"></strong></div>
+      </div>
       </div>
       <div class="error" data-field="error" hidden></div>
       </div>
@@ -863,6 +874,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // without this the card stays green and "active" while the fleet
   // summary already counts it under halts.
   const bookDegraded = isBookHalted(data);
+  // A halted hedge holder is still flat-risk but has stopped keeping the
+  // legs equal; that is a degraded bot, not a healthy one.
+  const hedgeDegraded = isHedgeHolderHalted(data);
   // An α candidate's card must not carry a running result anywhere
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
@@ -870,7 +884,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const blindResult = bucketOf(target) === "alpha_candidate";
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || arcusDegraded || bookDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || arcusDegraded || bookDegraded || hedgeDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
@@ -901,7 +915,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   card.classList.toggle("stale", stale);
   card.classList.toggle(
     "degraded",
-    accumulatorDegraded || holderDegraded || arcusDegraded || bookDegraded,
+    accumulatorDegraded || holderDegraded || arcusDegraded || bookDegraded || hedgeDegraded,
   );
   card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
@@ -1353,6 +1367,21 @@ const updateCard = (card, target, pollSecs, index, key) => {
     }
   }
 
+  const hedgeViewEl = card.querySelector('[data-field="hedge-view"]');
+  const hedge = isHedgeHolderStatus(data) ? data.hedge_holder : null;
+  if (hedgeViewEl) {
+    hedgeViewEl.hidden = hedge === null;
+    if (hedge) {
+      renderHedgeHolderStatus(card, hedge);
+      // Lifetime trade stats are a pairtrade concept; a hedge holder
+      // reports none and the empty block would read as "no trades".
+      for (const field of ["trading-stats-header", "trading-stats"]) {
+        const el = card.querySelector(`[data-field="${field}"]`);
+        if (el) el.hidden = true;
+      }
+    }
+  }
+
   if (target.error) {
     errorEl.hidden = false;
     errorEl.textContent = target.error;
@@ -1792,6 +1821,7 @@ const entryBlockingHalts = (target, data) => {
   if (data.daily_risk && data.daily_risk.risk_halted === true) labels.push("daily DD halt");
   if (data.circuit_breaker && data.circuit_breaker.active === true) labels.push("circuit breaker");
   if (isHanBridgeHalted(data)) labels.push("session halt");
+  if (isHedgeHolderHalted(data)) labels.push("hedge halt");
   const book = data.book || null;
   if (book) {
     if (book.session_halted) labels.push("session halt");
@@ -2543,6 +2573,110 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
       haltRowEl.hidden = true;
       haltEl.textContent = "";
     }
+  }
+};
+
+const isHedgeHolderStatus = (data) => Boolean(data && data.hedge_holder);
+const isHedgeHolderHalted = (data) =>
+  Boolean(data && data.hedge_holder && data.hedge_holder.halted === true);
+
+// Cross-venue points hedge (bot-strategy#1046). The producer's top level
+// already feeds the equity headline, the positions list and the subsidy
+// (points / cost since ARM) panel; this block answers the hedge-specific
+// questions: are the legs equal, how far is each venue from liquidating
+// its side, and what has the book cost since ARM.
+const hedgeHolderViewModel = (hedge) => {
+  const legs = hedge.legs || {};
+  const long = legs.long || {};
+  const short = legs.short || {};
+  const longQty = holderNumber(long.qty) ?? 0;
+  const shortQty = holderNumber(short.qty) ?? 0;
+  const targetQty = holderNumber(hedge.target_qty) ?? 0;
+  const targetUsd = holderNumber(hedge.target_notional_usd);
+  const netUsd = holderNumber(hedge.net_usd) ?? 0;
+  const netTol = holderNumber(hedge.net_tolerance_usd);
+  const halted = hedge.halted === true;
+  let mode;
+  if (halted) {
+    mode = { label: `Halted (${hedge.mode || "?"})`, tone: "warn" };
+  } else if (hedge.mode === "On") {
+    const built = targetQty > 0 && Math.min(longQty, shortQty) >= targetQty * 0.999;
+    mode = built ? { label: "Holding", tone: "ok" } : { label: "Building", tone: "neutral" };
+  } else if (hedge.mode === "Exited") {
+    mode = { label: `Unwinding (${hedge.exit_reason || "exit"})`, tone: "neutral" };
+  } else {
+    mode = { label: hedge.kill_switch ? "Off (kill switch)" : "Off", tone: "neutral" };
+  }
+  const qtyText = (q) => (Number.isFinite(q) ? q.toFixed(5).replace(/0+$/, "").replace(/\.$/, "") : "-");
+  const book =
+    targetQty > 0
+      ? `${qtyText(longQty)} / ${qtyText(shortQty)} BTC (target ${qtyText(targetQty)}${targetUsd === null ? "" : ` ≈ ${formatUsdc(targetUsd)}`})`
+      : longQty > 0 || shortQty > 0
+        ? `${qtyText(longQty)} / ${qtyText(shortQty)} BTC (no target)`
+        : "flat";
+  const netOver = netTol !== null && Math.abs(netUsd) > netTol;
+  const net = {
+    label: Math.abs(netUsd) < 0.5 ? "yes" : `off by ${formatSignedUsdc(netUsd)}${netTol === null ? "" : ` (tol ${formatUsdc(netTol)})`}`,
+    tone: netOver ? "warn" : "ok",
+  };
+  const headroomText = (leg) => {
+    const h = holderNumber(leg.liq_headroom_pct);
+    return h === null ? "-" : `${h.toFixed(1)}%`;
+  };
+  const worstHeadroom = Math.min(
+    ...[long, short].map((leg) => holderNumber(leg.liq_headroom_pct)).filter((h) => h !== null),
+  );
+  const headroom = {
+    label: `${headroomText(long)} / ${headroomText(short)}`,
+    tone: Number.isFinite(worstHeadroom) && worstHeadroom < 16 ? "warn" : "neutral",
+  };
+  const basisBps = holderNumber(hedge.basis_bps);
+  const basis = basisBps === null ? "-" : `${basisBps >= 0 ? "+" : ""}${basisBps.toFixed(2)} bps`;
+  const pnlSinceArm = holderNumber(hedge.pnl_since_arm_usd);
+  const pnl = pnlSinceArm === null ? "-" : formatSignedUsdc(pnlSinceArm);
+  return {
+    mode,
+    book,
+    net,
+    headroom,
+    basis,
+    pnl,
+    halt: halted ? String(hedge.halt_reason || "halted") : null,
+  };
+};
+
+const renderHedgeHolderStatus = (card, hedge) => {
+  const view = hedgeHolderViewModel(hedge);
+  const setTone = (el, tone) => {
+    el.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+    el.classList.add(`tone-${tone}`);
+  };
+  const modeEl = card.querySelector('[data-field="hedge-mode"]');
+  if (modeEl) {
+    modeEl.textContent = view.mode.label;
+    setTone(modeEl, view.mode.tone);
+  }
+  const bookEl = card.querySelector('[data-field="hedge-book"]');
+  if (bookEl) bookEl.textContent = view.book;
+  const netEl = card.querySelector('[data-field="hedge-net"]');
+  if (netEl) {
+    netEl.textContent = view.net.label;
+    setTone(netEl, view.net.tone);
+  }
+  const headroomEl = card.querySelector('[data-field="hedge-headroom"]');
+  if (headroomEl) {
+    headroomEl.textContent = view.headroom.label;
+    setTone(headroomEl, view.headroom.tone);
+  }
+  const basisEl = card.querySelector('[data-field="hedge-basis"]');
+  if (basisEl) basisEl.textContent = view.basis;
+  const pnlEl = card.querySelector('[data-field="hedge-pnl"]');
+  if (pnlEl) pnlEl.textContent = view.pnl;
+  const haltRowEl = card.querySelector('[data-field="hedge-halt-row"]');
+  const haltEl = card.querySelector('[data-field="hedge-halt"]');
+  if (haltRowEl && haltEl) {
+    haltRowEl.hidden = view.halt === null;
+    haltEl.textContent = view.halt === null ? "" : view.halt;
   }
 };
 

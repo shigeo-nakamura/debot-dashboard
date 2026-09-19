@@ -32,17 +32,24 @@ poll_interval_secs: 20
 # ledger first. `name:` doesn't need a region or bucket suffix — the FE
 # groups cards under a bucket header and shows the region on the card.
 targets:
-  # Example S3-backed target (a pairtrade instance mirroring status.json).
-  # The Frankfurt BTC/ETH pairtrade fleet was sunset on 2026-09-06; the
-  # Robinhood Chain Lighter pairtrade bot (Tokyo) is the remaining example.
-  - name: Robinhood Freq
+  # Example S3-backed target. The Frankfurt BTC/ETH pairtrade fleet was
+  # sunset on 2026-09-06 and the Robinhood Chain Lighter pairtrade arms
+  # (freq / b) were stopped on 2026-09-19 (bot-strategy#1046: they bled
+  # ~$35/day for ~8.5 points/week). The remaining Robinhood-chain bot is
+  # the cross-venue points hedge: a BTC long on Lighter on Robinhood Chain
+  # hedged by an equal short on Lighter Core, operator-armed, held for the
+  # weekly points drop. Its status.json carries the generic top level
+  # (equity as pnl_total, one position per leg) plus a `hedge_holder`
+  # block the card renders as an extra section, and the `subsidy` block
+  # below counts points and cost since ARM only.
+  - name: Robinhood Hedge
     instance_id: i-xxxxxxxxxxxxxxxxx
-    service: debot-pair-robinhood-lighter
+    service: debot-xvenue-hedge-holder
     region: ap-northeast-1
     s3_bucket: debot-dashboard
     s3_region: eu-central-1
-    s3_key: debot/status/robinhood-lighter/debot-pair-robinhood-lighter-freq.json
-    dex: "Lighter (Robinhood Chain)"
+    s3_key: debot/status/robinhood-lighter/xvenue-hedge-holder.json
+    dex: "Lighter (Robinhood Chain) / Lighter Core"
     # Optional: inherited from docs/buckets.md when omitted.
     bucket: subsidy
     # Cost-per-unit KPI for a subsidy bot (bot-strategy#938/#957). Only
@@ -55,10 +62,12 @@ targets:
     # the KPI stale until `kpi_reviewed_on` catches up.
     subsidy:
       unit: points
-      imputed_unit_value_usd: 0.05
-      value_source_date: "2026-09-08"
-      # program_changed_on: "2026-09-01"
-      # kpi_reviewed_on: "2026-09-05"
+      # ~11M LIT (~$36M) over 85k points/week: ~$8/pt on a 12-month
+      # horizon, ~$16 on 6 months (bot-strategy#1046 Phase 0).
+      imputed_unit_value_usd: 8
+      value_source_date: "2026-09-18"
+      # program_changed_on: "2026-09-18"
+      # kpi_reviewed_on: "2026-09-18"
 # HYPE accumulator targets use the same freshness/health path but render the
 # nested accumulator balance/activity view instead of PnL statistics — it
 # also shows an "Unrealized PnL" row when the S3 object was written by the

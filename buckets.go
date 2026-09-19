@@ -31,6 +31,7 @@ var taxonomyBuckets = map[string]string{
 	"debot-bull-holder":            BucketBeta,
 	"hype-accumulator":             BucketBeta,
 	"debot-pair-robinhood-lighter": BucketSubsidy,
+	"debot-xvenue-hedge-holder":    BucketSubsidy,
 	"arcus-spot-live-tick":         BucketSubsidy,
 	"engine-b-live":                BucketAlphaCandidate,
 	"book-runtime-xsmom-695":       BucketAlphaCandidate,
