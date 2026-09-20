@@ -880,8 +880,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // summary already counts it under halts.
   const bookDegraded = isBookHalted(data);
   // A halted hedge holder is still flat-risk but has stopped keeping the
-  // legs equal; that is a degraded bot, not a healthy one.
-  const hedgeDegraded = isHedgeHolderHalted(data);
+  // legs equal; that is a degraded bot, not a healthy one. So is one that
+  // cannot read a venue: it keeps publishing (no stale pill) but every
+  // figure on the card is frozen and no guard is being evaluated.
+  const hedgeDegraded = isHedgeHolderHalted(data) || isHedgeHolderFeedBlind(data);
   // An α candidate's card must not carry a running result anywhere
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
@@ -1128,6 +1130,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isHanBridgeHalted(data) ||
     isBookHalted(data) ||
     isHedgeHolderHalted(data) ||
+    isHedgeHolderFeedBlind(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
@@ -1832,6 +1835,7 @@ const entryBlockingHalts = (target, data) => {
   if (data.circuit_breaker && data.circuit_breaker.active === true) labels.push("circuit breaker");
   if (isHanBridgeHalted(data)) labels.push("session halt");
   if (isHedgeHolderHalted(data)) labels.push("hedge halt");
+  if (isHedgeHolderFeedBlind(data)) labels.push("feed problem");
   const book = data.book || null;
   if (book) {
     if (book.session_halted) labels.push("session halt");
@@ -2589,6 +2593,17 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
 const isHedgeHolderStatus = (data) => Boolean(data && data.hedge_holder);
 const isHedgeHolderHalted = (data) =>
   Boolean(data && data.hedge_holder && data.hedge_holder.halted === true);
+// A venue unreachable or the marks diverging: the producer keeps
+// publishing from its last good snapshot (so the stale pill never fires)
+// while sending nothing and evaluating no guard. Degraded, auto-expanded
+// and labelled like a halt, but not a halt: the book is still held.
+const isHedgeHolderFeedBlind = (data) =>
+  Boolean(
+    data &&
+      data.hedge_holder &&
+      typeof data.hedge_holder.feed_problem === "string" &&
+      data.hedge_holder.feed_problem,
+  );
 
 // Cross-venue points hedge (bot-strategy#1046). The producer's top level
 // already feeds the equity headline, the positions list and the subsidy
@@ -2814,7 +2829,8 @@ const isTargetUnhealthy = (target) => {
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
     || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)))
     || isBookHalted(target.status)
-    || isHedgeHolderHalted(target.status);
+    || isHedgeHolderHalted(target.status)
+    || isHedgeHolderFeedBlind(target.status);
 };
 
 const formatHype = (value) => {

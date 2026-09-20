@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, hedgeHolderViewModel, renderHedgeHolderStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2363,6 +2363,19 @@ test("hedge holder view model: holding, lopsided, halted, flat", () => {
   const legacy = { ...fixture.hedge_holder };
   delete legacy.feed_problem;
   assert.equal(context.__test.hedgeHolderViewModel(legacy).feed, null);
+
+  // A collapsed card must not hide the outage behind a green header and a
+  // frozen equity headline: the feed problem is degraded (unhealthy
+  // target, header label) without being a halt.
+  const blind = { ...fixture, hedge_holder: { ...fixture.hedge_holder, feed_problem: "venue unreachable: short get_ticker BTC" } };
+  assert.equal(context.__test.isHedgeHolderFeedBlind(blind), true);
+  assert.equal(context.__test.isHedgeHolderFeedBlind(fixture), false);
+  assert.equal(context.__test.isHedgeHolderFeedBlind({ hedge_holder: { ...fixture.hedge_holder, feed_problem: "" } }), false);
+  assert.equal(context.__test.isHedgeHolderHalted(blind), false);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: blind }), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
+  assert.equal(context.__test.entryBlockingHalts({}, blind).join("; "), "feed problem");
+  assert.equal(context.__test.entryBlockingHalts({}, fixture).length, 0);
 
   // Mid-build: one clip filled long only → Building, legs not equal (warn past tolerance).
   const building = context.__test.hedgeHolderViewModel({

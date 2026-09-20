@@ -32,7 +32,11 @@ position per leg, `kill_switch_active`) and adds:
   unreachable or the two marks diverge — a `Feed` row with the producer's
   `feed_problem` and the age of the snapshot every other figure comes from
   (`snapshot_at`; the bot keeps publishing through an outage instead of
-  going stale, e.g. Lighter Core 502/503 on 2026-09-20 11:02–11:12Z).
+  going stale, e.g. Lighter Core 502/503 on 2026-09-20 11:02–11:12Z). A
+  feed problem also marks the card `degraded`, labels the header
+  ("feed problem") and auto-expands a collapsed card, so a frozen equity
+  headline is never shown under a green header; it is not counted as a
+  halt (the book is still held).
 
 A halted hedge holder shows as `degraded` and counts under the fleet's halts.
 The pairtrade "Stats (lifetime)" block is hidden on this card: the bot has no
