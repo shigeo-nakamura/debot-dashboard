@@ -845,6 +845,7 @@ const createCard = (key) => {
         <div class="row" title="Robinhood-chain mark vs Lighter Core mark. Phase 0 mean −1.3 bps, sd 1 bps; the book was opened at +3.1 bps."><span>Basis (RH − Core)</span><strong data-field="hedge-basis"></strong></div>
         <div class="row" title="Both venues' equity now minus at ARM: the price paid for the points earned since ARM (the KPI panel above divides the two)."><span>Since ARM</span><strong data-field="hedge-pnl"></strong></div>
         <div class="row" data-field="hedge-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="hedge-halt"></strong></div>
+        <div class="row" data-field="hedge-feed-row" hidden title="A venue is unreachable or the two marks diverge: the bot sends nothing and the figures above are from its last good read."><span>Feed</span><strong class="tone-warn" data-field="hedge-feed"></strong></div>
       </div>
       </div>
       <div class="error" data-field="error" hidden></div>
@@ -2594,7 +2595,7 @@ const isHedgeHolderHalted = (data) =>
 // (points / cost since ARM) panel; this block answers the hedge-specific
 // questions: are the legs equal, how far is each venue from liquidating
 // its side, and what has the book cost since ARM.
-const hedgeHolderViewModel = (hedge) => {
+const hedgeHolderViewModel = (hedge, now = Date.now()) => {
   const legs = hedge.legs || {};
   const long = legs.long || {};
   const short = legs.short || {};
@@ -2643,6 +2644,18 @@ const hedgeHolderViewModel = (hedge) => {
   const basis = basisBps === null ? "-" : `${basisBps >= 0 ? "+" : ""}${basisBps.toFixed(2)} bps`;
   const pnlSinceArm = holderNumber(hedge.pnl_since_arm_usd);
   const pnl = pnlSinceArm === null ? "-" : formatSignedUsdc(pnlSinceArm);
+  // A venue outage or diverging marks: the producer keeps publishing (so
+  // the card never goes stale) but every figure above is from its last
+  // good snapshot. Say so, and how old that snapshot is, in one row.
+  let feed = null;
+  if (typeof hedge.feed_problem === "string" && hedge.feed_problem) {
+    const snapshotAt = holderNumber(hedge.snapshot_at);
+    const age =
+      snapshotAt === null
+        ? "no venue read yet"
+        : `figures as of ${new Date(snapshotAt * 1000).toISOString().slice(11, 16)}Z (${formatAge(now - snapshotAt * 1000)} old)`;
+    feed = `${hedge.feed_problem} · ${age}`;
+  }
   return {
     mode,
     book,
@@ -2651,6 +2664,7 @@ const hedgeHolderViewModel = (hedge) => {
     basis,
     pnl,
     halt: halted ? String(hedge.halt_reason || "halted") : null,
+    feed,
   };
 };
 
@@ -2686,6 +2700,12 @@ const renderHedgeHolderStatus = (card, hedge) => {
   if (haltRowEl && haltEl) {
     haltRowEl.hidden = view.halt === null;
     haltEl.textContent = view.halt === null ? "" : view.halt;
+  }
+  const feedRowEl = card.querySelector('[data-field="hedge-feed-row"]');
+  const feedEl = card.querySelector('[data-field="hedge-feed"]');
+  if (feedRowEl && feedEl) {
+    feedRowEl.hidden = view.feed === null;
+    feedEl.textContent = view.feed === null ? "" : view.feed;
   }
 };
 

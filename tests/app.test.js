@@ -2337,6 +2337,32 @@ test("hedge holder view model: holding, lopsided, halted, flat", () => {
   assert.equal(held.basis, "+3.10 bps");
   assert.equal(held.pnl, "-4.0 USDC");
   assert.equal(held.halt, null);
+  assert.equal(held.feed, null);
+
+  // Venue outage (Core 502/503 on 2026-09-20): the producer keeps
+  // publishing from its last good snapshot; the Feed row names the reason
+  // and dates the frozen figures, the mode is left alone (the book is
+  // still held, nothing was sent).
+  const nowMs = (fixture.hedge_holder.snapshot_at + 10 * 60) * 1000;
+  const outage = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, feed_problem: 'venue unreachable: short get_ticker BTC: Transient("recentTrades HTTP 503")' },
+    nowMs,
+  );
+  assert.equal(outage.mode.label, "Holding");
+  assert.equal(
+    outage.feed,
+    'venue unreachable: short get_ticker BTC: Transient("recentTrades HTTP 503") · figures as of 10:02Z (10m old)',
+  );
+  // Before the first successful read there is nothing to date.
+  const neverRead = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, feed_problem: "venue unreachable: long get_positions", snapshot_at: null },
+    nowMs,
+  );
+  assert.equal(neverRead.feed, "venue unreachable: long get_positions · no venue read yet");
+  // The field absent (a producer older than this row) → no row.
+  const legacy = { ...fixture.hedge_holder };
+  delete legacy.feed_problem;
+  assert.equal(context.__test.hedgeHolderViewModel(legacy).feed, null);
 
   // Mid-build: one clip filled long only → Building, legs not equal (warn past tolerance).
   const building = context.__test.hedgeHolderViewModel({
@@ -2386,6 +2412,14 @@ test("hedge holder renders into the card rows and counts as a fleet halt", () =>
   assert.equal(value("hedge-mode"), "Holding");
   assert.equal(value("hedge-basis"), "+3.10 bps");
   assert.equal(fields.get('[data-field="hedge-halt-row"]').hidden, true);
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, true);
+  // A feed problem shows its row (and hides again once the feed is back).
+  context.__test.renderHedgeHolderStatus(card, { ...fixture.hedge_holder, feed_problem: "venue unreachable: short get_ticker BTC" });
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, false);
+  assert.match(value("hedge-feed"), /^venue unreachable: short get_ticker BTC · figures as of 10:02Z/);
+  context.__test.renderHedgeHolderStatus(card, fixture.hedge_holder);
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, true);
+  assert.equal(value("hedge-feed"), "");
 
   context.__test.updateFleetSummary([
     { service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } },
