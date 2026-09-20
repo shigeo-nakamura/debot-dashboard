@@ -845,6 +845,7 @@ const createCard = (key) => {
         <div class="row" title="Robinhood-chain mark vs Lighter Core mark. Phase 0 mean −1.3 bps, sd 1 bps; the book was opened at +3.1 bps."><span>Basis (RH − Core)</span><strong data-field="hedge-basis"></strong></div>
         <div class="row" title="Both venues' equity now minus at ARM: the price paid for the points earned since ARM (the KPI panel above divides the two)."><span>Since ARM</span><strong data-field="hedge-pnl"></strong></div>
         <div class="row" data-field="hedge-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="hedge-halt"></strong></div>
+        <div class="row" data-field="hedge-feed-row" hidden title="A venue is unreachable or the two marks diverge: the bot sends nothing and the figures above are from its last good read."><span>Feed</span><strong class="tone-warn" data-field="hedge-feed"></strong></div>
       </div>
       </div>
       <div class="error" data-field="error" hidden></div>
@@ -879,8 +880,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // summary already counts it under halts.
   const bookDegraded = isBookHalted(data);
   // A halted hedge holder is still flat-risk but has stopped keeping the
-  // legs equal; that is a degraded bot, not a healthy one.
-  const hedgeDegraded = isHedgeHolderHalted(data);
+  // legs equal; that is a degraded bot, not a healthy one. So is one that
+  // cannot read a venue: it keeps publishing (no stale pill) but every
+  // figure on the card is frozen and no guard is being evaluated.
+  const hedgeDegraded = isHedgeHolderHalted(data) || isHedgeHolderFeedBlind(data);
   // An α candidate's card must not carry a running result anywhere
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
@@ -1127,6 +1130,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isHanBridgeHalted(data) ||
     isBookHalted(data) ||
     isHedgeHolderHalted(data) ||
+    isHedgeHolderFeedBlind(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
@@ -1831,6 +1835,7 @@ const entryBlockingHalts = (target, data) => {
   if (data.circuit_breaker && data.circuit_breaker.active === true) labels.push("circuit breaker");
   if (isHanBridgeHalted(data)) labels.push("session halt");
   if (isHedgeHolderHalted(data)) labels.push("hedge halt");
+  if (isHedgeHolderFeedBlind(data)) labels.push("feed problem");
   const book = data.book || null;
   if (book) {
     if (book.session_halted) labels.push("session halt");
@@ -2588,13 +2593,24 @@ const renderHanBridgeStatus = (card, hanBridge, extra) => {
 const isHedgeHolderStatus = (data) => Boolean(data && data.hedge_holder);
 const isHedgeHolderHalted = (data) =>
   Boolean(data && data.hedge_holder && data.hedge_holder.halted === true);
+// A venue unreachable or the marks diverging: the producer keeps
+// publishing from its last good snapshot (so the stale pill never fires)
+// while sending nothing and evaluating no guard. Degraded, auto-expanded
+// and labelled like a halt, but not a halt: the book is still held.
+const isHedgeHolderFeedBlind = (data) =>
+  Boolean(
+    data &&
+      data.hedge_holder &&
+      typeof data.hedge_holder.feed_problem === "string" &&
+      data.hedge_holder.feed_problem,
+  );
 
 // Cross-venue points hedge (bot-strategy#1046). The producer's top level
 // already feeds the equity headline, the positions list and the subsidy
 // (points / cost since ARM) panel; this block answers the hedge-specific
 // questions: are the legs equal, how far is each venue from liquidating
 // its side, and what has the book cost since ARM.
-const hedgeHolderViewModel = (hedge) => {
+const hedgeHolderViewModel = (hedge, now = Date.now()) => {
   const legs = hedge.legs || {};
   const long = legs.long || {};
   const short = legs.short || {};
@@ -2643,6 +2659,18 @@ const hedgeHolderViewModel = (hedge) => {
   const basis = basisBps === null ? "-" : `${basisBps >= 0 ? "+" : ""}${basisBps.toFixed(2)} bps`;
   const pnlSinceArm = holderNumber(hedge.pnl_since_arm_usd);
   const pnl = pnlSinceArm === null ? "-" : formatSignedUsdc(pnlSinceArm);
+  // A venue outage or diverging marks: the producer keeps publishing (so
+  // the card never goes stale) but every figure above is from its last
+  // good snapshot. Say so, and how old that snapshot is, in one row.
+  let feed = null;
+  if (typeof hedge.feed_problem === "string" && hedge.feed_problem) {
+    const snapshotAt = holderNumber(hedge.snapshot_at);
+    const age =
+      snapshotAt === null
+        ? "no venue read yet"
+        : `figures as of ${new Date(snapshotAt * 1000).toISOString().slice(11, 16)}Z (${formatAge(now - snapshotAt * 1000)} old)`;
+    feed = `${hedge.feed_problem} · ${age}`;
+  }
   return {
     mode,
     book,
@@ -2651,6 +2679,7 @@ const hedgeHolderViewModel = (hedge) => {
     basis,
     pnl,
     halt: halted ? String(hedge.halt_reason || "halted") : null,
+    feed,
   };
 };
 
@@ -2686,6 +2715,12 @@ const renderHedgeHolderStatus = (card, hedge) => {
   if (haltRowEl && haltEl) {
     haltRowEl.hidden = view.halt === null;
     haltEl.textContent = view.halt === null ? "" : view.halt;
+  }
+  const feedRowEl = card.querySelector('[data-field="hedge-feed-row"]');
+  const feedEl = card.querySelector('[data-field="hedge-feed"]');
+  if (feedRowEl && feedEl) {
+    feedRowEl.hidden = view.feed === null;
+    feedEl.textContent = view.feed === null ? "" : view.feed;
   }
 };
 
@@ -2794,7 +2829,8 @@ const isTargetUnhealthy = (target) => {
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
     || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)))
     || isBookHalted(target.status)
-    || isHedgeHolderHalted(target.status);
+    || isHedgeHolderHalted(target.status)
+    || isHedgeHolderFeedBlind(target.status);
 };
 
 const formatHype = (value) => {

@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, hedgeHolderViewModel, renderHedgeHolderStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2337,6 +2337,45 @@ test("hedge holder view model: holding, lopsided, halted, flat", () => {
   assert.equal(held.basis, "+3.10 bps");
   assert.equal(held.pnl, "-4.0 USDC");
   assert.equal(held.halt, null);
+  assert.equal(held.feed, null);
+
+  // Venue outage (Core 502/503 on 2026-09-20): the producer keeps
+  // publishing from its last good snapshot; the Feed row names the reason
+  // and dates the frozen figures, the mode is left alone (the book is
+  // still held, nothing was sent).
+  const nowMs = (fixture.hedge_holder.snapshot_at + 10 * 60) * 1000;
+  const outage = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, feed_problem: 'venue unreachable: short get_ticker BTC: Transient("recentTrades HTTP 503")' },
+    nowMs,
+  );
+  assert.equal(outage.mode.label, "Holding");
+  assert.equal(
+    outage.feed,
+    'venue unreachable: short get_ticker BTC: Transient("recentTrades HTTP 503") · figures as of 10:02Z (10m old)',
+  );
+  // Before the first successful read there is nothing to date.
+  const neverRead = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, feed_problem: "venue unreachable: long get_positions", snapshot_at: null },
+    nowMs,
+  );
+  assert.equal(neverRead.feed, "venue unreachable: long get_positions · no venue read yet");
+  // The field absent (a producer older than this row) → no row.
+  const legacy = { ...fixture.hedge_holder };
+  delete legacy.feed_problem;
+  assert.equal(context.__test.hedgeHolderViewModel(legacy).feed, null);
+
+  // A collapsed card must not hide the outage behind a green header and a
+  // frozen equity headline: the feed problem is degraded (unhealthy
+  // target, header label) without being a halt.
+  const blind = { ...fixture, hedge_holder: { ...fixture.hedge_holder, feed_problem: "venue unreachable: short get_ticker BTC" } };
+  assert.equal(context.__test.isHedgeHolderFeedBlind(blind), true);
+  assert.equal(context.__test.isHedgeHolderFeedBlind(fixture), false);
+  assert.equal(context.__test.isHedgeHolderFeedBlind({ hedge_holder: { ...fixture.hedge_holder, feed_problem: "" } }), false);
+  assert.equal(context.__test.isHedgeHolderHalted(blind), false);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: blind }), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
+  assert.equal(context.__test.entryBlockingHalts({}, blind).join("; "), "feed problem");
+  assert.equal(context.__test.entryBlockingHalts({}, fixture).length, 0);
 
   // Mid-build: one clip filled long only → Building, legs not equal (warn past tolerance).
   const building = context.__test.hedgeHolderViewModel({
@@ -2386,6 +2425,14 @@ test("hedge holder renders into the card rows and counts as a fleet halt", () =>
   assert.equal(value("hedge-mode"), "Holding");
   assert.equal(value("hedge-basis"), "+3.10 bps");
   assert.equal(fields.get('[data-field="hedge-halt-row"]').hidden, true);
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, true);
+  // A feed problem shows its row (and hides again once the feed is back).
+  context.__test.renderHedgeHolderStatus(card, { ...fixture.hedge_holder, feed_problem: "venue unreachable: short get_ticker BTC" });
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, false);
+  assert.match(value("hedge-feed"), /^venue unreachable: short get_ticker BTC · figures as of 10:02Z/);
+  context.__test.renderHedgeHolderStatus(card, fixture.hedge_holder);
+  assert.equal(fields.get('[data-field="hedge-feed-row"]').hidden, true);
+  assert.equal(value("hedge-feed"), "");
 
   context.__test.updateFleetSummary([
     { service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } },

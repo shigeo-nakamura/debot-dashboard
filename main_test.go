@@ -447,6 +447,10 @@ func TestHedgeHolderDecodes(t *testing.T) {
 	if long.LiqHeadroomPct == nil || *long.LiqHeadroomPct != 21.096 {
 		t.Fatalf("long liq_headroom_pct = %v, want 21.096", long.LiqHeadroomPct)
 	}
+	// Healthy feed: no problem, the snapshot dated by the tick itself.
+	if h.FeedProblem != nil || h.SnapshotAt == nil || *h.SnapshotAt != 1789812142 {
+		t.Fatalf("feed_problem/snapshot_at = %v/%v, want nil/1789812142", h.FeedProblem, h.SnapshotAt)
+	}
 	// Generic half: equity as pnl_total, two positions, the subsidy ledger.
 	if status.PnlTotal != 8490.0 || status.PositionCount != 2 || len(status.Positions) != 2 {
 		t.Fatalf("generic top level = pnl_total %v positions %d/%d", status.PnlTotal, status.PositionCount, len(status.Positions))
@@ -477,6 +481,23 @@ func TestHedgeHolderDecodes(t *testing.T) {
 	}
 	if back.HaltReason == nil || *back.HaltReason != "liq_guard: short venue headroom 7.9% < 8%" {
 		t.Fatalf("halt_reason did not survive re-encode: %v", back.HaltReason)
+	}
+	// A venue outage: the producer keeps publishing from its last good
+	// snapshot with the reason; both fields must reach the browser, and a
+	// pre-first-read null snapshot_at must stay null rather than vanish.
+	outage, err := decodeStatusPayload([]byte(`{"id":"xvenue_hedge_holder","ts":1789812742,"hedge_holder":{"mode":"On","halted":false,"feed_problem":"venue unreachable: short get_ticker BTC: Transient(\"recentTrades HTTP 503\")","snapshot_at":null,"legs":{}}}`))
+	if err != nil {
+		t.Fatalf("decode outage payload: %v", err)
+	}
+	if outage.HedgeHolder.FeedProblem == nil || !strings.HasPrefix(*outage.HedgeHolder.FeedProblem, "venue unreachable: short get_ticker") {
+		t.Fatalf("feed_problem = %v, want the outage reason", outage.HedgeHolder.FeedProblem)
+	}
+	out, err = json.Marshal(outage.HedgeHolder)
+	if err != nil {
+		t.Fatalf("re-encode outage block: %v", err)
+	}
+	if !strings.Contains(string(out), `"snapshot_at":null`) || !strings.Contains(string(out), `"feed_problem":"venue unreachable`) {
+		t.Fatalf("feed fields did not survive re-encode: %s", out)
 	}
 	// Bucket taxonomy: the new service is a subsidy bot, so an undeclared
 	// target inherits it and a contradicting declaration is refused.

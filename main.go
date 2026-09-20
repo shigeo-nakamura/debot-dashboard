@@ -257,6 +257,12 @@ type HedgeHolderLeg struct {
 // a hedge are whether the two legs are still equal, how far each venue is
 // from liquidating its side, and what the book has cost since it was
 // armed.
+//
+// FeedProblem is set while a venue is unreachable or the two marks
+// diverge: the bot sends nothing and keeps publishing from its last good
+// snapshot, whose read time is SnapshotAt (the top-level ts is the
+// write). Both null on a healthy tick; pointers without omitempty so the
+// producer's null re-encodes as null.
 type HedgeHolderStatus struct {
 	Mode              string                    `json:"mode"`
 	Halted            bool                      `json:"halted"`
@@ -276,6 +282,8 @@ type HedgeHolderStatus struct {
 	EquityAtArmUsd    *float64                  `json:"equity_at_arm_usd"`
 	PnlSinceArmUsd    *float64                  `json:"pnl_since_arm_usd"`
 	PointsAtArm       *float64                  `json:"points_at_arm"`
+	FeedProblem       *string                   `json:"feed_problem"`
+	SnapshotAt        *int64                    `json:"snapshot_at"`
 	ConfigFp          string                    `json:"config_fp"`
 	Legs              map[string]HedgeHolderLeg `json:"legs"`
 }

@@ -44,6 +44,8 @@
     "equity_at_arm_usd": 8494.0,
     "pnl_since_arm_usd": -4.0,
     "points_at_arm": 72.1785,
+    "feed_problem": null,
+    "snapshot_at": 1789812142,
     "config_fp": "0123456789ab",
     "legs": {
       "long": {
