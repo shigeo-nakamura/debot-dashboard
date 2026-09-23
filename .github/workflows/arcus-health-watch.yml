@@ -30,6 +30,14 @@ env:
   # Both collectors run on a ~15-minute timer; page only once data is more
   # than 2.5x that cadence old, to absorb ordinary jitter without noise.
   STALE_SECS: '2250'
+  # bot-strategy#1055 (#1040 follow-up): the Arcus SwapShell is an EIP-1967
+  # proxy whose implementation was swapped without notice on 2026-09-17,
+  # changing the SwapExecuted layout and stalling live-tick for ~6.5h. Page
+  # when the implementation slot no longer holds the implementation we have
+  # verified pairtrade against. Public chain data, not a secret. After an
+  # upgrade is confirmed handled in pairtrade, update the expected value here.
+  SWAPSHELL_PROXY: '0x4262efbd176f02824af27010bea218429c33c7e8'
+  SWAPSHELL_EXPECTED_IMPL: '0x2b66ec2f62ec618dec1d83cc7af1b5c815e45966'
 
 jobs:
   router-availability:
@@ -95,7 +103,16 @@ jobs:
               echo "FILE ${f} missing"
             fi
           done
+          # EIP-1967 implementation slot of the SwapShell proxy, read through
+          # the RPC the executor itself uses. Any failure prints
+          # "IMPL unreadable" instead of failing the whole poll.
+          rpc=$(grep -A1 rpc_urls /etc/arcus-spot/config.yaml 2>/dev/null | tail -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          impl=$(curl -s -m 20 -X POST "$rpc" -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"eth_getStorageAt","params":["__SWAPSHELL_PROXY__","0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc","latest"]}' 2>/dev/null \
+            | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; assert len(r)==66; print("0x"+r[-40:].lower())' 2>/dev/null || true)
+          echo "IMPL ${impl:-unreadable}"
           BASH
+          sed -i "s/__SWAPSHELL_PROXY__/${SWAPSHELL_PROXY}/" /tmp/script.sh
 
           jq -n --rawfile cmd /tmp/script.sh '{commands: [$cmd]}' > /tmp/params.json
 
@@ -193,6 +210,18 @@ jobs:
                       kinds="${kinds}timer:${name}:result_failed "
                       ;;
                   esac
+                fi
+                ;;
+              IMPL*)
+                impl=$(echo "$line" | awk '{print $2}')
+                expected=$(echo "$SWAPSHELL_EXPECTED_IMPL" | tr 'A-F' 'a-f')
+                if [ "$impl" = "unreadable" ]; then
+                  # An RPC blip must not file an issue; a real upgrade is
+                  # still caught on the next hourly poll that reads it.
+                  echo "info: SwapShell implementation slot unreadable this poll; not paging"
+                elif [ "$impl" != "$expected" ]; then
+                  findings="${findings}SwapShell ${SWAPSHELL_PROXY} implementation changed: ${impl} (expected ${expected}) -- check the SwapExecuted ABI in pairtrade before the next settlement (bot-strategy#1040); "
+                  kinds="${kinds}swapshell:impl_changed "
                 fi
                 ;;
               FILE*)
