@@ -356,9 +356,14 @@ func TestAccumulatorCustodianTransferIsStillOwnedHYPE(t *testing.T) {
 		HYPEPriceUSDC:              100,
 		HYPETransferredToCustodian: &custodian,
 	}}
+	status.EquityHistory = []EquityPoint{{TS: 1, Equity: 1060}, {TS: 2, Equity: 660}}
 	applyAccumulatorCustodianHoldings(status)
 	if got := status.Accumulator.TotalEquityUSDC; math.Abs(got-1060) > 1e-9 {
 		t.Fatalf("total equity = %v, want 1060 (the transfer is not a loss)", got)
+	}
+	// The recorded 660 is account-only and cannot be revalued.
+	if status.EquityHistory != nil {
+		t.Fatalf("account-only history passed through: %+v", status.EquityHistory)
 	}
 
 	now := time.Unix(1788600000, 0).UTC()
@@ -385,10 +390,13 @@ func TestAccumulatorCustodianHoldingsLeaveTheBotFigureAlone(t *testing.T) {
 		status := &StatusData{Accumulator: &AccumulatorStatus{
 			TotalEquityUSDC: 125, USDCBalance: 25, HYPEBalance: 2, HYPEPriceUSDC: 40,
 			HYPETransferredToCustodian: custodian,
-		}}
+		}, EquityHistory: []EquityPoint{{TS: 1, Equity: 125}}}
 		applyAccumulatorCustodianHoldings(status)
 		if got := status.Accumulator.TotalEquityUSDC; got != 125 {
 			t.Fatalf("custodian %v: total equity = %v, want the bot's 125", custodian, got)
+		}
+		if len(status.EquityHistory) != 1 {
+			t.Fatalf("custodian %v: history withheld without a transfer", custodian)
 		}
 	}
 	applyAccumulatorCustodianHoldings(nil)
