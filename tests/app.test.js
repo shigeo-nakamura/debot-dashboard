@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -40,6 +40,60 @@ test("bull holder uses daily close, distinguishes unknown peaks and pending ADD"
   }
   assert.equal(context.__test.bullHolderViewModel({ total_equity_usdc: null, legs: {} }).total, "—");
   assert.equal(context.__test.holderMoney(1301.004651), "1,301.0 USDC");
+});
+
+test("bull holder legs report cost, value and PnL, and the ladder's progress in money", () => {
+  // Quantities alone do not answer "what did this cost and what is it
+  // worth now" — the question the card exists for (bot-strategy#1054).
+  const model = context.__test.bullHolderViewModel({
+    mode: "On",
+    tranches_done: 2,
+    tranches_remaining: 3,
+    tranche_spot_usd: 90,
+    tranche_perp_usd: 45,
+    hyperliquid: { holdings: [{ symbol: "UBTC", price_usdc: 90000 }] },
+    lighter: { holdings: [{ symbol: "BTC", price_usdc: 89000 }] },
+    legs: {
+      BTC: { spot_size: 0.01, spot_cost_usd: 800, perp_size: 0.005, perp_cost_usd: 400 },
+    },
+  });
+  const leg = model.legs[0];
+  // HL holds the wrapped token (UBTC), Lighter the bare symbol.
+  assert.equal(leg.spot.mark, 90000);
+  assert.equal(leg.perp.mark, 89000);
+  assert.equal(leg.spot.value, 900);
+  assert.equal(leg.spot.cost, 800);
+  assert.equal(leg.spot.avg, 80000);
+  assert.equal(leg.spot.pnl, 100);
+  assert.equal(Math.round(leg.spot.pnlPct * 100) / 100, 12.5);
+  assert.equal(leg.perp.value, 445);
+  assert.equal(leg.perp.pnl, 45);
+  // Deployed is what the legs cost; the plan is the tranche size times
+  // every tranche of the cycle, times the legs.
+  assert.equal(model.deployed.cost, 1200);
+  assert.equal(model.deployed.planned, (90 + 45) * 5 * 1);
+  assert.equal(Math.round(model.deployed.pct), 178);
+
+  // A leg the venue cannot price reports no value and no PnL rather than
+  // a number derived from a stale mark.
+  const unpriced = context.__test.bullHolderViewModel({
+    legs: { BTC: { spot_size: 1, spot_cost_usd: 100, perp_size: 0 } },
+  });
+  assert.equal(unpriced.legs[0].spot.value, null);
+  assert.equal(unpriced.legs[0].spot.pnl, null);
+  assert.equal(unpriced.legs[0].perp, null, "a leg with no size has no money row");
+
+  // The bot's own "this basis no longer describes what is held" flag wins
+  // over any arithmetic.
+  const unknownBasis = context.__test.bullHolderViewModel({
+    hyperliquid: { holdings: [{ symbol: "UBTC", price_usdc: 90000 }] },
+    legs: { BTC: { spot_size: 0.01, spot_cost_usd: 800, cost_basis_unknown: true, perp_size: 0 } },
+  });
+  assert.equal(unknownBasis.legs[0].spot.cost, null);
+  assert.equal(unknownBasis.legs[0].spot.pnl, null);
+  assert.equal(unknownBasis.legs[0].spot.value, 900);
+
+  assert.equal(context.__test.bullHolderViewModel({ legs: {} }).deployed, null);
 });
 
 test("bull holder render is read-only and separates simulation from actual holdings", () => {

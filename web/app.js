@@ -1427,6 +1427,11 @@ const holderAmount = (value) => {
   const n = holderNumber(value);
   return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: AMOUNT_DIGITS });
 };
+// Signed money, for a difference where the direction is the point.
+const holderSigned = (value) => {
+  const n = holderNumber(value);
+  return n === null ? "—" : `${n >= 0 ? "+" : "-"}${groupedFixed(Math.abs(n), MONEY_DIGITS)} USDC`;
+};
 const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
 const bullHolderViewModel = (b) => ({
   mode: ({ Off: "Off · awaiting ARM", On: "On · holding / scheduled entries", Exited: "Exited · manual ARM required" })[b.mode] || "State unavailable",
@@ -1438,9 +1443,72 @@ const bullHolderViewModel = (b) => ({
     const close = holderNumber(leg.last_close), peak = holderNumber(leg.peak_close);
     const drop = close !== null && close > 0 && peak !== null && peak > 0 ? Math.max(0, 100 * (1 - close / peak)) : null;
     const exit = holderNumber(leg.exit_level);
-    return { symbol, ...leg, drop, triggerPct: exit !== null && exit > 0 && peak > 0 ? 100 * (1 - exit / peak) : null };
+    return {
+      symbol,
+      ...leg,
+      drop,
+      triggerPct: exit !== null && exit > 0 && peak > 0 ? 100 * (1 - exit / peak) : null,
+      spot: legMoney(leg.spot_size, leg.spot_cost_usd, venueMark(b.hyperliquid, symbol), leg.cost_basis_unknown),
+      perp: legMoney(leg.perp_size, leg.perp_cost_usd, venueMark(b.lighter, symbol), leg.perp_cost_basis_unknown),
+    };
   }),
+  deployed: holderDeployed(b),
 });
+
+// The venue's own mark for a symbol, from the account block the dashboard
+// already fetches. HL spot holds the wrapped token (UBTC for BTC), so the
+// match is by suffix as well as by name.
+const venueMark = (account, symbol) => {
+  const wanted = String(symbol).toUpperCase();
+  const asset = (account?.holdings || []).find((a) => {
+    const s = String(a.symbol || "").toUpperCase();
+    return s === wanted || s === `U${wanted}` || s.startsWith(`${wanted}/`) || s.startsWith(`U${wanted}/`);
+  });
+  return holderNumber(asset?.price_usdc);
+};
+
+// Per-leg money: what it cost, what it is worth now, and the difference.
+// `costUnknown` is the bot's own flag for a leg whose basis no longer
+// describes what is held (a partial exit against a venue holding that
+// differed) — PnL is withheld rather than invented.
+const legMoney = (size, costUsd, mark, costUnknown) => {
+  const qty = holderNumber(size), cost = holderNumber(costUsd);
+  if (qty === null || qty <= 0) return null;
+  const value = mark === null ? null : qty * mark;
+  const known = !costUnknown && cost !== null && cost > 0;
+  const pnl = value === null || !known ? null : value - cost;
+  return {
+    qty,
+    cost: known ? cost : null,
+    avg: known ? cost / qty : null,
+    mark,
+    value,
+    pnl,
+    pnlPct: pnl === null ? null : (100 * pnl) / cost,
+  };
+};
+
+// Deployed vs planned, and where the ladder is. `tranche_*_usd` are the
+// per-symbol tranche sizes fixed at ARM, so the plan is those times the
+// tranche count times the number of legs — which is what the operator is
+// actually committing, not the configured capital.
+const holderDeployed = (b) => {
+  const legs = Object.values(b.legs || {});
+  if (!legs.length) return null;
+  const sum = (f) => legs.reduce((t, l) => t + (holderNumber(l[f]) || 0), 0);
+  const cost = sum("spot_cost_usd") + sum("perp_cost_usd");
+  const perTranche = (holderNumber(b.tranche_spot_usd) || 0) + (holderNumber(b.tranche_perp_usd) || 0);
+  const done = holderNumber(b.tranches_done) || 0;
+  const remaining = holderNumber(b.tranches_remaining) || 0;
+  const planned = perTranche > 0 ? perTranche * (done + remaining) * legs.length : null;
+  return {
+    cost,
+    planned,
+    pct: planned ? (100 * cost) / planned : null,
+    done,
+    remaining,
+  };
+};
 
 // Short "Xh ago" form for the summary meta line, as opposed to
 // holderTime's full "date · age ago" (too long for a one-line
@@ -2034,6 +2102,15 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   row("ARM accepted", holderTime(b.armed_at));
   row("Last exit", holderTime(b.exited_at));
   if (b.exit_reason) row("Exit reason", b.exit_reason);
+  if (view.deployed) {
+    const d = view.deployed;
+    row(
+      "Deployed / planned",
+      d.planned === null
+        ? `${holderMoney(d.cost)} · plan unavailable`
+        : `${holderMoney(d.cost)} of ${holderMoney(d.planned)} (${d.pct.toFixed(0)}%)`,
+    );
+  }
   row("Entries", b.mode ? `${b.tranches_done} done · ${b.tranches_remaining} scheduled` : "—");
   row("Last tranche (UTC)", b.last_tranche_date || "—");
   row("Tranche / symbol", b.armed_at ? `spot ${holderMoney(b.tranche_spot_usd)} · perp ${holderMoney(b.tranche_perp_usd)}` : "Set at ARM");
@@ -2051,6 +2128,32 @@ const renderBullHolderStatus = (container, b, dryRun) => {
     const panel = add("div", "", container, "holder-leg");
     add("h4", leg.symbol, panel);
     row("Spot / perp quantity", `${holderAmount(leg.spot_size)} / ${holderAmount(leg.perp_size)}`, panel);
+    // What is actually held, in money: cost, current value, and the gap.
+    // Quantities alone ("0.00229 BTC") do not answer "what did this cost
+    // and what is it worth now" (bot-strategy#1054).
+    [["Spot", leg.spot], ["Perp", leg.perp]].forEach(([name, m]) => {
+      if (!m) return;
+      row(
+        `${name} · value @ mark`,
+        m.value === null ? "Mark unavailable" : `${holderMoney(m.value)} @ ${holderMoney(m.mark)}`,
+        panel,
+      );
+      row(
+        `${name} · cost`,
+        m.cost === null ? "Basis unknown" : `${holderMoney(m.cost)} @ ${holderMoney(m.avg)} avg`,
+        panel,
+      );
+      row(
+        `${name} · unrealized`,
+        m.pnl === null ? "—" : `${holderSigned(m.pnl)} (${m.pnlPct >= 0 ? "+" : ""}${m.pnlPct.toFixed(2)}%)`,
+        panel,
+      );
+    });
+    if (leg.spot?.value !== null && leg.perp?.value !== null && leg.spot && leg.perp) {
+      // Spot + perp is the symbol's real exposure; the perp leg is the
+      // levered part of the same directional bet, not a hedge.
+      row("Exposure · spot + perp", holderMoney(leg.spot.value + leg.perp.value), panel);
+    }
     row("Peak close", holderMoney(leg.peak_close > 0 ? leg.peak_close : null), panel);
     row("Last daily close", `${holderMoney(leg.last_close)} · ${leg.last_close_date || "—"} UTC`, panel);
     row("Drop from peak", leg.drop === null ? "—" : `${leg.drop.toFixed(2)}% · exit > ${leg.triggerPct?.toFixed(2) ?? "—"}%`, panel);
