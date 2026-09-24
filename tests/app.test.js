@@ -73,6 +73,19 @@ test("bull holder legs report cost, value and PnL, and the ladder's progress in 
   assert.equal(model.deployed.cost, 1200);
   assert.equal(model.deployed.planned, (90 + 45) * 5 * 1);
   assert.equal(Math.round(model.deployed.pct), 178);
+  // The plan covers every configured symbol, not just the ones that have
+  // filled — otherwise a symbol still waiting for its first tranche
+  // inflates the percentage.
+  const twoSymbols = context.__test.bullHolderViewModel({
+    configured_symbols: ["BTC", "ETH"],
+    tranches_done: 2,
+    tranches_remaining: 3,
+    tranche_spot_usd: 90,
+    tranche_perp_usd: 45,
+    legs: { BTC: { spot_size: 0.01, spot_cost_usd: 800, perp_size: 0.005, perp_cost_usd: 400 } },
+  });
+  assert.equal(twoSymbols.deployed.planned, (90 + 45) * 5 * 2);
+  assert.equal(Math.round(twoSymbols.deployed.pct), 89);
 
   // A leg the venue cannot price reports no value and no PnL rather than
   // a number derived from a stale mark.

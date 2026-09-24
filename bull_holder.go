@@ -98,6 +98,16 @@ type BullHolderLeg struct {
 	ExitLevel     float64  `json:"exit_level"`
 	StopLevel     *float64 `json:"stop_level"`
 	StopSize      *float64 `json:"stop_size"`
+	// What the leg cost, and the producer's own flags for a basis that no
+	// longer describes what is held (a partial exit against a venue
+	// holding that differed). This struct is an allowlist: a field absent
+	// here is dropped, and the card would render every cost as unknown
+	// and every PnL as blank while the producer published all of it
+	// (bot-strategy#1054).
+	SpotCostUSD          float64 `json:"spot_cost_usd"`
+	PerpCostUSD          float64 `json:"perp_cost_usd"`
+	CostBasisUnknown     bool    `json:"cost_basis_unknown"`
+	PerpCostBasisUnknown bool    `json:"perp_cost_basis_unknown"`
 }
 type HolderAccount struct {
 	UnrealizedPnL *float64 `json:"unrealized_pnl_usdc"`

@@ -1500,7 +1500,15 @@ const holderDeployed = (b) => {
   const perTranche = (holderNumber(b.tranche_spot_usd) || 0) + (holderNumber(b.tranche_perp_usd) || 0);
   const done = holderNumber(b.tranches_done) || 0;
   const remaining = holderNumber(b.tranches_remaining) || 0;
-  const planned = perTranche > 0 ? perTranche * (done + remaining) * legs.length : null;
+  // The plan covers every CONFIGURED symbol. `legs` only lists the ones
+  // that have filled, so sizing the denominator from it understates the
+  // commitment and inflates the percentage while a symbol is still
+  // waiting for its first tranche — which is exactly when the row is
+  // read most closely.
+  const symbols = Array.isArray(b.configured_symbols) && b.configured_symbols.length
+    ? b.configured_symbols.length
+    : legs.length;
+  const planned = perTranche > 0 ? perTranche * (done + remaining) * symbols : null;
   return {
     cost,
     planned,

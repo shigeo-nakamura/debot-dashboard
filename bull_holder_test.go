@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -195,5 +196,44 @@ func TestHolderConfigSourceValidation(t *testing.T) {
 	valid := Config{Region: "eu-central-1", Targets: []TargetConfig{{Service: "holder", BullHolder: &BullHolderConfig{StatusPath: "/tmp/status"}}}}
 	if err := normalizeConfig(&valid); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// `BullHolderLeg` is an allowlist: a producer field missing from it is
+// dropped silently, and the card would render every cost as unknown and
+// every PnL as blank while the producer was publishing all of it. Assert
+// the round trip the browser actually gets, not a hand-built object
+// (bot-strategy#1054).
+func TestHolderLegCostReachesTheAPI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+	writeHolder(t, path, fmt.Sprintf(`{"ts":%d,"bot":"bull_holder","dry_run":false,"mode":"On","legs":{"BTC":{
+		"spot_size":0.01,"spot_cost_usd":800.5,"perp_size":0.005,"perp_cost_usd":400.25,
+		"cost_basis_unknown":false,"perp_cost_basis_unknown":true,
+		"peak_close":100000,"exit_level":70000}}}`, time.Now().Unix()))
+	target := TargetConfig{Service: "debot-bull-holder", BullHolder: &BullHolderConfig{StatusPath: path, HLAddress: "0x0000000000000000000000000000000000000001", LighterIndex: "42"}}
+	status := fetchBullHolder(context.Background(), target, &http.Client{Timeout: time.Second})
+	if status.Status == nil || status.Status.BullHolder == nil {
+		t.Fatal("no bull-holder status")
+	}
+	leg, ok := status.Status.BullHolder.Legs["BTC"]
+	if !ok {
+		t.Fatal("BTC leg missing")
+	}
+	if leg.SpotCostUSD != 800.5 || leg.PerpCostUSD != 400.25 {
+		t.Fatalf("costs dropped by the allowlist: spot %v perp %v", leg.SpotCostUSD, leg.PerpCostUSD)
+	}
+	if leg.CostBasisUnknown || !leg.PerpCostBasisUnknown {
+		t.Fatalf("basis flags dropped: spot %v perp %v", leg.CostBasisUnknown, leg.PerpCostBasisUnknown)
+	}
+	// And they survive the JSON the browser is served.
+	out, err := json.Marshal(status.Status.BullHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"spot_cost_usd":800.5`, `"perp_cost_usd":400.25`, `"perp_cost_basis_unknown":true`} {
+		if !strings.Contains(string(out), key) {
+			t.Fatalf("%s missing from the served payload: %s", key, out)
+		}
 	}
 }
