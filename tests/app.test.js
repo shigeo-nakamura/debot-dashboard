@@ -1972,6 +1972,27 @@ test("accumulator keeps staking carry out of price beta", () => {
   assert.equal(noStaking.stakingRewards, null);
 });
 
+test("accumulator counts HYPE sent to the custodian as still owned", () => {
+  // 6 bought for 540; 4 sent to the designated parent to stake (#847).
+  const accumulator = { hype_balance: 2, hype_price_usdc: 100, hype_transferred_to_custodian: 4 };
+  const view = context.__test.accumulatorViewModel(accumulator, Date.now(), { spent_usdc: 540 });
+  // Marking only the 2 left on the account would report -340.
+  assert.equal(view.unrealizedPnlUsdc, 60);
+  assert.equal(view.custodian, "4 HYPE");
+  assert.equal(view.hype, "2 HYPE");
+
+  // Nothing transferred yet, or a document without custody: no row.
+  for (const custodian of [0, undefined]) {
+    const none = context.__test.accumulatorViewModel(
+      { hype_balance: 6, hype_price_usdc: 100, hype_transferred_to_custodian: custodian },
+      Date.now(),
+      { spent_usdc: 540 },
+    );
+    assert.equal(none.unrealizedPnlUsdc, 60);
+    assert.equal(none.custodian, null);
+  }
+});
+
 test("DCA benchmark row reports the edge in bps and withholds what it lacks", () => {
   const card = benchmarkCard();
   context.__test.renderAccumulatorDCA(card, {

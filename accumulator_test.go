@@ -343,3 +343,76 @@ func TestAccumulatorOperationsParsesLastDecisionAt(t *testing.T) {
 		t.Fatal("null must parse as absent")
 	}
 }
+
+func TestAccumulatorCustodianTransferIsStillOwnedHYPE(t *testing.T) {
+	// 6 HYPE bought for 540 USDC; the owner then sent 4 of them to the
+	// designated parent to stake (bot-strategy#847). The execution account
+	// now shows 2 HYPE, and the bot-side total counts only those.
+	custodian := 4.0
+	status := &StatusData{Accumulator: &AccumulatorStatus{
+		TotalEquityUSDC:            460 + 2*100,
+		USDCBalance:                460,
+		HYPEBalance:                2,
+		HYPEPriceUSDC:              100,
+		HYPETransferredToCustodian: &custodian,
+	}}
+	status.EquityHistory = []EquityPoint{{TS: 1, Equity: 1060}, {TS: 2, Equity: 660}}
+	applyAccumulatorCustodianHoldings(status)
+	if got := status.Accumulator.TotalEquityUSDC; math.Abs(got-1060) > 1e-9 {
+		t.Fatalf("total equity = %v, want 1060 (the transfer is not a loss)", got)
+	}
+	// The recorded 660 is account-only and cannot be revalued.
+	if status.EquityHistory != nil {
+		t.Fatalf("account-only history passed through: %+v", status.EquityHistory)
+	}
+
+	now := time.Unix(1788600000, 0).UTC()
+	cfg := &DCAConfig{WindowStart: "2026-09-01", Symbol: "HYPE"}
+	b, msg := accumulatorDCABenchmark(
+		status.Accumulator, &AccumulatorOperations{SpentUSDC: 540},
+		cfg, []float64{60, 120}, "", now,
+	)
+	if msg != "" || b.CostBasisUSD == nil || math.Abs(*b.CostBasisUSD-90) > 1e-9 {
+		got := math.NaN()
+		if b != nil && b.CostBasisUSD != nil {
+			got = *b.CostBasisUSD
+		}
+		t.Fatalf("cost basis = %v (%q), want 90 (540 over all 6 bought), not 270", got, msg)
+	}
+}
+
+func TestAccumulatorCustodianHoldingsLeaveTheBotFigureAlone(t *testing.T) {
+	// Nothing transferred (or a document that does not report custody):
+	// the bot's own total stands, even where it is not usdc + hype × mark.
+	zero := 0.0
+	bad := math.NaN()
+	for _, custodian := range []*float64{nil, &zero, &bad} {
+		status := &StatusData{Accumulator: &AccumulatorStatus{
+			TotalEquityUSDC: 125, USDCBalance: 25, HYPEBalance: 2, HYPEPriceUSDC: 40,
+			HYPETransferredToCustodian: custodian,
+		}, EquityHistory: []EquityPoint{{TS: 1, Equity: 125}}}
+		applyAccumulatorCustodianHoldings(status)
+		if got := status.Accumulator.TotalEquityUSDC; got != 125 {
+			t.Fatalf("custodian %v: total equity = %v, want the bot's 125", custodian, got)
+		}
+		if len(status.EquityHistory) != 1 {
+			t.Fatalf("custodian %v: history withheld without a transfer", custodian)
+		}
+	}
+	applyAccumulatorCustodianHoldings(nil)
+	applyAccumulatorCustodianHoldings(&StatusData{})
+}
+
+func TestAccumulatorStatusDecodesCustodianTransfer(t *testing.T) {
+	var a AccumulatorStatus
+	if err := json.Unmarshal([]byte(`{"hype_balance": 6.5, "hype_transferred_to_custodian": 1.25}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.OwnedHYPE() != 7.75 {
+		t.Fatalf("owned = %v, want 7.75", a.OwnedHYPE())
+	}
+	out, err := json.Marshal(&a)
+	if err != nil || !strings.Contains(string(out), `"hype_transferred_to_custodian":1.25`) {
+		t.Fatalf("custodian figure not passed through to the page: %s %v", out, err)
+	}
+}

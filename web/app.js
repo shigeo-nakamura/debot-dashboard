@@ -778,6 +778,7 @@ const createCard = (key) => {
         <div class="kv accumulator-balances">
           <div>USDC amount <span data-field="accumulator-usdc"></span></div>
           <div>HYPE amount <span data-field="accumulator-hype"></span></div>
+          <div data-field="accumulator-custodian-row" hidden>HYPE with custodian <span data-field="accumulator-custodian"></span></div>
           <div>HYPE mark <span data-field="accumulator-mark"></span></div>
         </div>
         <div class="benchmark-panel" data-field="accumulator-dca">
@@ -2863,9 +2864,16 @@ const accumulatorViewModel = (accumulator, nowMs = Date.now(), operations = null
   // HYPE it bought, so it gets its own row and is taken out of the
   // mark-to-market of what was purchased (bot-strategy#956 / #847).
   const stakingRewardsHype = parseNumber(accumulator.staking_rewards_hype);
+  // HYPE the owner sent to the designated parent to stake (#847 option
+  // (a)) has left the execution account but is still bought exposure:
+  // leaving it out would book every staking transfer as a loss.
+  const rawCustodianHype = parseNumber(accumulator.hype_transferred_to_custodian);
+  const custodianHype = rawCustodianHype !== null && rawCustodianHype >= 0 ? rawCustodianHype : null;
   const purchasedHype = hypeBalance === null
     ? null
-    : hypeBalance - (stakingRewardsHype === null ? 0 : stakingRewardsHype);
+    : hypeBalance
+      + (custodianHype === null ? 0 : custodianHype)
+      - (stakingRewardsHype === null ? 0 : stakingRewardsHype);
   const unrealizedPnlUsdc = spentUsdc !== null && purchasedHype !== null && hypePriceUsdc !== null
     ? purchasedHype * hypePriceUsdc - spentUsdc
     : null;
@@ -2873,6 +2881,8 @@ const accumulatorViewModel = (accumulator, nowMs = Date.now(), operations = null
     ? stakingRewardsHype * hypePriceUsdc
     : null;
   return {
+    custodianHype,
+    custodian: custodianHype === null || custodianHype === 0 ? null : formatHype(custodianHype),
     stakingRewardsHype,
     stakingRewards: stakingRewardsHype === null
       ? null
@@ -2953,6 +2963,10 @@ const renderAccumulatorStatus = (card, accumulator, operations, data = null) => 
     const element = card.querySelector(`[data-field="${field}"]`);
     if (element) element.textContent = value;
   });
+  const custodianRowEl = card.querySelector('[data-field="accumulator-custodian-row"]');
+  const custodianEl = card.querySelector('[data-field="accumulator-custodian"]');
+  if (custodianRowEl) custodianRowEl.hidden = view.custodian === null;
+  if (custodianEl) custodianEl.textContent = view.custodian || "";
   const pnlRowEl = card.querySelector('[data-field="accumulator-pnl-row"]');
   const pnlEl = card.querySelector('[data-field="accumulator-pnl"]');
   if (pnlRowEl) pnlRowEl.hidden = view.unrealizedPnl === null;

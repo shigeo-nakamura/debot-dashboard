@@ -364,7 +364,7 @@ func accumulatorDCABenchmark(
 		// cost basis to compare, and the mark is not a substitute.
 		return b, ""
 	}
-	purchased := status.HYPEBalance - status.StakingRewards()
+	purchased := status.OwnedHYPE() - status.StakingRewards()
 	if purchased <= 0 || ops.SpentUSDC <= 0 {
 		return b, ""
 	}
@@ -379,6 +379,33 @@ func accumulatorDCABenchmark(
 	b.CostBasisUSD = &basis
 	b.EdgeBps = &edge
 	return b, ""
+}
+
+// applyAccumulatorCustodianHoldings puts the HYPE held with the custodian
+// back into the accumulator's total equity (bot-strategy#847). The bot
+// derives total_equity_usdc from the execution account only, so without
+// this a staking transfer would show as an equity drop of the whole
+// transferred amount on the card, the fleet total and the β bucket.
+// A no-op until something has been transferred, so the bot's own figure
+// stands untouched in the common case.
+//
+// A producer-recorded equity history is withheld once anything has been
+// transferred: its points are valued on the execution account alone and
+// carry no custodian figure, so they cannot be revalued. Passing them
+// through would chart each transfer as a loss followed by a fictitious
+// recovery and anchor month-to-date on the wrong base; without them the
+// page builds the series from the corrected live snapshots instead.
+func applyAccumulatorCustodianHoldings(status *StatusData) {
+	if status == nil || status.Accumulator == nil {
+		return
+	}
+	a := status.Accumulator
+	custodian := a.CustodianHYPE()
+	if custodian == 0 {
+		return
+	}
+	a.TotalEquityUSDC = a.USDCBalance + a.OwnedHYPE()*a.HYPEPriceUSDC
+	status.EquityHistory = nil
 }
 
 // applyAccumulatorDCA derives the DCA benchmark onto the status, after
