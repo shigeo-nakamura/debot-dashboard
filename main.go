@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -139,6 +140,37 @@ type AccumulatorStatus struct {
 	// the bot earned, not HYPE it bought cheaply.
 	StakedHYPE         *float64 `json:"staked_hype,omitempty"`
 	StakingRewardsHYPE *float64 `json:"staking_rewards_hype,omitempty"`
+	// HYPETransferredToCustodian is bot-bought HYPE the owner has sent to
+	// the designated parent to stake there (bot-strategy#847, option (a):
+	// owner-signed, batched). It has left the execution account, so it is
+	// no longer in HYPEBalance, but the bot still owns the exposure.
+	// Absent before the custodian was enabled (2026-09-20) and on the
+	// private hype-status document.
+	HYPETransferredToCustodian *float64 `json:"hype_transferred_to_custodian,omitempty"`
+}
+
+// CustodianHYPE returns the HYPE held with the custodian, or zero when
+// the bot does not report it (or reports something unusable).
+func (a *AccumulatorStatus) CustodianHYPE() float64 {
+	if a == nil || a.HYPETransferredToCustodian == nil {
+		return 0
+	}
+	v := *a.HYPETransferredToCustodian
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0
+	}
+	return v
+}
+
+// OwnedHYPE is every HYPE the bot bought and still holds the exposure
+// to: what sits on the execution account plus what was moved to the
+// custodian for staking. Equity, PnL and cost basis are all about this
+// figure; HYPEBalance alone would read a staking transfer as a loss.
+func (a *AccumulatorStatus) OwnedHYPE() float64 {
+	if a == nil {
+		return 0
+	}
+	return a.HYPEBalance + a.CustodianHYPE()
 }
 
 // StakingRewards returns the accrued yield, or zero when the bot does
@@ -879,6 +911,7 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 				gate = results[i].Status.Gate
 			}
 			results[i].Gate = resolveGate(target.Gate, gate, time.Now())
+			applyAccumulatorCustodianHoldings(results[i].Status)
 			applyAccumulatorDCA(ctx, results[i].Status, target.Accumulator, http.DefaultClient, time.Now())
 			applyAccumulatorDecisionStaleness(results[i].Status, time.Now())
 		}()
