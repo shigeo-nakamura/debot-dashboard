@@ -1133,6 +1133,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isHedgeHolderHalted(data) ||
     isHedgeHolderFeedBlind(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
+    // A red API wallet (under 7 d, expired, unknown while live) is operator
+    // trouble a collapsed card would hide (Codex, PR #61).
+    (bullHolder && isHolderAgentRed(bullHolder, data.dry_run)) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
     card.classList.remove("collapsed");
@@ -1433,7 +1436,18 @@ const holderSigned = (value) => {
   const n = holderNumber(value);
   return n === null ? "—" : `${n >= 0 ? "+" : "-"}${groupedFixed(Math.abs(n), MONEY_DIGITS)} USDC`;
 };
-const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
+// Epoch seconds the producer publishes. Bounded so a malformed value (a
+// nanosecond timestamp, MaxInt64) becomes "—" instead of a RangeError from
+// toISOString() that would stop the shared render loop (Codex, PR #61).
+const EPOCH_SECS_MAX = 1e11; // year 5138
+const holderEpochSecs = (value) => {
+  const n = holderNumber(value);
+  return n === null || n <= 0 || n > EPOCH_SECS_MAX ? null : n;
+};
+const holderTime = (value) => {
+  const secs = holderEpochSecs(value);
+  return secs === null ? "—" : formatDateWithAge(new Date(secs * 1000).toISOString());
+};
 const bullHolderViewModel = (b, nowMs = Date.now()) => ({
   mode: ({ Off: "Off · awaiting ARM", On: "On · holding / scheduled entries", Exited: "Exited · manual ARM required" })[b.mode] || "State unavailable",
   total: holderMoney(b.total_equity_usdc),
@@ -1463,10 +1477,12 @@ const bullHolderViewModel = (b, nowMs = Date.now()) => ({
 // working: the date must be visible, and its absence while live must
 // read as a problem, not as "nothing to show" (bot-strategy#1054).
 // Amber under 30 d, red under 7 d, expired, or unknown while live.
+const isHolderAgentRed = (b, dryRun) =>
+  holderAgent(dryRun === undefined ? b : { ...b, dry_run: dryRun }).tone === "holder-red";
 const AGENT_AMBER_DAYS = 30;
 const AGENT_RED_DAYS = 7;
 const holderAgent = (b, nowMs = Date.now()) => {
-  const validUntil = holderNumber(b.hl_agent_valid_until);
+  const validUntil = holderEpochSecs(b.hl_agent_valid_until);
   const live = b.dry_run === false;
   if (validUntil === null) {
     if (!live) return { known: false, tone: "", text: b.dry_run === true ? "Not checked (DRY_RUN)" : "Not reported" };
@@ -1579,7 +1595,7 @@ const renderHolderSummary = (card, b, chartHistory, serviceStatus, dryRun) => {
   // An API wallet about to expire (or unknown while live) is operator
   // trouble on the same footing as a halt: open the details so the row
   // is seen (bot-strategy#1054).
-  const agentRed = holderAgent(dryRun === undefined ? b : { ...b, dry_run: dryRun }).tone === "holder-red";
+  const agentRed = isHolderAgentRed(b, dryRun);
   const equityEl = card.querySelector('[data-field="holder-equity"]');
   const modeEl = card.querySelector('[data-field="holder-mode-pill"]');
   const lastTradeEl = card.querySelector('[data-field="holder-last-trade"]');

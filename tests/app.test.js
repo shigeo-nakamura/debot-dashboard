@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus };`;
+globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -139,6 +139,21 @@ test("bull holder API-wallet expiry: date and days from the producer, tone by pr
   // A wrong-type value (the producer serialises numbers; a string date
   // would be a bug) is unknown, not NaN days.
   assert.equal(context.__test.bullHolderViewModel({ legs: {}, dry_run: false, hl_agent_valid_until: "2027-03-21" }, now).agent.known, false);
+  // An implausible epoch (nanoseconds, MaxInt64) is unknown too — it must
+  // never reach toISOString(), which throws and would stop the render loop
+  // for every later card (Codex, PR #61). Same for the check time.
+  for (const bad of [1.8e18, 9223372036854775807, -5, 0]) {
+    const agent = context.__test.bullHolderViewModel({ legs: {}, dry_run: false, hl_agent_valid_until: bad }, now).agent;
+    assert.equal(agent.known, false, `valid_until=${bad}`);
+    assert.equal(agent.tone, "holder-red", `valid_until=${bad} while live is a problem`);
+    assert.equal(context.__test.holderTime(bad), "—", `as_of=${bad}`);
+  }
+  assert.match(context.__test.holderTime(1790000000), /2026/);
+  // The outer-card predicate follows the same tone.
+  assert.equal(context.__test.isHolderAgentRed({ hl_agent_valid_until: null }, false), true);
+  assert.equal(context.__test.isHolderAgentRed({ hl_agent_valid_until: null }, true), false);
+  assert.equal(context.__test.isHolderAgentRed({ hl_agent_valid_until: (now + 100 * day) / 1000 }, false), false);
+  assert.equal(context.__test.isHolderAgentRed({ dry_run: false, hl_agent_valid_until: 1.8e18 }), true, "reads dry_run from the object when the caller passes none");
 });
 
 test("bull holder render is read-only and separates simulation from actual holdings", () => {
@@ -185,6 +200,9 @@ test("bull holder render is read-only and separates simulation from actual holdi
   assert.match(text(root), /HL API wallet\s+expires \d{4}-\d{2}-\d{2} \((9|10) d\) · bull-holder/);
   assert.match(text(root), /The bot cannot renew this wallet/);
   assert.equal(classes.includes("holder-amber"), true);
+  // A bad check time renders "—" rather than throwing mid-render.
+  context.__test.renderBullHolderStatus(root, { mode: "On", legs: {}, hl_agent_name: "bull-holder", hl_agent_valid_until: Math.floor(Date.now() / 1000) + 10 * 86_400, hl_agent_as_of: 9223372036854775807 }, false);
+  assert.match(text(root), /Checked —\./);
   // Live with nothing published: red row plus the warning paragraph.
   context.__test.renderBullHolderStatus(root, { mode: "On", legs: {} }, false);
   assert.match(text(root), /HL API wallet\s+Unknown · agent not found on the master/);
