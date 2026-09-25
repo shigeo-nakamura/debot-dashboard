@@ -84,6 +84,16 @@ type BullHolderStatus struct {
 	// not read as "no cost". bot-strategy#955.
 	CumFunding *float64 `json:"cum_funding_usdc"`
 	CumFees    *float64 `json:"cum_fees_usdc"`
+	// The Hyperliquid API wallet the spot leg signs with, and when its
+	// approval on the master expires. The bot cannot renew it (that is a
+	// master-wallet signature), so an expiry would silently break the spot
+	// leg's exits while the perp stop kept working. The producer reads it
+	// once a day; all three are null in DRY_RUN or before the first read.
+	// Pointers so absence renders as "unknown", never as a date
+	// (bot-strategy#1054).
+	HLAgentName       *string `json:"hl_agent_name"`
+	HLAgentValidUntil *int64  `json:"hl_agent_valid_until"`
+	HLAgentAsOf       *int64  `json:"hl_agent_as_of"`
 	// Benchmark is derived by the dashboard, never by the producer: see
 	// holderBenchmarkFrom. BenchmarkError explains why it is absent.
 	Benchmark      *HolderBenchmark `json:"benchmark"`

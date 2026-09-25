@@ -237,3 +237,40 @@ func TestHolderLegCostReachesTheAPI(t *testing.T) {
 		}
 	}
 }
+
+// Same allowlist rule for the API-wallet expiry: the card must show the
+// date the producer published, and "unknown" only when it published
+// nothing (bot-strategy#1054).
+func TestHolderAgentExpiryReachesTheAPI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+	target := TargetConfig{Service: "debot-bull-holder", BullHolder: &BullHolderConfig{StatusPath: path, HLAddress: "0x0000000000000000000000000000000000000001", LighterIndex: "42"}}
+	writeHolder(t, path, fmt.Sprintf(`{"ts":%d,"bot":"bull_holder","dry_run":false,"mode":"On","legs":{},
+		"hl_agent_name":"bull-holder","hl_agent_valid_until":1805174820,"hl_agent_as_of":1790000000}`, time.Now().Unix()))
+	status := fetchBullHolder(context.Background(), target, &http.Client{Timeout: time.Second})
+	b := status.Status.BullHolder
+	if b.HLAgentName == nil || *b.HLAgentName != "bull-holder" || b.HLAgentValidUntil == nil || *b.HLAgentValidUntil != 1805174820 || b.HLAgentAsOf == nil || *b.HLAgentAsOf != 1790000000 {
+		t.Fatalf("agent expiry dropped by the allowlist: %+v %+v %+v", b.HLAgentName, b.HLAgentValidUntil, b.HLAgentAsOf)
+	}
+	out, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"hl_agent_name":"bull-holder"`, `"hl_agent_valid_until":1805174820`, `"hl_agent_as_of":1790000000`} {
+		if !strings.Contains(string(out), key) {
+			t.Fatalf("%s missing from the served payload: %s", key, out)
+		}
+	}
+	// A producer that publishes nothing (DRY_RUN, or before the first read)
+	// must serve explicit nulls, not zero values that would read as 1970.
+	writeHolder(t, path, fmt.Sprintf(`{"ts":%d,"bot":"bull_holder","dry_run":true,"mode":"On","legs":{}}`, time.Now().Unix()))
+	out, err = json.Marshal(fetchBullHolder(context.Background(), target, &http.Client{Timeout: time.Second}).Status.BullHolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"hl_agent_name":null`, `"hl_agent_valid_until":null`, `"hl_agent_as_of":null`} {
+		if !strings.Contains(string(out), key) {
+			t.Fatalf("%s missing from the served payload: %s", key, out)
+		}
+	}
+}

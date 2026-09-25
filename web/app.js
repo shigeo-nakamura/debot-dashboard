@@ -1133,6 +1133,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isHedgeHolderHalted(data) ||
     isHedgeHolderFeedBlind(data) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
+    // A red API wallet (under 7 d, expired, unknown while live) is operator
+    // trouble a collapsed card would hide (Codex, PR #61).
+    (bullHolder && isHolderAgentRed(bullHolder, data.dry_run)) ||
     (arcus && (arcusDegraded || status !== "active"));
   if (inTrouble) {
     card.classList.remove("collapsed");
@@ -1229,7 +1232,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     return;
   }
   if (bullHolder) {
-    renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status);
+    renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status, data.dry_run);
     renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data), {
       dryRun: data.dry_run === true,
     });
@@ -1433,8 +1436,19 @@ const holderSigned = (value) => {
   const n = holderNumber(value);
   return n === null ? "—" : `${n >= 0 ? "+" : "-"}${groupedFixed(Math.abs(n), MONEY_DIGITS)} USDC`;
 };
-const holderTime = (value) => value ? formatDateWithAge(new Date(value * 1000).toISOString()) : "—";
-const bullHolderViewModel = (b) => ({
+// Epoch seconds the producer publishes. Bounded so a malformed value (a
+// nanosecond timestamp, MaxInt64) becomes "—" instead of a RangeError from
+// toISOString() that would stop the shared render loop (Codex, PR #61).
+const EPOCH_SECS_MAX = 1e11; // year 5138
+const holderEpochSecs = (value) => {
+  const n = holderNumber(value);
+  return n === null || n <= 0 || n > EPOCH_SECS_MAX ? null : n;
+};
+const holderTime = (value) => {
+  const secs = holderEpochSecs(value);
+  return secs === null ? "—" : formatDateWithAge(new Date(secs * 1000).toISOString());
+};
+const bullHolderViewModel = (b, nowMs = Date.now()) => ({
   mode: ({ Off: "Off · awaiting ARM", On: "On · holding / scheduled entries", Exited: "Exited · manual ARM required" })[b.mode] || "State unavailable",
   total: holderMoney(b.total_equity_usdc),
   pending: b.pending == null ? "Unavailable" : Object.entries(b.pending)
@@ -1454,7 +1468,33 @@ const bullHolderViewModel = (b) => ({
     };
   }),
   deployed: holderDeployed(b),
+  agent: holderAgent(b, nowMs),
 });
+
+// The Hyperliquid API wallet the spot leg signs with. The bot cannot
+// renew it (re-approval is a master-wallet signature), so an expiry
+// would silently break the spot leg's exits while the perp stop kept
+// working: the date must be visible, and its absence while live must
+// read as a problem, not as "nothing to show" (bot-strategy#1054).
+// Amber under 30 d, red under 7 d, expired, or unknown while live.
+const isHolderAgentRed = (b, dryRun) =>
+  holderAgent(dryRun === undefined ? b : { ...b, dry_run: dryRun }).tone === "holder-red";
+const AGENT_AMBER_DAYS = 30;
+const AGENT_RED_DAYS = 7;
+const holderAgent = (b, nowMs = Date.now()) => {
+  const validUntil = holderEpochSecs(b.hl_agent_valid_until);
+  const live = b.dry_run === false;
+  if (validUntil === null) {
+    if (!live) return { known: false, tone: "", text: b.dry_run === true ? "Not checked (DRY_RUN)" : "Not reported" };
+    return { known: false, tone: "holder-red", text: "Unknown · agent not found on the master" };
+  }
+  const days = (validUntil * 1000 - nowMs) / 86_400_000;
+  const date = new Date(validUntil * 1000).toISOString().slice(0, 10);
+  const name = b.hl_agent_name ? String(b.hl_agent_name) : "agent";
+  if (days < 0) return { known: true, days, name, tone: "holder-red", text: `EXPIRED ${date} · ${name}` };
+  const tone = days < AGENT_RED_DAYS ? "holder-red" : days < AGENT_AMBER_DAYS ? "holder-amber" : "";
+  return { known: true, days, name, tone, text: `expires ${date} (${Math.floor(days)} d) · ${name}` };
+};
 
 // The venue's own mark for a symbol, from the account block the dashboard
 // already fetches. HL spot holds the wrapped token (UBTC for BTC), so the
@@ -1551,7 +1591,11 @@ const holderLastTradeText = (b) => {
 // unlike renderBullHolderStatus which is also driven directly by tests
 // with a minimal mock container — keep DOM APIs beyond
 // textContent/className/appendChild out of that function.
-const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
+const renderHolderSummary = (card, b, chartHistory, serviceStatus, dryRun) => {
+  // An API wallet about to expire (or unknown while live) is operator
+  // trouble on the same footing as a halt: open the details so the row
+  // is seen (bot-strategy#1054).
+  const agentRed = isHolderAgentRed(b, dryRun);
   const equityEl = card.querySelector('[data-field="holder-equity"]');
   const modeEl = card.querySelector('[data-field="holder-mode-pill"]');
   const lastTradeEl = card.querySelector('[data-field="holder-last-trade"]');
@@ -1579,7 +1623,7 @@ const renderHolderSummary = (card, b, chartHistory, serviceStatus) => {
   // request rows collapsed while the card itself pops open (Codex review,
   // PR #32).
   const killSwitchEngaged = Boolean(b.kill_switch) || Boolean(b.pending?.KILL_SWITCH);
-  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active" || killSwitchEngaged)) detailsEl.open = true;
+  if (detailsEl && (isBullHolderDegraded(b) || serviceStatus !== "active" || killSwitchEngaged || agentRed)) detailsEl.open = true;
 };
 
 // Max drawdown as a fraction of the running peak, which is what Calmar
@@ -2092,16 +2136,19 @@ const blindAlphaCandidate = (card, blind) => {
 const renderBullHolderStatus = (container, b, dryRun) => {
   if (!container) return;
   container.replaceChildren();
-  const view = bullHolderViewModel(b);
+  const view = bullHolderViewModel(dryRun === undefined ? b : { ...b, dry_run: dryRun });
   const add = (tag, text, parent = container, className = "") => {
     const el = document.createElement(tag);
     el.textContent = text; el.className = className; parent.appendChild(el); return el;
   };
-  const row = (label, value, parent = container) => {
-    const el = add("div", "", parent, "row"); add("span", label, el); add("strong", value, el); return el;
+  const row = (label, value, parent = container, valueClass = "") => {
+    const el = add("div", "", parent, "row"); add("span", label, el); add("strong", value, el, valueClass); return el;
   };
   add("h3", "Bull-holder");
   row("Mode", view.mode);
+  row("HL API wallet", view.agent.text, container, view.agent.tone);
+  if (view.agent.known) add("p", `Checked ${holderTime(b.hl_agent_as_of)}. The bot cannot renew this wallet: renewal is a new agent approved by the master wallet, then a key swap and restart.`, container, "holder-note");
+  else if (view.agent.tone) add("p", "No API-wallet expiry is known while live. The spot leg's exits stop working the moment the wallet expires; check the master's extraAgents and BULL_HOLDER_HL_AGENT_ADDRESS.", container, "holder-warning");
   add("h3", "Configured investment · read-only");
   const investment = b.investment;
   row("Configured capital (USD)", holderUsd(investment?.equity_usd));
