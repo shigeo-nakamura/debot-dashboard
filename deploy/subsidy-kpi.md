@@ -1,11 +1,12 @@
 # Subsidy bots: cost per unit instead of PnL
 
-Robinhood Hedge (and, until 2026-09-19, Robinhood Freq / B) and Arcus
-SPY/QQQ are subsidy-capture bots (`docs/buckets.md`). Their PnL is negative by design: they pay fees, slippage
-and adverse selection to earn something the venue is deliberately handing out
-(points, qualifying activity). Reading that PnL as a result invites tuning a
-signal that has no edge to begin with — 0/362 pairs on Arcus, bot-strategy#935
-— so the card is judged on the price paid per unit earned (bot-strategy#938,
+Robinhood Hedge (and, until 2026-09-19, Robinhood Freq / B; until
+2026-09-25, Arcus SPY/QQQ) are subsidy-capture bots (`docs/buckets.md`).
+Their PnL is negative by design: they pay fees, slippage and adverse
+selection to earn something the venue is deliberately handing out (points,
+qualifying activity). Reading that PnL as a result invites tuning a signal
+that has no edge to begin with — 0/362 pairs on Arcus, bot-strategy#935 — so
+the card is judged on the price paid per unit earned (bot-strategy#938,
 taxonomy §4.2).
 
 ## Configuration
@@ -71,16 +72,9 @@ block is ignored — a points figure priced with an activity conversion rate is 
 wrong number presented as a measurement.
 
 Until a bot reports `cost_total_usd`, the cumulative cost falls back to the
-bot's own net result, in the right direction:
-
-- Arcus: `cumulative_cost_usd`, which values the initial basket at current
-  prices and is therefore already price-neutral. The exporter emits it
-  alongside the existing `cumulative_loss_usd`, which is floored at zero
-  because the risk limits compare against it — dividing that floored figure
-  would report a cost of exactly zero for a run that came out ahead. An
-  exporter predating the signed field falls back to the floored one.
-- pairtrade-shaped bots (Robinhood): `-trade_stats.pnl`, the lifetime result
-  net of the fees and slippage that make up the cost.
+bot's own net result, in the right direction: for a pairtrade-shaped bot
+(Robinhood) that is `-trade_stats.pnl`, the lifetime result net of the fees
+and slippage that make up the cost.
 
 There is no fallback for the rolling 7-day window: it needs the daily ledger.
 

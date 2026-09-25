@@ -142,7 +142,7 @@ func TestNormalizeConfigRejectsSubsidyKPIOutsideTheSubsidyBucket(t *testing.T) {
 	ok := Config{
 		Region: "eu-central-1",
 		Targets: []TargetConfig{{
-			Service:  "arcus-spot-live-tick",
+			Service:  "debot-xvenue-hedge-holder",
 			Subsidy:  &SubsidyConfig{Unit: "USD activity"},
 			S3Bucket: "b", S3Key: "k",
 		}},
@@ -154,7 +154,7 @@ func TestNormalizeConfigRejectsSubsidyKPIOutsideTheSubsidyBucket(t *testing.T) {
 	bad := Config{
 		Region: "eu-central-1",
 		Targets: []TargetConfig{{
-			Service:  "arcus-spot-live-tick",
+			Service:  "debot-xvenue-hedge-holder",
 			Subsidy:  &SubsidyConfig{},
 			S3Bucket: "b", S3Key: "k",
 		}},

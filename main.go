@@ -16,8 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"debot-dashboard/internal/arcusstatus"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -431,14 +429,13 @@ type StatusData struct {
 	// carries no performance information and is shown even on a blinded
 	// alpha_candidate card (bot-strategy#919 follow-up). Absent on a
 	// non-session day, and on every other bot.
-	Window        []int64             `json:"window,omitempty"`
-	Book          *BookStatus         `json:"book,omitempty"`
-	TradeStats    *TradeStats         `json:"trade_stats,omitempty"`
-	Maintenance   *string             `json:"maintenance,omitempty"`
-	Shutdown      *ShutdownStatus     `json:"shutdown,omitempty"`
-	ErrorSummary  *ErrorSummary       `json:"error_summary,omitempty"`
-	EquityHistory []EquityPoint       `json:"equity_history,omitempty"`
-	Arcus         *arcusstatus.Status `json:"arcus,omitempty"`
+	Window        []int64         `json:"window,omitempty"`
+	Book          *BookStatus     `json:"book,omitempty"`
+	TradeStats    *TradeStats     `json:"trade_stats,omitempty"`
+	Maintenance   *string         `json:"maintenance,omitempty"`
+	Shutdown      *ShutdownStatus `json:"shutdown,omitempty"`
+	ErrorSummary  *ErrorSummary   `json:"error_summary,omitempty"`
+	EquityHistory []EquityPoint   `json:"equity_history,omitempty"`
 	// Risk gates emitted by pairtrade since bot-strategy#185.
 	// All three may be nil when the threshold is disabled (the bot
 	// skips emission to keep status.json compact). The dashboard
@@ -1000,12 +997,6 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 	} else {
 		result.ServiceStatus = "active"
 	}
-	if status.Arcus != nil {
-		result.ServiceStatus = status.Arcus.ServiceStatus(time.Unix(now, 0), target.StaleAfterSecs)
-		// Arcus has no pairtrade WebSocket counter, kill-switch or equity history.
-		result.Status = &status
-		return result
-	}
 	if status.ProcessStartedAt != 0 {
 		started := time.Unix(status.ProcessStartedAt, 0).UTC()
 		result.ServiceStartedAt = &started
@@ -1045,9 +1036,6 @@ func decodeStatusPayload(payload []byte) (StatusData, error) {
 	var status StatusData
 	if err := json.Unmarshal(payload, &status); err != nil {
 		return StatusData{}, err
-	}
-	if status.Arcus != nil && (status.SchemaVersion != arcusstatus.SchemaVersion || status.Accumulator != nil || status.BullHolder != nil || status.HanBridge != nil || status.HedgeHolder != nil) {
-		return StatusData{}, errors.New("unsupported or ambiguous Arcus status schema")
 	}
 	if status.Accumulator != nil && status.SchemaVersion != accumulatorSchemaVersion {
 		return StatusData{}, fmt.Errorf(

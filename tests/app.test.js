@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { renderArcusStatus, isArcusStatus, isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, renderArcusSummary, holderLastTradeText, arcusLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -487,17 +487,6 @@ test("isHanBridgeHalted reflects the nested session_halt_reason, not the top-lev
   assert.equal(context.__test.isHanBridgeHalted({ pnl_total: 100 }), false);
 });
 
-test("Arcus fleet tracks halt and health without treating inventory as trading PnL", () => {
-  context.__test.updateFleetSummary([
-    { service_status: "active", status: { pnl_total: 100, pnl_today: 5, position_count: 1 } },
-    { service_status: "active", status: { pnl_total: 3000, pnl_today: 200, position_count: 2, arcus: { healthy: false, risk_halt: { kind: "daily_loss" } } } },
-  ]);
-  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
-  assert.equal(value("fleet-halts"), "1");
-  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: true } } }), false);
-  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus: { healthy: false } } }), true);
-});
-
 test("freshness uses target cadence, rejects unknown and future clocks", () => {
   const old = new Date(Date.now() - 900000);
   assert.equal(context.__test.isStale(old, 1920), false);
@@ -508,98 +497,22 @@ test("freshness uses target cadence, rejects unknown and future clocks", () => {
   assert.equal(context.__test.isStale(new Date(Date.now() + 60000), 1920), true);
 });
 
-test("Arcus render separates failed tick, pending decision, strategy risk and gas observation", () => {
-  const node = () => ({ children: [], textContent: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; } });
-  const tags = [];
-  context.document.createElement = (tag) => { tags.push(tag); return node(); };
-  const root = node();
-  const fixture = { pair: "SPY/QQQ", mode: "live", sequence: 1915, healthy: false, tick_outcome: "failed", service_result: "exit-code", exit_code: 1, decision: "observe", hold_code: "route_unavailable", decision_pending: true, daily_loss_usd: null, cumulative_loss_usd: 0, inventory_drawdown_usd: 12, risk_halt: { kind: "daily_loss", loss_usd: 21, limit_usd: 20 }, gas_balance_eth: .001, gas_observed_at: "2026-09-05T14:59:58Z", health_reasons: ["<script>alert(1)</script>"] };
-  context.__test.renderArcusStatus(root, fixture);
-  const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
-  const content = text(root);
-  assert.match(content, /Last tick\s+failed/);
-  assert.match(content, /route_unavailable · pending event commit/);
-  const rowValue = (label) => root.children.find((n) => n.children[0]?.textContent === label)?.children[1]?.textContent;
-  assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
-  assert.match(content, /Cumulative strategy loss\s+\$0.0/);
-  assert.match(content, /Starting basket drawdown\s+\$12.0/);
-  assert.match(content, /Gas · last reconciled snapshot\s+0.001 ETH/);
-  assert.match(content, /Gas observed/);
-  assert.match(content, /Risk halt\s+daily_loss/);
-  assert.match(content, /Daily execution budget.*UTC\s+— \/ —/);
-  assert.equal(tags.includes("button"), false);
-  assert.equal(tags.includes("script"), false);
-  // bot-strategy#981: an in-flight attempt shows when it entered its phase,
-  // so a reader can tell a normal hand-off from a stuck one.
-  context.__test.renderArcusStatus(root, { active_execution_phase: "submitted", active_execution_at: "2026-09-05T15:17:28Z" });
-  assert.match(text(root), /Latest execution phase\s+submitted/);
-  assert.match(text(root), /Execution phase since/);
-  context.__test.renderArcusStatus(root, { active_execution_phase: "none" });
-  assert.doesNotMatch(text(root), /Execution phase since/);
-  context.__test.renderArcusStatus(root, { sequence: 0 });
-  assert.match(text(root), /Risk halt\s+Unknown/);
-  assert.doesNotMatch(text(root), /route_unavailable/);
-  for (const unknown of [null, undefined, "", " ", false]) {
-    context.__test.renderArcusStatus(root, { z_score: unknown, equity_usd: unknown, daily_loss_usd: unknown, daily_loss_limit_usd: unknown, cumulative_loss_usd: 0 });
-    assert.equal(rowValue("Signal z"), "—");
-    assert.equal(rowValue("Inventory equity"), "—");
-    assert.equal(rowValue("Daily strategy loss · unknown day UTC"), "— / — limit");
-    assert.equal(rowValue("Cumulative strategy loss"), "$0.0 / — limit");
-  }
-});
-
-test("Arcus render draws loss/limit gauges when both value and limit are known", () => {
-  const node = () => ({ children: [], textContent: "", className: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; } });
-  context.document.createElement = (tag) => node();
-  const root = node();
-  context.__test.renderArcusStatus(root, {
-    daily_loss_usd: 15,
-    daily_loss_limit_usd: 20,
-    cumulative_loss_usd: 90,
-    cumulative_loss_limit_usd: 100,
-  });
-  const bars = root.children.filter((n) => n.className === "risk-bar");
-  assert.equal(bars.length, 2);
-  const barText = (bar) => bar.children.map((n) => n.children.map((c) => c.textContent).join(" ")).join(" ");
-  assert.match(barText(bars[0]), /Daily loss/);
-  assert.match(barText(bars[0]), /75%/);
-  assert.match(barText(bars[1]), /Cumulative loss/);
-  assert.match(barText(bars[1]), /90%/);
-  const fillClass = (bar) => bar.children[1].children[0].className;
-  assert.match(fillClass(bars[0]), /severity-warn/);
-  assert.match(fillClass(bars[1]), /severity-danger/);
-
-  // No bar at all when the limit is missing/zero — mirrors the
-  // existing risk-panel bars, which hide rather than divide by zero.
-  const root2 = node();
-  context.__test.renderArcusStatus(root2, { daily_loss_usd: 15, cumulative_loss_usd: 5, cumulative_loss_limit_usd: 0 });
-  assert.equal(root2.children.filter((n) => n.className === "risk-bar").length, 0);
-});
-
-test("snapshotToPoint extracts equity from bull_holder/arcus when pnl_total is absent", () => {
+test("snapshotToPoint extracts equity from bull_holder when pnl_total is absent", () => {
   const isoNow = new Date().toISOString();
   assert.equal(context.__test.snapshotToPoint({ pnl_total: 42, updated_at: isoNow }).equity, 42);
   assert.equal(
     context.__test.snapshotToPoint({ bull_holder: { total_equity_usdc: 555 }, updated_at: isoNow }).equity,
     555,
   );
-  assert.equal(
-    context.__test.snapshotToPoint({ arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
-    999,
-  );
   // main.go's StatusData.PnlTotal has no `omitempty` and is a plain
-  // float64, so bull_holder/arcus payloads always carry a spurious
+  // float64, so bull_holder payloads always carry a spurious
   // `pnl_total: 0` too. Regression for Codex review on PR #32: the
   // sub-object must win over that zero, never the other way around.
   assert.equal(
     context.__test.snapshotToPoint({ pnl_total: 0, bull_holder: { total_equity_usdc: 555 }, updated_at: isoNow }).equity,
     555,
   );
-  assert.equal(
-    context.__test.snapshotToPoint({ pnl_total: 0, arcus: { equity_usd: 999 }, updated_at: isoNow }).equity,
-    999,
-  );
-  // A bull_holder/arcus-shaped target with its own field unavailable
+  // A bull_holder-shaped target with its own field unavailable
   // reports "no sample" rather than falling through to that meaningless
   // pnl_total zero for its shape.
   assert.equal(context.__test.snapshotToPoint({ pnl_total: 0, bull_holder: { total_equity_usdc: null } }), null);
@@ -649,13 +562,13 @@ test("snapshotToPoint stamps bull_holder samples with account observation time, 
   const after = Date.now();
   assert.ok(fallback.ts >= before && fallback.ts <= after, `expected ts ~now, got ${fallback.ts}`);
 
-  // Arcus, by contrast, writes equity_usd and ts atomically in one bot
+  // A pairtrade-shaped bot writes pnl_total and ts atomically in one bot
   // write, so its own ts stays trustworthy and must NOT be overridden.
-  const arcusPoint = context.__test.snapshotToPoint({ ts: 1700000000, arcus: { equity_usd: 100 } });
-  assert.equal(arcusPoint.ts, 1700000000 * 1000);
+  const ownClockPoint = context.__test.snapshotToPoint({ ts: 1700000000, pnl_total: 100 });
+  assert.equal(ownClockPoint.ts, 1700000000 * 1000);
 });
 
-test("holderLastTradeText and arcusLastTradeText answer how/when the bot last traded", () => {
+test("holderLastTradeText answers how/when the bot last traded", () => {
   assert.equal(context.__test.holderLastTradeText({}), "No tranches yet");
   assert.match(
     context.__test.holderLastTradeText({ armed_at: Math.floor(Date.now() / 1000) - 3600 }),
@@ -668,13 +581,6 @@ test("holderLastTradeText and arcusLastTradeText answer how/when the bot last tr
   assert.match(
     context.__test.holderLastTradeText({ exited_at: Math.floor(Date.now() / 1000) - 60 }),
     /^Exited /,
-  );
-
-  assert.equal(context.__test.arcusLastTradeText({}), "Awaiting first tick");
-  assert.equal(context.__test.arcusLastTradeText({ sequence: 5 }), "No swap observed yet");
-  assert.match(
-    context.__test.arcusLastTradeText({ last_swap_at: new Date(Date.now() - 5000).toISOString() }),
-    /^Last swap 5s ago$/,
   );
 });
 
@@ -704,8 +610,7 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
   context.__test.renderHolderSummary(card, { mode: "On", halted: true, halt_reason: "RISK_ACK required" }, [], "active");
   assert.equal(card.querySelector('[data-field="holder-details"]').open, true);
 
-  // Regression for Codex review on PR #32 (raised for Arcus, applies
-  // equally to bull-holder): fetchBullHolder's ServiceStatus goes "stale"
+  // Regression for Codex review on PR #32: fetchBullHolder's ServiceStatus goes "stale"
   // purely from local status-file age, independent of halted/*.error, so
   // a hung producer must still force details open even when nothing else
   // reports degraded.
@@ -744,33 +649,6 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
     "active",
   );
   assert.equal(pendingCard.querySelector('[data-field="holder-details"]').open, true);
-});
-
-test("renderArcusSummary shows the inventory-equity headline and opens details on risk halt or staleness", () => {
-  const card = makeSummaryCard();
-  context.__test.renderArcusSummary(
-    card,
-    { mode: "live", equity_usd: 500, healthy: true, last_swap_at: new Date(Date.now() - 60000).toISOString() },
-    [],
-    "active",
-  );
-  assert.equal(card.querySelector('[data-field="arcus-equity"]').textContent, "$500.0");
-  assert.equal(card.querySelector('[data-field="arcus-mode-pill"]').className, "status-pill active");
-  assert.match(card.querySelector('[data-field="arcus-last-trade"]').textContent, /^Last swap 1m ago$/);
-  assert.equal(card.querySelector('[data-field="arcus-details"]').open, false);
-
-  context.__test.renderArcusSummary(card, { mode: "live", healthy: false, risk_halt: { kind: "daily_loss" } }, [], "active");
-  assert.equal(card.querySelector('[data-field="arcus-details"]').open, true);
-
-  // Regression for Codex review on PR #32: Status.ServiceStatus
-  // (arcusstatus/status.go) ages the tick/observation/heartbeat clocks
-  // independently of `healthy` -- a stale exporter can still carry a
-  // frozen healthy=true payload, so `healthy`/`risk_halt` alone would
-  // never open details on a hang. Must also check the target's own
-  // service_status.
-  const staleCard = makeSummaryCard();
-  context.__test.renderArcusSummary(staleCard, { mode: "live", healthy: true, risk_halt: null }, [], "stale");
-  assert.equal(staleCard.querySelector('[data-field="arcus-details"]').open, true);
 });
 
 test("book fixture renders the applied decision, its signal hash and the book's exposure", () => {
@@ -1516,16 +1394,6 @@ test("a program change marks the KPI stale on the card until it is reviewed", ()
 });
 
 test("cost falls back to the bot's own net result, in the right direction", () => {
-  // Arcus values its initial basket at current prices, so this is
-  // already the price paid rather than a price move.
-  assert.equal(context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 42 } }), 42);
-  // cumulative_loss_usd is floored at zero for the risk limits, so an
-  // Arcus run that came out ahead would report a cost of exactly zero.
-  // The signed field wins wherever the exporter provides it.
-  assert.equal(
-    context.__test.subsidyCostFallback({ arcus: { cumulative_loss_usd: 0, cumulative_cost_usd: -12 } }),
-    -12,
-  );
   // A losing subsidy bot has a positive cost; a bot that came out ahead
   // has a negative one.
   assert.equal(context.__test.subsidyCostFallback({ trade_stats: { pnl: -180 } }), 180);
@@ -1553,7 +1421,7 @@ test("subsidy aggregate totals cost across the bucket but keeps units apart by u
     },
     {
       // Different unit, and no ledger: contributes cost only.
-      target: { subsidy_kpi: { unit: "USD activity" }, status: { arcus: { cumulative_loss_usd: 30 } } },
+      target: { subsidy_kpi: { unit: "USD activity" }, status: { trade_stats: { pnl: -30 } } },
       index: 2,
     },
   ];
@@ -1561,8 +1429,8 @@ test("subsidy aggregate totals cost across the bucket but keeps units apart by u
   const stat = (label) => stats.find((s) => s.label === label);
   assert.equal(stat("Cost paid").value, "180.0 USDC");
   assert.equal(stat("Units (points)").value, "20,000.00 points");
-  // Points cost 150 of the 180: the Arcus spend must not be priced into
-  // thepoints  denominator.
+  // Points cost 150 of the 180: the USD-activity spend must not be
+  // priced into the points denominator.
   assert.equal(stat("Cost / points").value, "0.0075 USDC / points");
   assert.equal(stat("Units (USD activity)"), undefined);
 });

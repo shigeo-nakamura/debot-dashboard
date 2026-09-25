@@ -191,16 +191,3 @@ targets:
 #      required_samples: 91
 #      readout_on: "2026-10-02"
 #      sample_source: "daily marks in the shadow-paper ledger (bot-strategy#695)"
-
-# Arcus: independent read-only exporter; see deploy/arcus-status.md.
-#  - name: Arcus SPY/QQQ
-#    instance_id: i-xxxxxxxxxxxxxxxxx
-#    service: arcus-spot-live-tick
-#    region: eu-central-1
-#    s3_bucket: debot-dashboard
-#    s3_region: eu-central-1
-#    s3_key: arcus-archive/status/arcus-spot.json
-#    stale_after_secs: 1920
-#    dex: "Uniswap (via Arcus)"
-#    subsidy:
-#      unit: USD activity

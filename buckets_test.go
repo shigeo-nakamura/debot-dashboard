@@ -103,7 +103,7 @@ func TestResolveBucket(t *testing.T) {
 		},
 		{
 			name:   "explicit value agreeing with the taxonomy is kept",
-			target: TargetConfig{Service: "arcus-spot-live-tick", Bucket: " subsidy "},
+			target: TargetConfig{Service: "debot-xvenue-hedge-holder", Bucket: " subsidy "},
 			want:   BucketSubsidy,
 		},
 		{
@@ -150,7 +150,7 @@ func TestNormalizeConfigResolvesAndValidatesBuckets(t *testing.T) {
 	cfg := Config{
 		Region: "eu-central-1",
 		Targets: []TargetConfig{
-			{Service: "arcus-spot-live-tick", S3Bucket: "b", S3Key: "k"},
+			{Service: "debot-xvenue-hedge-holder", S3Bucket: "b", S3Key: "k"},
 			{Service: "some-new-bot", S3Bucket: "b", S3Key: "k"},
 			{Service: "engine-b-live", Bucket: BucketAlphaCandidate, S3Bucket: "b", S3Key: "k"},
 		},
