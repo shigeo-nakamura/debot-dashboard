@@ -2132,7 +2132,7 @@ const renderBullHolderStatus = (container, b, dryRun) => {
   row("Mode", view.mode);
   row("HL API wallet", view.agent.text, container, view.agent.tone);
   if (view.agent.known) add("p", `Checked ${holderTime(b.hl_agent_as_of)}. The bot cannot renew this wallet: renewal is a new agent approved by the master wallet, then a key swap and restart.`, container, "holder-note");
-  else if (view.agent.tone) add("p", "No API-wallet expiry is known while live. The spot leg's exits stop working the moment the wallet expires; check the master's extraAgents and BULL_HOLDER_HL_AGENT_NAME.", container, "holder-warning");
+  else if (view.agent.tone) add("p", "No API-wallet expiry is known while live. The spot leg's exits stop working the moment the wallet expires; check the master's extraAgents and BULL_HOLDER_HL_AGENT_ADDRESS.", container, "holder-warning");
   add("h3", "Configured investment · read-only");
   const investment = b.investment;
   row("Configured capital (USD)", holderUsd(investment?.equity_usd));
