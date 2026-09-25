@@ -101,7 +101,7 @@ func TestNormalizeConfigRejectsGateOutsideTheAlphaCandidateBucket(t *testing.T) 
 	cfg := gateConfig()
 	bad := Config{
 		Region:  "eu-central-1",
-		Targets: []TargetConfig{{Service: "arcus-spot-live-tick", Gate: &cfg, S3Bucket: "b", S3Key: "k"}},
+		Targets: []TargetConfig{{Service: "debot-xvenue-hedge-holder", Gate: &cfg, S3Bucket: "b", S3Key: "k"}},
 	}
 	if err := normalizeConfig(&bad); err == nil || !strings.Contains(err.Error(), "gate configured for a subsidy target") {
 		t.Fatalf("err = %v, want a bucket mismatch", err)

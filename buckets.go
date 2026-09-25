@@ -32,7 +32,6 @@ var taxonomyBuckets = map[string]string{
 	"hype-accumulator":             BucketBeta,
 	"debot-pair-robinhood-lighter": BucketSubsidy,
 	"debot-xvenue-hedge-holder":    BucketSubsidy,
-	"arcus-spot-live-tick":         BucketSubsidy,
 	"engine-b-live":                BucketAlphaCandidate,
 	"book-runtime-xsmom-695":       BucketAlphaCandidate,
 	"xsmom-695-shadow":             BucketAlphaCandidate,

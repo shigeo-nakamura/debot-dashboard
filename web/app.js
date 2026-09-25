@@ -562,8 +562,7 @@ const updateFleetSummary = (targets) => {
   targets.forEach((target) => {
     const data = target.status;
     if (isBullHolderStatus(data) && data.bull_holder.halted === true) halts += 1;
-    if (isArcusStatus(data) && data.arcus.risk_halt) halts += 1;
-    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusStatus(data)) {
+    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data)) {
       if (data.positions_ready !== false && typeof data.position_count === "number") {
         // A cross-sectional book holds one position per symbol; only
         // pairtrade's legs come in pairs (see the halving below). The
@@ -724,25 +723,6 @@ const createCard = (key) => {
         <div class="row"><span>Ledger written</span><strong data-field="subsidy-as-of"></strong></div>
         <div class="benchmark-note" data-field="subsidy-note" hidden></div>
       </section>
-      <section class="arcus-view" data-field="arcus-view" hidden aria-label="Arcus spot status">
-        <div class="equity-headline">
-          <div class="equity-headline-label">
-            <span>Inventory equity</span>
-            <span class="status-pill" data-field="arcus-mode-pill"></span>
-          </div>
-          <strong data-field="arcus-equity"></strong>
-          <div class="equity-headline-meta" data-field="arcus-last-trade"></div>
-        </div>
-        <div class="chart">
-          <div class="chart-title">Inventory equity trend</div>
-          <svg class="sparkline" data-field="arcus-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
-          <div class="chart-empty" data-field="arcus-chart-empty" hidden>No history yet</div>
-        </div>
-        <details class="panel-details" data-field="arcus-details">
-          <summary>Details</summary>
-          <div data-field="arcus-details-body"></div>
-        </details>
-      </section>
       <section class="bull-holder-view" data-field="bull-holder-view" hidden aria-label="Bull-holder status">
         <div class="equity-headline">
           <div class="equity-headline-label">
@@ -871,8 +851,6 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const data = target.status || {};
   const accumulator = isAccumulatorStatus(data) ? data.accumulator : null;
   const bullHolder = isBullHolderStatus(data) ? data.bull_holder : null;
-  const arcus = isArcusStatus(data) ? data.arcus : null;
-  const arcusDegraded = arcus !== null && (arcus.healthy !== true || Boolean(arcus.risk_halt));
   const holderDegraded = bullHolder !== null && isBullHolderDegraded(bullHolder);
   const accumulatorDegraded = accumulator !== null && accumulator.healthy !== true;
   // A halted book (session/daily halt, or a venue-equity outage that
@@ -892,7 +870,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const blindResult = bucketOf(target) === "alpha_candidate";
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || arcusDegraded || bookDegraded || hedgeDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
@@ -913,19 +891,18 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const fundingToday = fundingTodayValue === null ? "-" : formatPnl(fundingTodayValue);
   const positions = Array.isArray(data.positions) ? data.positions : [];
   const ageText = updatedAt ? `${formatAge(Date.now() - updatedAt.getTime())} ago` : "unknown";
-  // Hoisted above the accumulator/bull-holder/arcus branches (which
+  // Hoisted above the accumulator/bull-holder branches (which
   // `return` early) so their equity-trend sparklines get the same
   // history cache the generic trading view already builds from
-  // repeated snapshots. See snapshotToPoint's bull_holder/arcus
+  // repeated snapshots. See snapshotToPoint's bull_holder
   // fallback below.
   const history = updateHistoryCache(key, data);
 
   card.classList.toggle("stale", stale);
   card.classList.toggle(
     "degraded",
-    accumulatorDegraded || holderDegraded || arcusDegraded || bookDegraded || hedgeDegraded,
+    accumulatorDegraded || holderDegraded || bookDegraded || hedgeDegraded,
   );
-  card.classList.toggle("arcus", arcus !== null);
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.classList.toggle("accumulator", accumulator !== null);
   // Full-row card like the other two-venue holders: the points-hedge
@@ -1135,8 +1112,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     (bullHolder && (holderDegraded || status !== "active")) ||
     // A red API wallet (under 7 d, expired, unknown while live) is operator
     // trouble a collapsed card would hide (Codex, PR #61).
-    (bullHolder && isHolderAgentRed(bullHolder, data.dry_run)) ||
-    (arcus && (arcusDegraded || status !== "active"));
+    (bullHolder && isHolderAgentRed(bullHolder, data.dry_run));
   if (inTrouble) {
     card.classList.remove("collapsed");
   }
@@ -1213,24 +1189,15 @@ const updateCard = (card, target, pollSecs, index, key) => {
   ageEl.textContent = ageText;
   // Rendered before the per-shape branches below, which return early:
   // the KPI panel is the headline for a subsidy bot whatever shape its
-  // status payload has (pairtrade-like for Robinhood, Arcus for Arcus).
+  // status payload has.
   renderSubsidyPanel(card, target, data);
   renderGatePanel(card, target, data);
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
-  const arcusViewEl = card.querySelector('[data-field="arcus-view"]');
-  if (arcusViewEl) arcusViewEl.hidden = arcus === null;
   if (holderViewEl) holderViewEl.hidden = bullHolder === null;
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
-  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcus !== null;
-  if (arcus) {
-    renderArcusSummary(card, arcus, filterHistoryByRange(history), status);
-    renderArcusStatus(card.querySelector('[data-field="arcus-details-body"]'), arcus);
-    errorEl.hidden = !target.error;
-    errorEl.textContent = target.error || "";
-    return;
-  }
+  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null;
   if (bullHolder) {
     renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status, data.dry_run);
     renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data), {
@@ -1614,7 +1581,7 @@ const renderHolderSummary = (card, b, chartHistory, serviceStatus, dryRun) => {
   // isBullHolderDegraded alone misses a stale/hung producer (fetchBullHolder
   // only sets ServiceStatus="stale" from the local status-file age; it
   // doesn't touch halted/operator_error/*.error) — same class of gap Codex
-  // flagged for Arcus on PR #32, fixed here too for consistency so a stale
+  // flagged on PR #32, fixed here too for consistency so a stale
   // bull-holder doesn't hide its own diagnostic rows behind a collapsed
   // <details>. An engaged (or pending) KILL_SWITCH is also "trouble" the
   // outer card already auto-expands for (updateCard's inTrouble checks
@@ -1765,24 +1732,12 @@ const renderHolderBenchmark = (card, b, botEquity, history, benchmarkHistory, { 
   }
 };
 
-// Cumulative cost when the bot does not (yet) report one. Both fallbacks
-// are the bot's own net result read as a price: Arcus values its initial
-// basket at current prices, so cumulative_loss_usd is already
-// price-neutral, and a pairtrade-shaped bot's lifetime trade_stats.pnl
-// is net of the fees and slippage that make up the cost.
+// Cumulative cost when the bot does not (yet) report one. The fallback
+// is the bot's own net result read as a price: a pairtrade-shaped bot's
+// lifetime trade_stats.pnl is net of the fees and slippage that make up
+// the cost.
 const subsidyCostFallback = (data) => {
   if (!data) return null;
-  if (data.arcus) {
-    // cumulative_cost_usd keeps its sign; cumulative_loss_usd is floored
-    // at zero because the risk limits compare against it, so a run that
-    // came out ahead would report a cost of exactly zero rather than a
-    // negative one (Codex, PR #38). Fall back to the floored figure only
-    // for an exporter that predates the signed field.
-    if (Number.isFinite(data.arcus.cumulative_cost_usd)) {
-      return Number(data.arcus.cumulative_cost_usd);
-    }
-    return Number.isFinite(data.arcus.cumulative_loss_usd) ? Number(data.arcus.cumulative_loss_usd) : null;
-  }
   if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
     return -Number(data.trade_stats.pnl);
   }
@@ -2248,164 +2203,9 @@ const renderBullHolderStatus = (container, b, dryRun) => {
     });
   });
 };
-const isArcusStatus = (data) => Boolean(data && data.arcus);
-
 const usdCurrency = (v) => {
   const n = holderNumber(v);
   return n === null ? "—" : n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: MONEY_DIGITS, maximumFractionDigits: MONEY_DIGITS });
-};
-
-// Compact loss/limit gauge reusing the same risk-bar visual pattern
-// (and CSS classes) already used for pairtrade's daily/session DD
-// bars, so Arcus's "loss vs limit" figures read as a proximity-to-halt
-// gauge instead of a bare "$X / $Y" fraction to compare by eye.
-// Deliberately built from createElement/className/appendChild only —
-// no classList/setAttribute, and `.style` is feature-detected — so it
-// keeps working unchanged inside renderArcusStatus, which unit tests
-// also drive directly against a minimal mock container.
-const miniBar = (parent, name, valueText, pct) => {
-  const wrap = document.createElement("div");
-  wrap.className = "risk-bar";
-  const label = document.createElement("div");
-  label.className = "risk-bar-label";
-  const nameEl = document.createElement("span");
-  nameEl.className = "risk-bar-name";
-  nameEl.textContent = name;
-  const valueEl = document.createElement("span");
-  valueEl.className = "risk-bar-value";
-  valueEl.textContent = valueText;
-  label.appendChild(nameEl);
-  label.appendChild(valueEl);
-  const track = document.createElement("div");
-  track.className = "risk-bar-track";
-  const fill = document.createElement("div");
-  const clamped = clampPct(pct);
-  fill.className = `risk-bar-fill ${clamped >= 80 ? "severity-danger" : clamped >= 50 ? "severity-warn" : "severity-ok"}`;
-  if (fill.style) fill.style.width = `${clamped}%`;
-  track.appendChild(fill);
-  wrap.appendChild(label);
-  wrap.appendChild(track);
-  parent.appendChild(wrap);
-  return wrap;
-};
-
-// "How and when did this bot last actually trade" — last_swap_at is
-// the one field in the payload that answers it directly; everything
-// else in the panel is inventory/mode state as of the last poll.
-const arcusLastTradeText = (a) => {
-  if (a.last_swap_at) {
-    const ts = Date.parse(a.last_swap_at);
-    if (Number.isFinite(ts)) return `Last swap ${formatAge(Date.now() - ts)} ago`;
-  }
-  return a.sequence > 0 ? "No swap observed yet" : "Awaiting first tick";
-};
-
-// Always-visible headline for the Arcus panel: inventory equity, mode,
-// and last-swap timing up top, plus the equity-trend sparkline. Mirrors
-// renderHolderSummary — see its comment for why DOM APIs beyond
-// textContent/className/appendChild stay out of renderArcusStatus
-// itself. `card` is always real DOM here (called only from updateCard).
-const renderArcusSummary = (card, a, chartHistory, serviceStatus) => {
-  const equityEl = card.querySelector('[data-field="arcus-equity"]');
-  const modeEl = card.querySelector('[data-field="arcus-mode-pill"]');
-  const lastTradeEl = card.querySelector('[data-field="arcus-last-trade"]');
-  const chartEl = card.querySelector('[data-field="arcus-chart"]');
-  const chartEmptyEl = card.querySelector('[data-field="arcus-chart-empty"]');
-  const detailsEl = card.querySelector('[data-field="arcus-details"]');
-  // healthy/risk_halt alone miss a stale/hung exporter: Status.ServiceStatus
-  // (arcusstatus/status.go) ages the tick/observation/heartbeat clocks
-  // independently of `healthy`, so a target can go "stale" while its last
-  // self-reported healthy=true payload sits frozen. Without also checking
-  // serviceStatus, details (which carry Last tick/Observation/heartbeat —
-  // exactly what's needed to diagnose staleness) would stay collapsed on
-  // an otherwise-invisible hang (Codex review, PR #32).
-  const degraded = a.healthy !== true || Boolean(a.risk_halt) || serviceStatus !== "active";
-  if (equityEl) equityEl.textContent = usdCurrency(a.equity_usd);
-  if (modeEl) {
-    modeEl.textContent = a.mode || "Unknown";
-    modeEl.className = `status-pill ${degraded ? "degraded" : a.mode ? "active" : "unknown"}`;
-  }
-  if (lastTradeEl) lastTradeEl.textContent = arcusLastTradeText(a);
-  renderEquityChart(chartEl, chartEmptyEl, chartHistory);
-  if (detailsEl && degraded) detailsEl.open = true;
-};
-
-const renderArcusStatus = (root, a) => {
-  if (!root) return;
-  root.replaceChildren();
-  const add = (tag, text, parent = root, className = "") => {
-    const node = document.createElement(tag);
-    node.textContent = text;
-    if (className) node.className = className;
-    parent.appendChild(node);
-    return node;
-  };
-  const row = (label, text, parent) => {
-    const r = add("div", "", parent, "row");
-    add("span", label, r);
-    add("strong", text, r);
-  };
-  const amount = (v, digits = AMOUNT_DIGITS) => {
-    const n = holderNumber(v);
-    return n === null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: digits });
-  };
-  const usd = usdCurrency;
-  const at = (v) => v ? formatDateWithAge(v) : "Unknown";
-  const yes = (v) => v === true ? "Yes" : v === false ? "No" : "Unknown";
-  add("h3", `Arcus spot · ${a.pair || "Unknown pair"}`);
-  row("Mode", a.mode || "Unknown");
-  row("Last tick", `${a.tick_outcome || "unknown"} · ${at(a.last_tick_at)}`);
-  if (a.tick_outcome === "failed") row("Execution result", `${a.service_result || "unknown"} · exit ${a.exit_code ?? "—"}`);
-  row("Timer active / enabled", `${yes(a.timer_active)} / ${yes(a.timer_enabled)}`);
-  row("Observation", at(a.last_observation_at));
-  row("Monitoring heartbeat", at(a.exported_at));
-  (a.health_reasons || []).forEach((reason) => add("p", reason, root, "holder-warning"));
-  add("h4", "Latest decision");
-  row("Action", `${a.decision || "Unknown"}${a.hold_code ? ` · ${a.hold_code}` : ""}${a.decision_pending ? " · pending event commit" : ""}`);
-  row("Decision observed", at(a.decision_at));
-  row("Signal z", amount(a.z_score, 3));
-  row("Plan quote observed", at(a.quote_received_at));
-  row("Regime", a.regime || "Unknown");
-  row("Rotation started", a.last_rotation_at ? at(a.last_rotation_at) : a.regime === "neutral" ? "No open rotation" : "Unknown");
-  if (a.rotated_quantity != null) row("Rotated quantity", amount(a.rotated_quantity));
-  add("h4", "Managed inventory");
-  (a.inventory || []).forEach((i) => {
-    row(i.symbol, `${amount(i.amount)} · ${usd(i.value_usd)}`);
-    row(`${i.symbol} reference mark`, usd(i.reference_price_usd));
-  });
-  row("Inventory equity", usd(a.equity_usd));
-  add("h4", "Strategy risk");
-  row(`Daily strategy loss · ${a.daily_baseline_day || "unknown day"} UTC`, `${usd(a.daily_loss_usd)} / ${usd(a.daily_loss_limit_usd)} limit`);
-  {
-    const loss = holderNumber(a.daily_loss_usd);
-    const limit = holderNumber(a.daily_loss_limit_usd);
-    if (loss !== null && limit !== null && limit > 0) {
-      miniBar(root, "Daily loss", `${clampPct((loss / limit) * 100).toFixed(0)}%`, (loss / limit) * 100);
-    }
-  }
-  row("Cumulative strategy loss", `${usd(a.cumulative_loss_usd)} / ${usd(a.cumulative_loss_limit_usd)} limit`);
-  {
-    const loss = holderNumber(a.cumulative_loss_usd);
-    const limit = holderNumber(a.cumulative_loss_limit_usd);
-    if (loss !== null && limit !== null && limit > 0) {
-      miniBar(root, "Cumulative loss", `${clampPct((loss / limit) * 100).toFixed(0)}%`, (loss / limit) * 100);
-    }
-  }
-  row("Starting basket drawdown", usd(a.inventory_drawdown_usd));
-  add("p", "Strategy loss compares managed inventory with the original basket at the same reference prices. Basket drawdown measures price movement separately. These are loss measures, not realized PnL; gas is separate.", root, "holder-note");
-  if (a.risk_halt) {
-    row("Risk halt", a.risk_halt.kind || "Engaged");
-    row("Halt engaged", at(a.risk_halt.engaged_at));
-    row("Loss at halt / limit", `${usd(a.risk_halt.loss_usd)} / ${usd(a.risk_halt.limit_usd)}`);
-  } else row("Risk halt", a.sequence > 0 ? "Not engaged" : "Unknown");
-  add("h4", "Execution & gas");
-  row(`Daily execution budget · ${a.budget_day || "unknown day"} UTC`, `${a.daily_budget_used ?? "—"} / ${a.max_swaps_per_day ?? "—"}`);
-  add("p", "Budget usage follows the executor's archived-attempt counter, including rejections. It is not a count of filled swaps.", root, "holder-note");
-  row("Latest execution phase", a.active_execution_phase || "None / unavailable");
-  if (a.active_execution_at) row("Execution phase since", at(a.active_execution_at));
-  row("Last reconciled swap", at(a.last_swap_at));
-  row("Gas · last reconciled snapshot", a.gas_balance_eth == null ? "Unknown" : `${amount(a.gas_balance_eth, 9)} ETH`);
-  row("Gas observed", at(a.gas_observed_at));
 };
 
 const isBullHolderStatus = (data) => Boolean(data && data.bull_holder);
@@ -2986,7 +2786,6 @@ const isTargetUnhealthy = (target) => {
     : null;
   return serviceUnhealthy || Boolean(target.error) || (accumulator !== null && accumulator.healthy !== true)
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
-    || (isArcusStatus(target.status) && (target.status.arcus.healthy !== true || Boolean(target.status.arcus.risk_halt)))
     || isBookHalted(target.status)
     || isHedgeHolderHalted(target.status)
     || isHedgeHolderFeedBlind(target.status);
@@ -3283,23 +3082,20 @@ const updateBenchmarkCache = (key, data) => {
   return history;
 };
 
-// bull_holder / arcus have their own equity fields nested under their
-// sub-object rather than the top-level pnl_total pairtrade-style bots
-// report (they're asset-value bots, not PnL-cycle bots). Dispatch on
-// the sub-object FIRST: StatusData.PnlTotal (main.go) has no `omitempty`
-// and is a plain float64, so it always serializes as `pnl_total: 0` —
-// including for bull_holder/arcus payloads that never set it — and
-// checking it first would silently win with that zero instead of ever
-// reaching the real fallback (Codex review, PR #32). Once a target is
-// known to be bull_holder/arcus-shaped, its own field is authoritative
+// bull_holder has its own equity field nested under its sub-object
+// rather than the top-level pnl_total pairtrade-style bots report (it's
+// an asset-value bot, not a PnL-cycle bot). Dispatch on the sub-object
+// FIRST: StatusData.PnlTotal (main.go) has no `omitempty` and is a plain
+// float64, so it always serializes as `pnl_total: 0` — including for
+// bull_holder payloads that never set it — and checking it first would
+// silently win with that zero instead of ever reaching the real fallback
+// (Codex review, PR #32). Once a target is known to be
+// bull_holder-shaped, its own field is authoritative
 // even when unavailable (null rather than falling through to the
 // meaningless pnl_total zero for that shape).
 const snapshotEquityValue = (data) => {
   if (data.bull_holder) {
     return Number.isFinite(data.bull_holder.total_equity_usdc) ? Number(data.bull_holder.total_equity_usdc) : null;
-  }
-  if (data.arcus) {
-    return Number.isFinite(data.arcus.equity_usd) ? Number(data.arcus.equity_usd) : null;
   }
   // The accumulator reports a reconciled asset balance, not trading PnL.
   // That balance is exactly what the β bucket aggregates (the bot's job
@@ -3374,9 +3170,9 @@ const snapshotPointTs = (data) => {
   // a new ts (so the chart accumulates a real trend), while repeated
   // deliveries of the same cached snapshot get the same ts every time
   // (so appendHistoryPoint's same-ts dedup correctly updates in place
-  // instead of fabricating a fake new point). Arcus's equity_usd, by
-  // contrast, is computed and timestamped atomically by the Arcus bot
-  // itself in one write, so its own ts/updated_at stay trustworthy.
+  // instead of fabricating a fake new point). Every other shape writes
+  // its equity and ts atomically in one bot write, so its own
+  // ts/updated_at stay trustworthy.
   if (data.bull_holder) {
     const hlObserved = holderNumber(data.bull_holder.hyperliquid?.observed_at);
     const ltObserved = holderNumber(data.bull_holder.lighter?.observed_at);
@@ -3710,7 +3506,7 @@ const formatDexLabel = (dex) =>
   dex === dex.toLowerCase() ? dex.charAt(0).toUpperCase() + dex.slice(1) : dex;
 
 // Display precision shared by every money figure on the page (fleet
-// total, card headlines, holder/Arcus/book detail rows) and by token
+// total, card headlines, holder/book detail rows) and by token
 // quantities. Keep these two in one place so panels never drift apart
 // again (a "1,301.004651 USDC" headline next to "2483.8 USDC").
 const MONEY_DIGITS = 1;
