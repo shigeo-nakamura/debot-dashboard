@@ -109,6 +109,38 @@ test("bull holder legs report cost, value and PnL, and the ladder's progress in 
   assert.equal(context.__test.bullHolderViewModel({ legs: {} }).deployed, null);
 });
 
+test("bull holder API-wallet expiry: date and days from the producer, tone by proximity, unknown-while-live is red", () => {
+  const now = Date.parse("2026-09-25T00:00:00Z");
+  const day = 86_400_000;
+  const at = (days, extra = {}) => context.__test.bullHolderViewModel(
+    { legs: {}, dry_run: false, hl_agent_name: "bull-holder", hl_agent_valid_until: (now + days * day) / 1000, hl_agent_as_of: now / 1000, ...extra },
+    now,
+  ).agent;
+  // Far out: plain text, no tone.
+  const far = at(177);
+  assert.equal(far.tone, "");
+  assert.equal(far.text, "expires 2027-03-21 (177 d) · bull-holder");
+  // Boundaries: 30 d is not amber, 29.9 d is; 7 d is not red, 6.9 d is.
+  assert.equal(at(30).tone, "");
+  assert.equal(at(29.9).tone, "holder-amber");
+  assert.equal(at(7).tone, "holder-amber");
+  assert.equal(at(6.9).tone, "holder-red");
+  assert.match(at(6.9).text, /\(6 d\)/);
+  // Past: red and says so.
+  assert.equal(at(-1).tone, "holder-red");
+  assert.match(at(-1).text, /^EXPIRED 2026-09-24/);
+  // Unknown while live is a problem; unknown in DRY_RUN is expected.
+  const liveUnknown = context.__test.bullHolderViewModel({ legs: {}, dry_run: false, hl_agent_valid_until: null }, now).agent;
+  assert.equal(liveUnknown.tone, "holder-red");
+  assert.equal(liveUnknown.known, false);
+  const dryUnknown = context.__test.bullHolderViewModel({ legs: {}, dry_run: true, hl_agent_valid_until: null }, now).agent;
+  assert.equal(dryUnknown.tone, "");
+  assert.equal(dryUnknown.text, "Not checked (DRY_RUN)");
+  // A wrong-type value (the producer serialises numbers; a string date
+  // would be a bug) is unknown, not NaN days.
+  assert.equal(context.__test.bullHolderViewModel({ legs: {}, dry_run: false, hl_agent_valid_until: "2027-03-21" }, now).agent.known, false);
+});
+
 test("bull holder render is read-only and separates simulation from actual holdings", () => {
   const node = () => ({ children: [], textContent: "", appendChild(n) { this.children.push(n); }, replaceChildren() { this.children = []; }, setAttribute() {} });
   const tags = [];
@@ -123,6 +155,9 @@ test("bull holder render is read-only and separates simulation from actual holdi
   context.__test.renderBullHolderStatus(root, fixture, true);
   const text = (n) => n.textContent + " " + n.children.map(text).join(" ");
   assert.match(text(root), /Strategy holdings · simulated/);
+  // DRY_RUN render: the wallet row says the check is skipped, no warning.
+  assert.match(text(root), /HL API wallet\s+Not checked \(DRY_RUN\)/);
+  assert.doesNotMatch(text(root), /No API-wallet expiry is known/);
   assert.match(text(root), /Actual account assets/);
   assert.match(text(root), /20.00%/);
   assert.match(text(root), /Unavailable/);
@@ -142,6 +177,20 @@ test("bull holder render is read-only and separates simulation from actual holdi
   }
   context.__test.renderBullHolderStatus(root, { pending: { KILL_SWITCH: true } }, true);
   assert.match(text(root), /KILL_SWITCH\s+Engaged/);
+  // Live render with the producer's date: the value carries the tone
+  // class the stylesheet colours, and the renewal note follows.
+  const classes = [];
+  context.document.createElement = (tag) => { const n = node(); tags.push(tag); Object.defineProperty(n, "className", { set(v) { classes.push(v); }, get() { return ""; } }); return n; };
+  context.__test.renderBullHolderStatus(root, { mode: "On", legs: {}, hl_agent_name: "bull-holder", hl_agent_valid_until: Math.floor(Date.now() / 1000) + 10 * 86_400, hl_agent_as_of: Math.floor(Date.now() / 1000) }, false);
+  assert.match(text(root), /HL API wallet\s+expires \d{4}-\d{2}-\d{2} \((9|10) d\) · bull-holder/);
+  assert.match(text(root), /The bot cannot renew this wallet/);
+  assert.equal(classes.includes("holder-amber"), true);
+  // Live with nothing published: red row plus the warning paragraph.
+  context.__test.renderBullHolderStatus(root, { mode: "On", legs: {} }, false);
+  assert.match(text(root), /HL API wallet\s+Unknown · agent not found on the master/);
+  assert.match(text(root), /No API-wallet expiry is known while live/);
+  assert.equal(classes.includes("holder-red"), true);
+  context.document.createElement = (tag) => { tags.push(tag); return node(); };
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { bull_holder: fixture } }), true);
   fixture.lighter = {};
   fixture.halted = true;
@@ -645,6 +694,19 @@ test("renderHolderSummary shows the equity/mode/last-trade headline and opens de
   const staleCard = makeSummaryCard();
   context.__test.renderHolderSummary(staleCard, { mode: "On", total_equity_usdc: 1000 }, [], "stale");
   assert.equal(staleCard.querySelector('[data-field="holder-details"]').open, true);
+
+  // An API wallet that is red (under 7 d, expired, or unknown while
+  // live) opens the details the same way; in DRY_RUN the absent value is
+  // expected and must not (bot-strategy#1054).
+  const walletCard = makeSummaryCard();
+  context.__test.renderHolderSummary(walletCard, { mode: "On", total_equity_usdc: 1000 }, [], "active", false);
+  assert.equal(walletCard.querySelector('[data-field="holder-details"]').open, true);
+  const dryWalletCard = makeSummaryCard();
+  context.__test.renderHolderSummary(dryWalletCard, { mode: "On", total_equity_usdc: 1000 }, [], "active", true);
+  assert.equal(dryWalletCard.querySelector('[data-field="holder-details"]').open, false);
+  const farWalletCard = makeSummaryCard();
+  context.__test.renderHolderSummary(farWalletCard, { mode: "On", total_equity_usdc: 1000, hl_agent_valid_until: Math.floor(Date.now() / 1000) + 100 * 86_400 }, [], "active", false);
+  assert.equal(farWalletCard.querySelector('[data-field="holder-details"]').open, false);
 
   // Regression for Codex review on PR #32: an engaged (or pending)
   // KILL_SWITCH is "trouble" the outer card already auto-expands for

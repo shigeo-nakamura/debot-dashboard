@@ -1022,6 +1022,10 @@ body::after {
 .holder-leg, .holder-account { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
 .holder-note { font-size: 12px; line-height: 1.5; opacity: .7; }
 .holder-warning { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+/* API-wallet expiry row value: amber under 30 d, red under 7 d / expired /
+   unknown while live (bot-strategy#1054). */
+.bull-holder-view .row strong.holder-amber { color: var(--warning); }
+.bull-holder-view .row strong.holder-red { color: var(--danger); }
 .bull-holder-view .row { gap: 12px; align-items: start; }
 .bull-holder-view .row strong { text-align: right; overflow-wrap: anywhere; }
 .bull-holder-view progress { width: 100%; height: 8px; accent-color: #e3a55c; }
