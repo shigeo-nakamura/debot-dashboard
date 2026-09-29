@@ -18,9 +18,10 @@
 #               re-trusted in the browser.
 # --force       overwrite an existing pair.
 # --no-public-ip  allow a localhost-only certificate. Without it, failing
-#               to read the public IPv4 from IMDS is an error: a cert that
-#               cannot match the address the dashboard is reached on would
-#               be restarted into and break browser access.
+#               to read the public IPv4 from IMDS is an error, also for
+#               --if-missing on an existing pair: a cert that cannot match
+#               the address the dashboard is reached on would be restarted
+#               into and break browser access.
 set -euo pipefail
 
 if_missing=0
@@ -76,6 +77,14 @@ pair_matches() {
 public_ip=$(imds public-ipv4)
 public_dns=$(imds public-hostname)
 
+# Checked before an existing pair is accepted too: without the current
+# address there is no way to tell whether the pair still matches it (a
+# stop/start moves the public IP).
+if [ -z "$public_ip" ] && [ "$no_public_ip" != 1 ]; then
+  echo "could not read the public IPv4 from IMDS; refusing to write or accept a certificate that may not match the dashboard's address (pass --no-public-ip for a localhost-only one)" >&2
+  exit 1
+fi
+
 if [ -f "$crt" ] && [ -f "$key" ]; then
   if [ "$if_missing" = 1 ]; then
     if ! openssl x509 -in "$crt" -noout -checkend $((30 * 86400)) >/dev/null 2>&1; then
@@ -92,11 +101,6 @@ if [ -f "$crt" ] && [ -f "$key" ]; then
     echo "$crt already exists; pass --force to replace it" >&2
     exit 1
   fi
-fi
-
-if [ -z "$public_ip" ] && [ "$no_public_ip" != 1 ]; then
-  echo "could not read the public IPv4 from IMDS; refusing to write a certificate that cannot match the dashboard's address (pass --no-public-ip for a localhost-only one)" >&2
-  exit 1
 fi
 
 san="DNS:localhost,IP:127.0.0.1"
