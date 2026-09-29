@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate the dashboard's self-signed TLS certificate.
 #
-#   gen-self-signed-cert.sh [--if-missing] [--force] [DIR]
+#   gen-self-signed-cert.sh [--if-missing] [--force] [--no-public-ip] [DIR]
 #
 # DIR defaults to /opt/debot-dashboard/tls. The certificate names the
 # instance's current public IPv4 / public DNS name (from IMDS) plus
@@ -17,15 +17,21 @@
 #               the service afterwards). A renewed certificate has to be
 #               re-trusted in the browser.
 # --force       overwrite an existing pair.
+# --no-public-ip  allow a localhost-only certificate. Without it, failing
+#               to read the public IPv4 from IMDS is an error: a cert that
+#               cannot match the address the dashboard is reached on would
+#               be restarted into and break browser access.
 set -euo pipefail
 
 if_missing=0
 force=0
+no_public_ip=0
 dir=/opt/debot-dashboard/tls
 for arg in "$@"; do
   case "$arg" in
     --if-missing) if_missing=1 ;;
     --force) force=1 ;;
+    --no-public-ip) no_public_ip=1 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) dir="$arg" ;;
   esac
@@ -35,12 +41,36 @@ crt="$dir/dashboard.crt"
 key="$dir/dashboard.key"
 owner="${DASHBOARD_USER:-ec2-user}"
 
-imds() {
+imds_once() {
   local token
   token=$(curl -sf -m 2 -X PUT http://169.254.169.254/latest/api/token \
-    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null) || return 0
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null) || return 1
   curl -sf -m 2 -H "X-aws-ec2-metadata-token: $token" \
-    "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null || true
+    "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null
+}
+
+# Empty output means "not available after retries"; callers decide
+# whether that is fatal.
+imds() {
+  local out attempt
+  for attempt in 1 2 3; do
+    if out=$(imds_once "$1") && [ -n "$out" ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+# The key must be the certificate's own: a pair left mismatched by an
+# interrupted replacement would pass the certificate checks and then
+# make the service fail tls.LoadX509KeyPair on restart.
+pair_matches() {
+  local c k
+  c=$(openssl x509 -in "$crt" -noout -pubkey 2>/dev/null) || return 1
+  k=$(openssl pkey -in "$key" -pubout 2>/dev/null) || return 1
+  [ -n "$c" ] && [ "$c" = "$k" ]
 }
 
 public_ip=$(imds public-ipv4)
@@ -50,6 +80,8 @@ if [ -f "$crt" ] && [ -f "$key" ]; then
   if [ "$if_missing" = 1 ]; then
     if ! openssl x509 -in "$crt" -noout -checkend $((30 * 86400)) >/dev/null 2>&1; then
       echo "$crt expires within 30 days (or is unreadable); renewing" >&2
+    elif ! pair_matches; then
+      echo "$key is unreadable or does not match $crt; renewing" >&2
     elif [ -n "$public_ip" ] && ! openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null \
         | grep -qE "IP Address:${public_ip//./\\.}(,|\$)"; then
       echo "$crt does not name the current public IP $public_ip; renewing" >&2
@@ -60,6 +92,11 @@ if [ -f "$crt" ] && [ -f "$key" ]; then
     echo "$crt already exists; pass --force to replace it" >&2
     exit 1
   fi
+fi
+
+if [ -z "$public_ip" ] && [ "$no_public_ip" != 1 ]; then
+  echo "could not read the public IPv4 from IMDS; refusing to write a certificate that cannot match the dashboard's address (pass --no-public-ip for a localhost-only one)" >&2
+  exit 1
 fi
 
 san="DNS:localhost,IP:127.0.0.1"
