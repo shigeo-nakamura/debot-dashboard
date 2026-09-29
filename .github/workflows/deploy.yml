@@ -48,6 +48,7 @@ jobs:
           aws s3 cp dist/debot-dashboard "s3://${S3_BUCKET}/debot-dashboard/debot-dashboard"
           aws s3 sync web/ "s3://${S3_BUCKET}/debot-dashboard/web/"
           aws s3 cp deploy/debot-dashboard.service "s3://${S3_BUCKET}/deploy/debot-dashboard.service"
+          aws s3 cp deploy/gen-self-signed-cert.sh "s3://${S3_BUCKET}/deploy/gen-self-signed-cert.sh"
 
       - name: Deploy via SSM
         env:
@@ -65,6 +66,9 @@ jobs:
               "sudo chmod 755 ${INSTALL_DIR}/debot-dashboard",
               "aws s3 sync s3://${S3_BUCKET}/debot-dashboard/web ${INSTALL_DIR}/web --delete --exact-timestamps",
               "grep -n \"toFixed(1)\" ${INSTALL_DIR}/web/app.js",
+              "aws s3 cp s3://${S3_BUCKET}/deploy/gen-self-signed-cert.sh ${INSTALL_DIR}/gen-self-signed-cert.sh",
+              "sudo chmod 755 ${INSTALL_DIR}/gen-self-signed-cert.sh",
+              "${INSTALL_DIR}/gen-self-signed-cert.sh --if-missing ${INSTALL_DIR}/tls",
               "if [ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]; then aws s3 cp s3://${S3_BUCKET}/deploy/debot-dashboard.service /tmp/${SERVICE_NAME}.service && sudo mv /tmp/${SERVICE_NAME}.service /etc/systemd/system/${SERVICE_NAME}.service && sudo systemctl daemon-reload && sudo systemctl enable ${SERVICE_NAME}; fi",
               "if [ ! -f ${INSTALL_DIR}/config.yaml ]; then echo \"Missing ${INSTALL_DIR}/config.yaml\" >&2; exit 1; fi",
               "sudo systemctl restart ${SERVICE_NAME}"
