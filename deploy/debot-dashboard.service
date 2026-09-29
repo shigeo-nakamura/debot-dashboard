@@ -8,7 +8,7 @@ Type=simple
 User=ec2-user
 Group=ec2-user
 WorkingDirectory=/opt/debot-dashboard
-ExecStart=/opt/debot-dashboard/debot-dashboard -config /opt/debot-dashboard/config.yaml -listen :8080
+ExecStart=/opt/debot-dashboard/debot-dashboard -config /opt/debot-dashboard/config.yaml -listen :8080 -tls-cert /opt/debot-dashboard/tls/dashboard.crt -tls-key /opt/debot-dashboard/tls/dashboard.key
 Restart=always
 RestartSec=3
 

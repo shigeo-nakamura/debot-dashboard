@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -670,10 +671,17 @@ func (p *S3ClientPool) Client(ctx context.Context, region string) (*s3.Client, e
 
 func main() {
 	var cfgPath string
-	var listen string
+	var listen, tlsCert, tlsKey string
 	flag.StringVar(&cfgPath, "config", "config.yaml", "path to config YAML")
 	flag.StringVar(&listen, "listen", ":8080", "listen address")
+	flag.StringVar(&tlsCert, "tls-cert", "", "TLS certificate (PEM); serve HTTPS when set together with -tls-key")
+	flag.StringVar(&tlsKey, "tls-key", "", "TLS private key (PEM); serve HTTPS when set together with -tls-cert")
 	flag.Parse()
+
+	tlsConfig, err := loadServerTLS(tlsCert, tlsKey)
+	if err != nil {
+		log.Fatalf("tls config invalid: %v", err)
+	}
 
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -720,10 +728,48 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	}))
 
-	log.Printf("debot-dashboard listening on %s", listen)
-	if err := http.ListenAndServe(listen, withAuth(mux, auth)); err != nil {
+	server := &http.Server{
+		Addr:              listen,
+		Handler:           withAuth(mux, auth),
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if tlsConfig != nil {
+		log.Printf("debot-dashboard listening on %s (https)", listen)
+		// Certificates are already loaded into TLSConfig, so the file
+		// arguments stay empty.
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		log.Printf("debot-dashboard listening on %s (plain http: basic-auth credentials travel unencrypted)", listen)
+		err = server.ListenAndServe()
+	}
+	if err != nil {
 		log.Fatalf("server stopped: %v", err)
 	}
+}
+
+// loadServerTLS returns nil when neither file is given (plain HTTP) and
+// a loaded config when both are. Exactly one of them is an error rather
+// than a quiet fall back to plain HTTP: the dashboard sits behind basic
+// auth, and a half-configured unit silently serving the password in the
+// clear is the failure TLS is there to prevent. The key pair is loaded
+// here, before the poll loop starts, so a missing or mismatched file
+// fails at startup instead of on the first handshake.
+func loadServerTLS(certFile, keyFile string) (*tls.Config, error) {
+	if certFile == "" && keyFile == "" {
+		return nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, errors.New("-tls-cert and -tls-key must be set together")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load key pair: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+	}, nil
 }
 
 func loadConfig(path string) (Config, error) {

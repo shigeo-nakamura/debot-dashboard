@@ -15,6 +15,10 @@ if [ ! -f "${APP_DIR}/config.yaml" ]; then
   echo "Created ${APP_DIR}/config.yaml - edit it before starting."
 fi
 
+# The unit serves HTTPS from this pair; without it the service would
+# refuse to start.
+./deploy/gen-self-signed-cert.sh --if-missing "${APP_DIR}/tls"
+
 sudo install -m 0644 ./deploy/debot-dashboard.service "/etc/systemd/system/${SERVICE_NAME}.service"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${SERVICE_NAME}"
