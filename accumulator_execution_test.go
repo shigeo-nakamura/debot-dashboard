@@ -136,3 +136,20 @@ func (rt rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+func TestExecutionWindowStartBoundedByCandleRetention(t *testing.T) {
+	now := time.Date(2027, 6, 1, 0, 0, 0, 0, time.UTC)
+	recent := now.Add(-100 * 24 * time.Hour)
+	if got := executionWindowStart(recent, now); !got.Equal(recent) {
+		t.Fatalf("recent window_start moved to %v", got)
+	}
+	old := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	got := executionWindowStart(old, now)
+	if !got.Equal(now.Add(-4800 * time.Hour)) {
+		t.Fatalf("old window_start = %v, want the 4800h bound", got)
+	}
+	// The bound must stay inside the 5000 hourly bars candleSnapshot keeps.
+	if now.Sub(got) >= 5000*time.Hour {
+		t.Fatal("bound reaches past candle retention")
+	}
+}

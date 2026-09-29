@@ -766,7 +766,7 @@ const createCard = (key) => {
           <div class="row"><span>Cost basis</span><strong data-field="accumulator-basis"></strong></div>
           <div class="row"><span data-field="accumulator-dca-label">Naive DCA</span><strong data-field="accumulator-dca-price"></strong></div>
           <div class="row"><span title="Naive DCA: the same dollars every day from the window start, priced at daily closes. It also counts schedule effects — a ramp from a probe size to the full budget, days the bot did not buy — not just execution.">Edge vs naive DCA</span><strong data-field="accumulator-edge"></strong></div>
-          <div class="row" data-field="accumulator-exec-row" hidden><span data-field="accumulator-exec-label" title="Execution edge: each fill against spending the same dollars at the open of the hour it landed in. Execution only (price within the hour + fees); the schedule is held fixed.">Execution edge</span><strong data-field="accumulator-exec-edge"></strong></div>
+          <div class="row" data-field="accumulator-exec-row" hidden><span data-field="accumulator-exec-label" title="Execution edge: each fill against spending the same dollars at the open of the hour it landed in. Execution only (price within the hour + fees); the schedule is held fixed. A trailing window of at most 200 days: hourly prices older than that are no longer published.">Execution edge</span><strong data-field="accumulator-exec-edge"></strong></div>
           <div class="benchmark-note" data-field="accumulator-dca-note" hidden></div>
         </div>
         <div class="row-grid accumulator-details">
@@ -2911,8 +2911,11 @@ const renderAccumulatorDCA = (card, data) => {
   );
   const execLabel = card.querySelector('[data-field="accumulator-exec-label"]');
   if (execLabel) {
+    const since = exec && Number.isFinite(exec.since_ms) && exec.since_ms > 0
+      ? new Date(exec.since_ms).toISOString().slice(0, 10)
+      : null;
     execLabel.textContent = exec && Number.isFinite(exec.fills)
-      ? `Execution edge (${exec.fills} fills)`
+      ? `Execution edge (${exec.fills} fills${since ? ` since ${since}` : ""})`
       : "Execution edge";
   }
   const noteEl = card.querySelector('[data-field="accumulator-dca-note"]');

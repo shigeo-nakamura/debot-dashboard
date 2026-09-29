@@ -69,7 +69,9 @@ here the same way as the bull-holder's anchor.
   fees. At 2026-09-29 it read −7 bps over 13 fills, i.e. the ~7 bps taker fee.
   Fills come from the public `userFillsByTime` endpoint (paged, cached 10 min,
   a failed read 1 min) and hourly opens from `candleSnapshot`; a configured but
-  failed read shows its reason in the row instead of a number.
+  failed read shows its reason in the row instead of a number. `candleSnapshot`
+  keeps only the latest 5000 bars, so the execution window is the later of
+  `window_start` and now − 4800 h (≈200 days), and the row names its start.
 - **Price β (unrealized)** — the former "Unrealized PnL" row, relabelled: it is
   the mark-to-market of the purchased HYPE, which is price exposure, not skill.
 - **Staking rewards (carry)** — accrued yield in HYPE and its value at the

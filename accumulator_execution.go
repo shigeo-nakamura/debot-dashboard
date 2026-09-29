@@ -36,7 +36,10 @@ type ExecutionEdge struct {
 	EdgeBps  float64 `json:"edge_bps"`
 	Fills    int     `json:"fills"`
 	USDTotal float64 `json:"usd_total"`
-	AsOf     int64   `json:"as_of"`
+	// SinceMs is where the fills window starts: window_start, or the
+	// trailing candle-retention bound once window_start is older.
+	SinceMs int64 `json:"since_ms"`
+	AsOf    int64 `json:"as_of"`
 }
 
 // hlFill is the subset of a Hyperliquid userFills entry the edge needs.
@@ -112,6 +115,19 @@ func executionEdge(fills []hlFill, opens map[int64]float64, coin, symbol string,
 	}, ""
 }
 
+// candleSnapshot only retains the most recent 5000 bars of an interval,
+// so hourly opens older than ~208 days are gone and a fill from then
+// could never be priced again. The execution edge is therefore a trailing
+// window, bounded explicitly with a margin, and reported with its start.
+const executionMaxLookback = 4800 * time.Hour
+
+func executionWindowStart(start, now time.Time) time.Time {
+	if earliest := now.Add(-executionMaxLookback); start.Before(earliest) {
+		return earliest
+	}
+	return start
+}
+
 // Fills change once a day; the dashboard polls every 20 seconds.
 const executionEdgeTTL = 10 * time.Minute
 
@@ -141,7 +157,8 @@ func (c *executionEdgeCache) get(ctx context.Context, client *http.Client, addre
 		return entry.edge, entry.err
 	}
 	entry = executionEdgeEntry{fetchedAt: now}
-	fills, err := fetchFills(ctx, client, address, start, now)
+	from := executionWindowStart(start, now)
+	fills, err := fetchFills(ctx, client, address, from, now)
 	if err != nil {
 		entry.err = err.Error()
 	} else {
@@ -150,6 +167,9 @@ func (c *executionEdgeCache) get(ctx context.Context, client *http.Client, addre
 			entry.err = oerr.Error()
 		} else {
 			entry.edge, entry.err = executionEdge(fills, opens, coin, symbol, now)
+			if entry.edge != nil {
+				entry.edge.SinceMs = from.UnixMilli()
+			}
 		}
 	}
 	c.mu.Lock()

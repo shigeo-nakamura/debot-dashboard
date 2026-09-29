@@ -2043,12 +2043,12 @@ test("DCA benchmark row reports the edge in bps and withholds what it lacks", ()
   context.__test.renderAccumulatorDCA(exec, {
     accumulator_dca: {
       window_start: "2026-09-10", days: 19, dca_price_usd: 86.56, cost_basis_usd: 91.3, edge_bps: -547,
-      execution: { benchmark_price_usd: 91.23, cost_basis_usd: 91.3, edge_bps: -7.4, fills: 13, usd_total: 881.36 },
+      execution: { benchmark_price_usd: 91.23, cost_basis_usd: 91.3, edge_bps: -7.4, fills: 13, usd_total: 881.36, since_ms: Date.UTC(2026, 8, 10) },
     },
   });
   assert.equal(exec.querySelector('[data-field="accumulator-exec-row"]').hidden, false);
   assert.equal(exec.text("accumulator-exec-edge"), "-7 bps");
-  assert.equal(exec.text("accumulator-exec-label"), "Execution edge (13 fills)");
+  assert.equal(exec.text("accumulator-exec-label"), "Execution edge (13 fills since 2026-09-10)");
   assert.equal(exec.text("accumulator-edge"), "-547 bps");
   const execFailed = benchmarkCard();
   context.__test.renderAccumulatorDCA(execFailed, {
