@@ -13,9 +13,9 @@ instead, in `/opt/debot-dashboard/tls/`:
 | file | what | lifetime |
 |---|---|---|
 | `ca.crt` / `ca.key` | private CA — **this is what devices and error-watch trust** | 10 years |
-| `dashboard.crt` / `dashboard.key` | server certificate signed by the CA; SANs = IMDS public IPv4 + public DNS name + localhost | 825 days |
+| `dashboard.crt` / `dashboard.key` | server certificate signed by the CA; SANs = IMDS public IPv4 + public DNS name (when it is a `*.compute.amazonaws.com` name the CA permits) + localhost | 825 days |
 
-Keys are `0600`, owned by `ec2-user`. `deploy.yml` installs the script next to
+Keys are `0600`; `dashboard.key` is owned by `ec2-user` (the service user), `ca.key` by root, so a compromise of the service cannot read the signing key. `deploy.yml` installs the script next to
 the binary and runs it with `--if-missing` on every deploy: it creates what is
 missing and reissues the server certificate when it expires within 30 days,
 does not match its key, is not signed by the CA, or no longer names the current

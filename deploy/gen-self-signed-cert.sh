@@ -59,6 +59,10 @@ key="$dir/dashboard.key"
 ca_crt="$dir/ca.crt"
 ca_key="$dir/ca.key"
 owner="${DASHBOARD_USER:-ec2-user}"
+# The CA key stays root's: the service (running as $owner) only needs the
+# server key, and a file-read compromise of the service must not be able to
+# take the signing key with it. Every CA operation below goes through sudo.
+ca_key_owner="${CA_KEY_OWNER:-root}"
 
 imds_once() {
   local token
@@ -161,14 +165,23 @@ if [ "$issue_ca" = 1 ]; then
     -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -addext "nameConstraints=critical,permitted;IP:0.0.0.0/0.0.0.0,permitted;DNS:localhost,permitted;DNS:compute.amazonaws.com" \
     -keyout "$tmp/ca.key" -out "$tmp/ca.crt" 2>/dev/null
-  sudo install -m 0600 -o "$owner" -g "$owner" "$tmp/ca.key" "$ca_key"
+  sudo install -m 0600 -o "$ca_key_owner" -g "$ca_key_owner" "$tmp/ca.key" "$ca_key"
   sudo install -m 0644 -o "$owner" -g "$owner" "$tmp/ca.crt" "$ca_crt"
   echo "wrote $ca_crt"
 fi
 
 san="DNS:localhost,IP:127.0.0.1"
 [ -n "$public_ip" ] && san="$san,IP:$public_ip"
-[ -n "$public_dns" ] && san="$san,DNS:$public_dns"
+# Only a hostname inside the CA's permitted DNS subtree: one outside it
+# (us-east-1 hands out *.compute-1.amazonaws.com) would make clients reject
+# the whole certificate, IP SAN included, and every deploy would reissue
+# another invalid one. The IP SAN is what the dashboard is reached on.
+if [ -n "$public_dns" ]; then
+  case "$public_dns" in
+    *.compute.amazonaws.com) san="$san,DNS:$public_dns" ;;
+    *) echo "leaving $public_dns out of the SAN: outside the CA's permitted names" >&2 ;;
+  esac
+fi
 
 cat > "$tmp/leaf.ext" <<EXT
 basicConstraints=critical,CA:FALSE
