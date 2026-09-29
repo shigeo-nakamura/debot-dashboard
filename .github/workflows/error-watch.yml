@@ -18,9 +18,21 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           DASHBOARD_USER: ${{ secrets.DASHBOARD_USER }}
           DASHBOARD_PASS: ${{ secrets.DASHBOARD_PASS }}
+          # The dashboard's self-signed certificate (deploy/tls.md). Trust
+          # is pinned to exactly this certificate; never fall back to -k,
+          # which would hand the basic-auth password to anyone in the path.
+          DASHBOARD_CA_CERT: ${{ secrets.DASHBOARD_CA_CERT }}
         run: |
           set -euo pipefail
-          curl -sS --fail --max-time 30 -u "$DASHBOARD_USER:$DASHBOARD_PASS" "$DASHBOARD_URL" -o status.json
+          tls_args=()
+          if [ -n "$DASHBOARD_CA_CERT" ]; then
+            printf '%s\n' "$DASHBOARD_CA_CERT" > dashboard-ca.crt
+            tls_args=(--cacert dashboard-ca.crt)
+          elif [[ "$DASHBOARD_URL" == https://* ]]; then
+            echo "::error::DASHBOARD_URL is https but the DASHBOARD_CA_CERT secret is not set (see deploy/tls.md)"
+            exit 1
+          fi
+          curl -sS --fail --max-time 30 "${tls_args[@]}" -u "$DASHBOARD_USER:$DASHBOARD_PASS" "$DASHBOARD_URL" -o status.json
           echo "Fetched $(jq '.targets | length' status.json) targets"
 
       - name: Create issues for targets with errors

@@ -45,6 +45,22 @@ sudo systemctl restart debot-dashboard
 
 then re-import the new certificate.
 
+## error-watch
+
+`.github/workflows/error-watch.yml` polls the dashboard from GitHub Actions. It
+trusts exactly the dashboard certificate, taken from the `DASHBOARD_CA_CERT`
+repo secret (`--cacert`, never `-k`). An `https://` `DASHBOARD_URL` without
+that secret fails the run. Whenever the certificate is regenerated (IP change,
+expiry renewal), update the secret too:
+
+```bash
+ssh debot cat /opt/debot-dashboard/tls/dashboard.crt \
+  | gh secret set DASHBOARD_CA_CERT --repo shigeo-nakamura/debot-dashboard
+```
+
+The URL has to use the address the certificate names (the public IPv4 or the
+`ec2-…compute.amazonaws.com` name), e.g. `https://<public-ip>:8080/api/status`.
+
 ## Existing hosts
 
 `deploy.yml` installs `debot-dashboard.service` only when it is missing, so a
@@ -59,3 +75,7 @@ sudo sed -i 's|-listen :8080$|-listen :8080 -tls-cert /opt/debot-dashboard/tls/d
 sudo systemctl daemon-reload && sudo systemctl restart debot-dashboard
 curl -sk -o /dev/null -w '%{http_code}\n' https://localhost:8080/   # 401 = HTTPS + auth up
 ```
+
+For error-watch, set `DASHBOARD_CA_CERT` (above) **before** the switch, it is
+harmless while the URL is still `http://`, and change `DASHBOARD_URL` to
+`https://` right after it.
