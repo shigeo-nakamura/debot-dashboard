@@ -75,7 +75,7 @@ func TestExecutionEdgeRefusesWhatItCannotPrice(t *testing.T) {
 		"Hourly price":  {fill("@107", "B", "100", "1", "0", "HYPE", tHour+hourMs)},
 		"unexpected":    {fill("@107", "B", "100", "1", "0", "PURR", tHour)},
 		"Invalid fill":  {fill("@107", "B", "x", "1", "0", "HYPE", tHour)},
-		"Invalid fill ": {fill("@107", "B", "100", "1", "-1", "HYPE", tHour)},
+		"Invalid fill ": {fill("@107", "B", "100", "1", "NaN", "HYPE", tHour)},
 		"add up":        {fill("@107", "B", "100", "1", "1", "HYPE", tHour)},
 	}
 	for want, fills := range cases {
@@ -151,5 +151,14 @@ func TestExecutionWindowStartBoundedByCandleRetention(t *testing.T) {
 	// The bound must stay inside the 5000 hourly bars candleSnapshot keeps.
 	if now.Sub(got) >= 5000*time.Hour {
 		t.Fatal("bound reaches past candle retention")
+	}
+}
+
+func TestExecutionEdgeMakerRebate(t *testing.T) {
+	opens := map[int64]float64{tHour: 100}
+	now := time.UnixMilli(tHour + 2*hourMs)
+	edge, msg := executionEdge([]hlFill{fill("@107", "B", "100", "1", "-0.0001", "HYPE", tHour)}, opens, "@107", "HYPE", now)
+	if msg != "" || !(edge.EdgeBps > 0) {
+		t.Fatalf("a rebate at the open should be a positive edge, got %+v %q", edge, msg)
 	}
 }
