@@ -765,7 +765,8 @@ const createCard = (key) => {
           <div class="benchmark-title" title="A β accumulator's only execution question is whether it bought more cheaply than spending the same budget every day and not thinking about it (bot-strategy#956).">DCA benchmark</div>
           <div class="row"><span>Cost basis</span><strong data-field="accumulator-basis"></strong></div>
           <div class="row"><span data-field="accumulator-dca-label">Naive DCA</span><strong data-field="accumulator-dca-price"></strong></div>
-          <div class="row"><span>Execution edge</span><strong data-field="accumulator-edge"></strong></div>
+          <div class="row"><span title="Naive DCA: the same dollars every day from the window start, priced at daily closes. It also counts schedule effects — a ramp from a probe size to the full budget, days the bot did not buy — not just execution.">Edge vs naive DCA</span><strong data-field="accumulator-edge"></strong></div>
+          <div class="row" data-field="accumulator-exec-row" hidden><span data-field="accumulator-exec-label" title="Execution edge: each fill against spending the same dollars at the open of the hour it landed in. Execution only (price within the hour + fees); the schedule is held fixed.">Execution edge</span><strong data-field="accumulator-exec-edge"></strong></div>
           <div class="benchmark-note" data-field="accumulator-dca-note" hidden></div>
         </div>
         <div class="row-grid accumulator-details">
@@ -2892,6 +2893,27 @@ const renderAccumulatorDCA = (card, data) => {
         `a fill the bot made today is therefore in its cost basis while today is not yet in the schedule it is compared against. ` +
         `The two align at the next UTC rollover; the residual is at most one day's weight in a ${dca.days}-day window.`;
     }
+  }
+  // Execution edge: same dollars, same hour (fills_address configured).
+  // Hidden entirely when not configured; a configured-but-failed read
+  // shows its reason instead of a number.
+  const execRow = card.querySelector('[data-field="accumulator-exec-row"]');
+  const exec = dca && dca.execution ? dca.execution : null;
+  const execErr = dca && typeof dca.execution_error === "string" ? dca.execution_error : "";
+  if (execRow) execRow.hidden = !exec && execErr === "";
+  const execEdge = exec && Number.isFinite(exec.edge_bps) ? Number(exec.edge_bps) : null;
+  set(
+    "accumulator-exec-edge",
+    execEdge !== null
+      ? `${execEdge > 0 ? "+" : ""}${execEdge.toFixed(0)} bps`
+      : execErr || "-",
+    execEdge,
+  );
+  const execLabel = card.querySelector('[data-field="accumulator-exec-label"]');
+  if (execLabel) {
+    execLabel.textContent = exec && Number.isFinite(exec.fills)
+      ? `Execution edge (${exec.fills} fills)`
+      : "Execution edge";
   }
   const noteEl = card.querySelector('[data-field="accumulator-dca-note"]');
   if (noteEl) {
