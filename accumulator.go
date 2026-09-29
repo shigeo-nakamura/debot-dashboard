@@ -38,6 +38,10 @@ type DCAConfig struct {
 	// perp closes measures the execution edge against the basis (Codex,
 	// PR #40).
 	Market string `yaml:"market" json:"market"`
+	// FillsAddress is the execution account whose public fills price the
+	// execution edge (same dollars, same hour). Optional: absent, only the
+	// naive schedule is shown. Public data only; no signing material.
+	FillsAddress string `yaml:"fills_address,omitempty" json:"-"`
 }
 
 type AccumulatorConfig struct {
@@ -66,6 +70,9 @@ func (c DCAConfig) validate() error {
 	case marketSpot, marketPerp:
 	default:
 		return fmt.Errorf("accumulator.dca.market %q (want spot or perp)", c.Market)
+	}
+	if c.FillsAddress != "" && !hlAddressPattern.MatchString(c.FillsAddress) {
+		return fmt.Errorf("accumulator.dca.fills_address %q (want 0x + 40 hex)", c.FillsAddress)
 	}
 	return nil
 }
@@ -107,6 +114,11 @@ type DCABenchmark struct {
 	// schedule's average cost.
 	EdgeBps *float64 `json:"edge_bps,omitempty"`
 	AsOf    int64    `json:"as_of"`
+	// Execution is the same-dollars-same-hour comparison, present only
+	// when fills_address is configured; ExecutionError says why it is
+	// missing when it is configured but could not be computed.
+	Execution      *ExecutionEdge `json:"execution,omitempty"`
+	ExecutionError string         `json:"execution_error,omitempty"`
 }
 
 const (
@@ -442,6 +454,14 @@ func applyAccumulatorDCA(ctx context.Context, status *StatusData, cfg *Accumulat
 	status.AccumulatorDCA, status.AccumulatorDCAError = accumulatorDCABenchmark(
 		status.Accumulator, status.AccumulatorOps, cfg.DCA, closes, closesErr, now,
 	)
+	if status.AccumulatorDCA != nil && cfg.DCA.FillsAddress != "" {
+		// Its own budget: fills and hourly candles are separate reads,
+		// and a slow one must not starve the naive benchmark above.
+		execCtx, execCancel := context.WithTimeout(ctx, commandTimeout)
+		defer execCancel()
+		status.AccumulatorDCA.Execution, status.AccumulatorDCA.ExecutionError =
+			executionEdges.get(execCtx, client, cfg.DCA.FillsAddress, market, cfg.DCA.symbol(), start, now)
+	}
 }
 
 // missedDecisionAfter is how long after the newest pacing decision the

@@ -17,6 +17,9 @@ every day and not thinking about it (bot-strategy#956, taxonomy §4.1).
         window_start: "2026-09-11" # first purchase date, UTC
         symbol: HYPE               # the asset being accumulated (must be HYPE)
         market: spot               # spot (default) or perp
+        # optional: the execution account whose public fills price the
+        # execution edge (same dollars, same hour); absent = row hidden
+        fills_address: "0x…"                # 0x + 40 hex
 ```
 
 `symbol` has to be `HYPE`: the cost basis is read from the accumulator's HYPE
@@ -51,8 +54,24 @@ here the same way as the bull-holder's anchor.
   which is the entire reason DCA is the benchmark. Averaging the prices instead
   would hand the bot an edge it never earned (on closes of 60 and 120 the
   harmonic mean is 80 while the arithmetic mean is 90).
-- **Execution edge** — `(naive DCA − cost basis) / naive DCA` in bps. Positive
-  means the bot accumulated below the naive schedule.
+- **Edge vs naive DCA** — `(naive DCA − cost basis) / naive DCA` in bps.
+  Positive means the bot accumulated below the naive schedule. This is **not**
+  an execution number: it also carries every schedule decision — a ramp from a
+  probe size to the full budget, days the bot did not buy. On 2026-09-29 it read
+  −547 bps, of which −232 were no-buy days (09-11/12/13/15 were pre-live and the
+  cheapest of the window), −300 the $25 → $95/day ramp (small buys while HYPE sat
+  near $80, full-size buys after it moved to $92–97), and about 0 execution.
+- **Execution edge** (only with `fills_address`) — each fill against spending
+  the same dollars at the open of the hour it landed in: benchmark =
+  Σusd / Σ(usd / hourly open), basis = (Σusd + USDC fees) / (Σsize − fees taken
+  in HYPE), over those fills only (not the lifetime journal basis). The schedule
+  is held fixed, so this is execution alone: slippage within the hour plus
+  fees. At 2026-09-29 it read −7 bps over 13 fills, i.e. the ~7 bps taker fee.
+  Fills come from the public `userFillsByTime` endpoint (paged, cached 10 min,
+  a failed read 1 min) and hourly opens from `candleSnapshot`; a configured but
+  failed read shows its reason in the row instead of a number. `candleSnapshot`
+  keeps only the latest 5000 bars, so the execution window is the later of
+  `window_start` and now − 4800 h (≈200 days), and the row names its start.
 - **Price β (unrealized)** — the former "Unrealized PnL" row, relabelled: it is
   the mark-to-market of the purchased HYPE, which is price exposure, not skill.
 - **Staking rewards (carry)** — accrued yield in HYPE and its value at the
