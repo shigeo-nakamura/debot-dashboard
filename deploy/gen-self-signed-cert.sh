@@ -10,8 +10,12 @@
 # stop/start it changes, and the certificate has to be regenerated with
 # --force (and re-trusted) or the browser will reject the name.
 #
-# --if-missing  exit 0 without touching anything when both files exist
-#               (deploy.yml runs it this way on every deploy).
+# --if-missing  exit 0 without touching anything when both files exist,
+#               the certificate is valid for at least 30 more days and
+#               it still names the current public IP; otherwise renew it
+#               (deploy.yml runs it this way on every deploy, and restarts
+#               the service afterwards). A renewed certificate has to be
+#               re-trusted in the browser.
 # --force       overwrite an existing pair.
 set -euo pipefail
 
@@ -31,16 +35,6 @@ crt="$dir/dashboard.crt"
 key="$dir/dashboard.key"
 owner="${DASHBOARD_USER:-ec2-user}"
 
-if [ -f "$crt" ] && [ -f "$key" ]; then
-  if [ "$if_missing" = 1 ]; then
-    exit 0
-  fi
-  if [ "$force" != 1 ]; then
-    echo "$crt already exists; pass --force to replace it" >&2
-    exit 1
-  fi
-fi
-
 imds() {
   local token
   token=$(curl -sf -m 2 -X PUT http://169.254.169.254/latest/api/token \
@@ -49,9 +43,26 @@ imds() {
     "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null || true
 }
 
-san="DNS:localhost,IP:127.0.0.1"
 public_ip=$(imds public-ipv4)
 public_dns=$(imds public-hostname)
+
+if [ -f "$crt" ] && [ -f "$key" ]; then
+  if [ "$if_missing" = 1 ]; then
+    if ! openssl x509 -in "$crt" -noout -checkend $((30 * 86400)) >/dev/null 2>&1; then
+      echo "$crt expires within 30 days (or is unreadable); renewing" >&2
+    elif [ -n "$public_ip" ] && ! openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null \
+        | grep -qE "IP Address:${public_ip//./\\.}(,|\$)"; then
+      echo "$crt does not name the current public IP $public_ip; renewing" >&2
+    else
+      exit 0
+    fi
+  elif [ "$force" != 1 ]; then
+    echo "$crt already exists; pass --force to replace it" >&2
+    exit 1
+  fi
+fi
+
+san="DNS:localhost,IP:127.0.0.1"
 [ -n "$public_ip" ] && san="$san,IP:$public_ip"
 [ -n "$public_dns" ] && san="$san,DNS:$public_dns"
 

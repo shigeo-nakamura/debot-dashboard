@@ -13,7 +13,9 @@ itself is installed next to the binary) with the
 instance's current public IPv4 and public DNS name from IMDS, plus `localhost`,
 as subject alternative names. `deploy.yml` runs it with `--if-missing` on every
 deploy, so a fresh host always has a pair before the unit that needs it is
-installed; an existing pair is never replaced.
+installed. An existing pair is kept unless it expires within 30 days or no
+longer names the current public IP; then the deploy renews it (and restarts the
+service, as every deploy does) and the new certificate has to be re-trusted.
 
 ## Trusting it in the browser
 
@@ -33,7 +35,8 @@ certificate has to be regenerated.
 ## When the public IP changes
 
 The public IP is not elastic. After a stop/start the address changes and the
-certificate no longer matches it:
+certificate no longer matches it. The next deploy renews it; to do it right
+away:
 
 ```bash
 /opt/debot-dashboard/gen-self-signed-cert.sh --force   # installed by deploy.yml
