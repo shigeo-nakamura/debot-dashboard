@@ -70,7 +70,9 @@ func executionEdge(fills []hlFill, opens map[int64]float64, coin, symbol string,
 		px, err1 := strconv.ParseFloat(f.Px, 64)
 		sz, err2 := strconv.ParseFloat(f.Sz, 64)
 		fee, err3 := strconv.ParseFloat(f.Fee, 64)
-		if err1 != nil || err2 != nil || err3 != nil || !(px > 0) || !(sz > 0) || fee < 0 || math.IsInf(px*sz, 0) {
+		// A negative fee is a maker rebate, legitimate on Hyperliquid:
+		// it adds units (asset fee) or lowers cost (USDC fee) below.
+		if err1 != nil || err2 != nil || err3 != nil || !(px > 0) || !(sz > 0) || math.IsNaN(fee) || math.IsInf(fee, 0) || math.IsInf(px*sz, 0) {
 			return nil, "Invalid fill in account history"
 		}
 		open, ok := opens[f.Time-f.Time%hourMs]
