@@ -18,9 +18,11 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           DASHBOARD_USER: ${{ secrets.DASHBOARD_USER }}
           DASHBOARD_PASS: ${{ secrets.DASHBOARD_PASS }}
-          # The dashboard's self-signed certificate (deploy/tls.md). Trust
-          # is pinned to exactly this certificate; never fall back to -k,
-          # which would hand the basic-auth password to anyone in the path.
+          # The dashboard's private CA certificate (ca.crt, deploy/tls.md).
+          # Trust is pinned to that CA only; never fall back to -k, which
+          # would hand the basic-auth password to anyone in the path. The
+          # CA outlives server-certificate reissues, so this secret only
+          # changes when the CA itself is replaced (--new-ca).
           DASHBOARD_CA_CERT: ${{ secrets.DASHBOARD_CA_CERT }}
         run: |
           set -euo pipefail
