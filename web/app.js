@@ -814,7 +814,9 @@ const createCard = (key) => {
         <div class="han-bridge-header" data-field="book-header">Book runtime</div>
         <div class="row"><span>Decision</span><strong class="tone-neutral" data-field="book-decision"></strong></div>
         <div class="row"><span>Signal</span><strong data-field="book-signal"></strong></div>
-        <div class="row"><span>Book</span><strong data-field="book-exposure"></strong></div>
+        <div class="row"><span>Exposure</span><strong data-field="book-exposure" title="gross = long + short notional; net exposure = long − short notional (the book's directional tilt, not PnL)"></strong></div>
+        <div class="row" data-field="book-pnl-row" hidden><span>PnL</span><strong data-field="book-pnl" title="Total = equity against the starting reference; realized from closed trades, unrealized on the open book (funding estimate included in the total)"></strong></div>
+        <div class="row" data-field="book-equity-row" hidden><span>Equity</span><strong data-field="book-equity" title="Max DD = largest peak-to-trough fall of book equity since the runtime's state began"></strong></div>
         <div class="row"><span>Next decision</span><strong data-field="book-next"></strong></div>
         <div class="row" data-field="book-note-row" hidden><span>Note</span><strong class="tone-warn" data-field="book-note"></strong></div>
       </div>
@@ -1260,7 +1262,11 @@ const updateCard = (card, target, pollSecs, index, key) => {
       applySignedClass(maxDdEl, -botStats.max_dd);
     }
     if (winRateEl) {
-      winRateEl.textContent = `${botStats.win_rate.toFixed(0)}%`;
+      // The book runtime reports win_rate as a 0-1 fraction; pairtrade
+      // and Engine B report a percent. Rendering the fraction as-is read
+      // 6 wins of 11 as "1%".
+      const winRatePct = isBookStatus(data) ? botStats.win_rate * 100 : botStats.win_rate;
+      winRateEl.textContent = `${winRatePct.toFixed(0)}%`;
     }
     if (numTradesEl) {
       numTradesEl.textContent = botStats.trades;
@@ -1318,7 +1324,13 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const book = isBookStatus(data) ? data.book : null;
   if (bookViewEl) {
     bookViewEl.hidden = book === null;
-    if (book) renderBookStatus(card, book, { blindResult });
+    if (book) {
+      renderBookStatus(card, book, {
+        blindResult,
+        pnlTotal: holderNumber(data.pnl_total),
+        maxDd: holderNumber(data.trade_stats?.max_dd),
+      });
+    }
   }
 
   const hanBridgeViewEl = card.querySelector('[data-field="han-bridge-view"]');
@@ -2703,7 +2715,7 @@ const isBookHalted = (data) =>
 // "partial:<sha>" carry a hash, the rest carry a reason. `last_decision`
 // is the *previous* completed decision and can disagree with the window
 // in progress, so the two are shown separately rather than merged.
-const bookViewModel = (book, { blindResult = false } = {}) => {
+const bookViewModel = (book, { blindResult = false, pnlTotal = null, maxDd = null } = {}) => {
   const signal = String(book.signal_status || "");
   const [kind, detail = ""] = signal.split(":");
   let tone = "neutral";
@@ -2726,6 +2738,7 @@ const bookViewModel = (book, { blindResult = false } = {}) => {
     ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${lastReason ? ` · ${lastReason}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
+  const signedMoney = (v) => (typeof v === "number" && Number.isFinite(v) ? `${v > 0 ? "+" : ""}${usdCurrency(v)}` : "-");
   const notes = [];
   // A producer's halt reason can embed the number that caused it, so a
   // blinded card names the state instead (Codex, PR #39).
@@ -2739,14 +2752,20 @@ const bookViewModel = (book, { blindResult = false } = {}) => {
     decision,
     signal: detail ? `${kind} ${detail}` : kind || "-",
     signalTone: tone,
-    // Gross and net say whether the book is balanced, which is
-    // operational. Equity against a known starting reference is the
-    // running result, so it is left out for an α candidate — otherwise
-    // the one number the blinding exists to hide walks back in through
-    // this row (Codex, PR #39).
-    exposure: blindResult
-      ? `gross ${money(book.gross_usd)} · net ${money(book.net_usd)}`
-      : `gross ${money(book.gross_usd)} · net ${money(book.net_usd)} · equity ${money(book.equity_usd)}`,
+    // Gross and net exposure say whether the book is balanced, which is
+    // operational. "net" alone read as a net result, so it is spelled
+    // out: it is long minus short notional, not PnL.
+    exposure: `gross ${money(book.gross_usd)} · net exposure ${signedMoney(book.net_usd)}`,
+    // Equity, PnL and drawdown against a known starting reference are
+    // the running result, so an α candidate gets none of them —
+    // otherwise the one number the blinding exists to hide walks back in
+    // through these rows (Codex, PR #39).
+    pnl: blindResult
+      ? null
+      : `${signedMoney(pnlTotal)} · realized ${signedMoney(book.cum_realized_usd)} · unrealized ${signedMoney(book.unrealized_usd)}`,
+    equity: blindResult
+      ? null
+      : `${money(book.equity_usd)} · max DD ${typeof maxDd === "number" && Number.isFinite(maxDd) ? signedMoney(-maxDd) : "-"}`,
     next: book.next_decision_at
       ? `${book.next_decision_key || "?"} @ ${book.next_decision_at}`
       : "Not scheduled",
@@ -2763,6 +2782,11 @@ const renderBookStatus = (card, book, options) => {
   set("book-header", view.header);
   set("book-decision", view.decision);
   set("book-exposure", view.exposure);
+  for (const field of ["pnl", "equity"]) {
+    const rowEl = card.querySelector(`[data-field="book-${field}-row"]`);
+    if (rowEl) rowEl.hidden = view[field] === null;
+    set(`book-${field}`, view[field] || "");
+  }
   set("book-next", view.next);
   const signalEl = card.querySelector('[data-field="book-signal"]');
   if (signalEl) {

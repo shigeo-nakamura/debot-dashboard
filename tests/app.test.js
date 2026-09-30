@@ -660,7 +660,16 @@ test("book fixture renders the applied decision, its signal hash and the book's 
   assert.equal(view.decision, "2026-07-08 applied · d73e8b6f6beb");
   assert.equal(view.signal, "applied d73e8b6f6beb");
   assert.equal(view.signalTone, "ok");
-  assert.match(view.exposure, /^gross \$999\.\d+ · net \$9\.\d+ · equity \$1,009\.\d+$/);
+  assert.match(view.exposure, /^gross \$999\.\d+ · net exposure \+\$9\.\d+$/);
+  // Without the producer's pnl_total / max_dd the rows say so rather
+  // than inventing a figure.
+  assert.match(view.pnl, /^- · realized \$0\.0+ · unrealized \+\$9\.9\d*$/);
+  assert.match(view.equity, /^\$1,009\.9\d* · max DD -$/);
+  const full = context.__test.bookViewModel(book, { pnlTotal: bookFixture.pnl_total, maxDd: bookFixture.trade_stats.max_dd });
+  assert.match(full.pnl, /^\+\$9\.9\d* · realized \$0\.0+ · unrealized \+\$9\.9\d*$/);
+  assert.match(full.equity, /^\$1,009\.9\d* · max DD -\$0\.50?$/);
+  const short = context.__test.bookViewModel({ ...book, net_usd: -87.808 });
+  assert.match(short.exposure, /net exposure -\$87\.8\d*$/);
   // Book figures are USD, not the holder's USDC formatting.
   assert.ok(!view.exposure.includes("USDC"));
   assert.equal(view.next, "2026-07-13 @ 2026-07-13T00:30:00Z");
@@ -1782,13 +1791,17 @@ test("blinding an alpha card also keeps the book's equity off it", () => {
   // Equity against a known starting reference is the running result the
   // blinding exists to hide; gross and net say whether the book is
   // balanced, which is operational and stays.
-  const blinded = context.__test.bookViewModel(book, { blindResult: true });
+  const blinded = context.__test.bookViewModel(book, { blindResult: true, pnlTotal: 9.93, maxDd: 0.5 });
   assert.equal(/equity/.test(blinded.exposure), false);
   assert.equal(/1,009|1009/.test(blinded.exposure), false);
   assert.match(blinded.exposure, /gross/);
-  assert.match(blinded.exposure, /net/);
-  // Every other target keeps it.
-  assert.match(context.__test.bookViewModel(book).exposure, /equity/);
+  assert.match(blinded.exposure, /net exposure/);
+  assert.equal(blinded.pnl, null);
+  assert.equal(blinded.equity, null);
+  // Every other target keeps them.
+  const open = context.__test.bookViewModel(book, { pnlTotal: 9.93, maxDd: 0.5 });
+  assert.match(open.equity, /1,009/);
+  assert.match(open.pnl, /^\+\$9\.9/);
 });
 
 // The `hidden` attribute only sets `display: none` at the user-agent
