@@ -668,6 +668,8 @@ test("book fixture renders the applied decision, its signal hash and the book's 
   const full = context.__test.bookViewModel(book, { pnlTotal: bookFixture.pnl_total, maxDd: bookFixture.trade_stats.max_dd });
   assert.match(full.pnl, /^\+\$9\.9\d* · realized \$0\.0+ · unrealized \+\$9\.9\d*$/);
   assert.match(full.equity, /^\$1,009\.9\d* · max DD -\$0\.50?$/);
+  // A loss-free book reports max_dd 0; negating it must not print "-$0.0".
+  assert.match(context.__test.bookViewModel(book, { maxDd: 0 }).equity, /max DD \$0\.0+$/);
   const short = context.__test.bookViewModel({ ...book, net_usd: -87.808 });
   assert.match(short.exposure, /net exposure -\$87\.8\d*$/);
   // Book figures are USD, not the holder's USDC formatting.

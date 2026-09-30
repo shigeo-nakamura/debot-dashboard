@@ -2738,7 +2738,9 @@ const bookViewModel = (book, { blindResult = false, pnlTotal = null, maxDd = nul
     ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${lastReason ? ` · ${lastReason}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
     : "None yet";
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
-  const signedMoney = (v) => (typeof v === "number" && Number.isFinite(v) ? `${v > 0 ? "+" : ""}${usdCurrency(v)}` : "-");
+  // `+ 0` folds -0 (a negated zero max_dd) into 0, which
+  // Intl.NumberFormat would otherwise render as "-$0.0".
+  const signedMoney = (v) => (typeof v === "number" && Number.isFinite(v) ? `${v > 0 ? "+" : ""}${usdCurrency(v + 0)}` : "-");
   const notes = [];
   // A producer's halt reason can embed the number that caused it, so a
   // blinded card names the state instead (Codex, PR #39).
