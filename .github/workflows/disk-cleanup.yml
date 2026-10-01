@@ -31,8 +31,8 @@ jobs:
         include:
           # Tokyo debot-main (i-0095af4fe0efbc5dd): after bot-strategy#1100 the
           # only host. Frankfurt was terminated 2026-10-01. Scheduled runs are
-          # dry-run (DRY_RUN is only false on a manual dispatch with
-          # dry_run=false), so this leg reports and deletes nothing on its own.
+          # report-only (see DRY_RUN below); deleting needs a manual dispatch
+          # with dry_run=false.
           - name: robinhood
             region: ap-northeast-1
     steps:
@@ -63,7 +63,10 @@ jobs:
         if: steps.target.outputs.skip != 'true'
         env:
           INSTANCE_ID: ${{ steps.target.outputs.id }}
-          DRY_RUN: ${{ inputs.dry_run == false && 'false' || 'true' }}
+          # Only a manual dispatch with dry_run=false deletes. On a schedule
+          # inputs.dry_run is null, and `null == false` is TRUE in GitHub
+          # expressions (both coerce to 0), so gate on the event too.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) && 'false' || 'true' }}
           NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
