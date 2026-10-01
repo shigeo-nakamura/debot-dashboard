@@ -28,8 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: frankfurt
-            region: eu-central-1
           # Tokyo Robinhood Lighter host (i-0095af4fe0efbc5dd): engine-b-live,
           # the Engine B Phase 0 observer (~5 GB/day of SQLite, hourly S3
           # archive with 24 h retention -- bot-strategy#915) and the
@@ -55,11 +53,9 @@ jobs:
       - name: Resolve instance ID
         id: target
         env:
-          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
           ROBINHOOD_INSTANCE_ID: ${{ secrets.ROBINHOOD_INSTANCE_ID }}
         run: |
           case "${{ matrix.name }}" in
-            frankfurt) id="$FRANKFURT_INSTANCE_ID" ;;
             robinhood) id="$ROBINHOOD_INSTANCE_ID" ;;
           esac
           if [ -z "$id" ]; then
@@ -249,7 +245,7 @@ jobs:
             echo "Detected at: $(date -u +%FT%TZ)"
             if [ "$NAME" = robinhood ]; then
               echo
-              echo "Remediation on this host is NOT disk-cleanup.yml (it has no robinhood leg): the writer is the Engine B Phase 0 observer, drained hourly by \`engine-b-phase0-archive.timer\` with 24 h retention. Check \`systemctl status engine-b-phase0-archive.service\` and the newest \`/var/lib/engine-b-phase0/sealed/*.json\`; runbook in pairtrade \`docs/engine-b-phase0-operations.md\` (bot-strategy#915). The archiver refuses to run below ~1.9 GB free."
+              echo "Remediation on this host is NOT disk-cleanup.yml (its robinhood leg only vacuums the journal and SSM orchestration dirs): the writer is the Engine B Phase 0 observer, drained hourly by \`engine-b-phase0-archive.timer\` with 24 h retention. Check \`systemctl status engine-b-phase0-archive.service\` and the newest \`/var/lib/engine-b-phase0/sealed/*.json\`; runbook in pairtrade \`docs/engine-b-phase0-operations.md\` (bot-strategy#915). The archiver refuses to run below ~1.9 GB free."
             fi
             echo "<!-- fp:$fp -->"
           } > "$body_file"

@@ -10,7 +10,7 @@ on:
         type: boolean
         default: true
       host:
-        description: 'Limit to one host (frankfurt); empty = all'
+        description: 'Limit to one host (robinhood); empty = all'
         type: string
         default: ''
 
@@ -29,13 +29,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: frankfurt
-            region: eu-central-1
+          # Tokyo debot-main (i-0095af4fe0efbc5dd): after bot-strategy#1100 the
+          # only host. Frankfurt was terminated 2026-10-01. Scheduled runs are
+          # report-only (see DRY_RUN below); deleting needs a manual dispatch
+          # with dry_run=false.
+          - name: robinhood
+            region: ap-northeast-1
     steps:
       - name: Resolve target / host filter
         id: target
         env:
-          FRANKFURT_INSTANCE_ID: ${{ secrets.FRANKFURT_INSTANCE_ID }}
+          ROBINHOOD_INSTANCE_ID: ${{ secrets.ROBINHOOD_INSTANCE_ID }}
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.host }}" ] && [ "${{ inputs.host }}" != "${{ matrix.name }}" ]; then
@@ -45,7 +49,7 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
           case "${{ matrix.name }}" in
-            frankfurt) echo "id=$FRANKFURT_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
+            robinhood) echo "id=$ROBINHOOD_INSTANCE_ID" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Configure AWS credentials
@@ -59,7 +63,10 @@ jobs:
         if: steps.target.outputs.skip != 'true'
         env:
           INSTANCE_ID: ${{ steps.target.outputs.id }}
-          DRY_RUN: ${{ inputs.dry_run == false && 'false' || 'true' }}
+          # Only a manual dispatch with dry_run=false deletes. On a schedule
+          # inputs.dry_run is null, and `null == false` is TRUE in GitHub
+          # expressions (both coerce to 0), so gate on the event too.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) && 'false' || 'true' }}
           NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
