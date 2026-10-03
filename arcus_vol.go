@@ -91,18 +91,22 @@ type ArcusVolStatus struct {
 	Backoff    bool    `json:"backoff"`
 	Cooldown   bool    `json:"cooldown"`
 
-	QuoteOffsetBps  float64         `json:"quote_offset_bps"`
-	RepegBandBps    float64         `json:"repeg_band_bps"`
-	EffectiveCapUSD float64         `json:"effective_cap_usd"`
-	Book            *ArcusVolBook   `json:"book"`
-	Quotes          ArcusVolQuotes  `json:"quotes"`
-	Inventory       ArcusVolInv     `json:"inventory"`
-	PnL             ArcusVolPnL     `json:"pnl"`
-	Volume          ArcusVolVolume  `json:"volume"`
-	CostPer1MUSD    *float64        `json:"cost_per_1m_usd"`
-	PendingUnres    int             `json:"pending_unresolved"`
-	Presence        *ArcusVolPres   `json:"presence"`
-	APIKey          *ArcusVolAPIKey `json:"api_key"`
+	// MeasurementsAvailable is false when the status could not be read or
+	// decoded: the blocks below are then absent, never zero — a zero PnL is
+	// a measurement, and the subsidy bucket would count it as a cost of 0.
+	MeasurementsAvailable bool            `json:"measurements_available"`
+	QuoteOffsetBps        float64         `json:"quote_offset_bps"`
+	RepegBandBps          float64         `json:"repeg_band_bps"`
+	EffectiveCapUSD       float64         `json:"effective_cap_usd"`
+	Book                  *ArcusVolBook   `json:"book,omitempty"`
+	Quotes                *ArcusVolQuotes `json:"quotes,omitempty"`
+	Inventory             *ArcusVolInv    `json:"inventory,omitempty"`
+	PnL                   *ArcusVolPnL    `json:"pnl,omitempty"`
+	Volume                *ArcusVolVolume `json:"volume,omitempty"`
+	CostPer1MUSD          *float64        `json:"cost_per_1m_usd,omitempty"`
+	PendingUnres          int             `json:"pending_unresolved"`
+	Presence              *ArcusVolPres   `json:"presence"`
+	APIKey                *ArcusVolAPIKey `json:"api_key"`
 }
 
 type ArcusVolBook struct {
@@ -393,16 +397,17 @@ func decodeArcusVol(payload []byte, cfg *ArcusVolConfig, now time.Time) (*ArcusV
 		return nil, 0, "", "", errors.New("invalid arcus-vol status")
 	}
 	s := &ArcusVolStatus{
-		Market:          raw.Market,
-		Mode:            raw.Mode,
-		Plan:            raw.Plan,
-		Halt:            raw.Halt,
-		Backoff:         raw.Backoff,
-		Cooldown:        raw.Cooldown,
-		QuoteOffsetBps:  numberOr0(raw.QuoteOffsetBps),
-		RepegBandBps:    numberOr0(raw.RepegBandBps),
-		EffectiveCapUSD: numberOr0(raw.EffectiveCapUSD),
-		PendingUnres:    len(raw.PendingUnresolved),
+		MeasurementsAvailable: true,
+		Market:                raw.Market,
+		Mode:                  raw.Mode,
+		Plan:                  raw.Plan,
+		Halt:                  raw.Halt,
+		Backoff:               raw.Backoff,
+		Cooldown:              raw.Cooldown,
+		QuoteOffsetBps:        numberOr0(raw.QuoteOffsetBps),
+		RepegBandBps:          numberOr0(raw.RepegBandBps),
+		EffectiveCapUSD:       numberOr0(raw.EffectiveCapUSD),
+		PendingUnres:          len(raw.PendingUnresolved),
 	}
 	_, s.PlanReason = splitPlan(raw.Plan)
 	if raw.Book != nil {
@@ -413,15 +418,16 @@ func decodeArcusVol(payload []byte, cfg *ArcusVolConfig, now time.Time) (*ArcusV
 		}
 	}
 	var bidID, askID string
+	s.Quotes = &ArcusVolQuotes{}
 	s.Quotes.Bid, bidID = arcusVolQuote(raw.Quotes.Bid)
 	s.Quotes.Ask, askID = arcusVolQuote(raw.Quotes.Ask)
-	s.Inventory = ArcusVolInv{
+	s.Inventory = &ArcusVolInv{
 		Qty:        numberOr0(raw.Inventory.Qty),
 		USD:        numberOr0(raw.Inventory.USD),
 		AvgPx:      numberOr0(raw.Inventory.AvgPx),
 		OpenedAtMs: raw.Inventory.OpenedAtMs,
 	}
-	s.PnL = ArcusVolPnL{
+	s.PnL = &ArcusVolPnL{
 		DailyNet:    numberOr0(raw.PnL.DailyNet),
 		CumNet:      numberOr0(raw.PnL.CumNet),
 		CumRealized: numberOr0(raw.PnL.CumRealized),
@@ -434,7 +440,7 @@ func decodeArcusVol(payload []byte, cfg *ArcusVolConfig, now time.Time) (*ArcusV
 		s.PnL.RemainingCum = remainingBeforeStop(cfg.CumStopUSD, s.PnL.CumNet)
 		s.APIKey = arcusVolAPIKey(cfg.APIKeyValidUntil, now)
 	}
-	s.Volume = ArcusVolVolume{
+	s.Volume = &ArcusVolVolume{
 		Day:      numberOr0(raw.Volume.Day),
 		Cum:      numberOr0(raw.Volume.Cum),
 		CumMaker: numberOr0(raw.Volume.CumMaker),

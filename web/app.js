@@ -1788,8 +1788,8 @@ const subsidyCostFallback = (data) => {
   // The Arcus presence runtime (bot-strategy#1093) reports its lifetime
   // net result on its own block; like trade_stats.pnl the cost is that
   // result negated (positive when money was given up, see SubsidyUnits).
-  if (data.arcus_vol && data.arcus_vol.pnl) {
-    const net = parseNumber(data.arcus_vol.pnl.cum_net);
+  if (data.arcus_vol && data.arcus_vol.measurements_available !== false && data.arcus_vol.pnl) {
+    const net = optNumber(data.arcus_vol.pnl.cum_net);
     if (net !== null) return -net;
   }
   return null;
@@ -2869,7 +2869,7 @@ const isArcusVolDegraded = (a) =>
 // Under 7 days or expired is operator trouble: the runtime cannot renew
 // the key and every order would start failing while the process ran on.
 const isArcusVolKeyRed = (a) =>
-  Boolean(a && a.api_key && (a.api_key.expired === true || (Number.isFinite(a.api_key.days_left) && a.api_key.days_left <= 7)));
+  Boolean(a && a.api_key && (a.api_key.expired === true || (optNumber(a.api_key.days_left) !== null && Number(a.api_key.days_left) <= 7)));
 const arcusVolHaltLabel = (a) => {
   const halt = a && typeof a.halt === "string" ? a.halt : "";
   if (halt === "daily_stop") return "daily stop";
@@ -2877,22 +2877,26 @@ const arcusVolHaltLabel = (a) => {
   if (halt.startsWith("sticky")) return `sticky halt (${halt.replace(/^sticky:\s*/, "")})`;
   return halt ? `halt (${halt})` : "halt";
 };
+// parseNumber reads null/"" as 0; an optional figure that is absent must
+// stay absent, not become a zero that reads as a measurement.
+const optNumber = (value) =>
+  value === null || value === undefined || value === "" ? null : parseNumber(value);
 const arcusMoney = (value) => {
-  const n = parseNumber(value);
+  const n = optNumber(value);
   if (n === null) return "—";
   return `${n < 0 ? "−" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 const arcusUsd0 = (value) => {
-  const n = parseNumber(value);
+  const n = optNumber(value);
   return n === null ? "—" : `$${Math.round(n).toLocaleString("en-US")}`;
 };
 const arcusBps = (value) => {
-  const n = parseNumber(value);
+  const n = optNumber(value);
   return n === null ? "?" : `${n.toFixed(1)} bp`;
 };
 const arcusQuoteText = (q) => {
-  if (!q || !Number.isFinite(parseNumber(q.px))) return "—";
-  const px = parseNumber(q.px);
+  if (!q || optNumber(q.px) === null) return "—";
+  const px = optNumber(q.px);
   const dist = q.dist_touch_bps == null ? "" : ` (${arcusBps(q.dist_touch_bps)})`;
   return `${px.toLocaleString("en-US", { maximumFractionDigits: 2 })}${dist} × ${arcusUsd0(q.notional_usd)}`;
 };
@@ -2914,32 +2918,37 @@ const arcusVolViewModel = (a, status = "active") => {
   const book = a.book && Number.isFinite(parseNumber(a.book.bid)) && Number.isFinite(parseNumber(a.book.ask))
     ? `${parseNumber(a.book.bid).toLocaleString("en-US", { maximumFractionDigits: 2 })} / ${parseNumber(a.book.ask).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
     : "—";
-  const invQty = parseNumber(a.inventory && a.inventory.qty);
+  const invQty = optNumber(a.inventory && a.inventory.qty);
   const inventory = invQty === null ? "—" : invQty === 0 ? "flat" : `${invQty.toLocaleString("en-US", { maximumFractionDigits: 5 })} (${arcusMoney(a.inventory.usd)})`;
   const pnl = a.pnl || {};
   const stopText = (left, limit) =>
-    parseNumber(left) === null || parseNumber(limit) === null ? "" : ` · ${arcusMoney(left)} left of ${arcusMoney(limit)} stop`;
-  const pnlToday = { label: `${arcusMoney(pnl.daily_net)}${stopText(pnl.remaining_daily_usd, pnl.daily_stop_usd)}`, value: parseNumber(pnl.daily_net) };
-  const pnlCum = { label: `${arcusMoney(pnl.cum_net)}${stopText(pnl.remaining_cum_usd, pnl.cum_stop_usd)}`, value: parseNumber(pnl.cum_net) };
+    optNumber(left) === null || optNumber(limit) === null ? "" : ` · ${arcusMoney(left)} left of ${arcusMoney(limit)} stop`;
+  const pnlToday = { label: `${arcusMoney(pnl.daily_net)}${stopText(pnl.remaining_daily_usd, pnl.daily_stop_usd)}`, value: optNumber(pnl.daily_net) };
+  const pnlCum = { label: `${arcusMoney(pnl.cum_net)}${stopText(pnl.remaining_cum_usd, pnl.cum_stop_usd)}`, value: optNumber(pnl.cum_net) };
   const vol = a.volume || {};
-  const share = parseNumber(vol.maker_share);
-  const fills = Number.isFinite(Number(vol.fills)) ? Number(vol.fills) : null;
-  const volume = `${arcusUsd0(vol.day)} today · ${fills === null ? "—" : fills} fills lifetime${share === null ? "" : ` · ${Math.round(share * 100)}% maker`}`;
+  const share = optNumber(vol.maker_share);
+  const fills = optNumber(vol.fills);
+  const volume = a.volume
+    ? `${arcusUsd0(vol.day)} today · ${fills === null ? "—" : fills} fills lifetime${share === null ? "" : ` · ${Math.round(share * 100)}% maker`}`
+    : "—";
   const p = a.presence || null;
   let presence = "—";
-  if (p && Number.isFinite(Number(p.samples)) && Number(p.samples) > 0) {
-    const frac = parseNumber(p.quoting_fraction);
+  if (p && optNumber(p.samples) !== null && Number(p.samples) > 0) {
+    const frac = optNumber(p.quoting_fraction);
     const covered = Number(p.covered_secs) || 0;
     const span = covered < 3600 ? `${Math.max(1, Math.round(covered / 60))}m` : `${(covered / 3600).toFixed(1)}h`;
     presence = `${frac === null ? "—" : `${Math.round(frac * 100)}%`} quoting over ${span} · ${Number(p.requotes) || 0} re-pegs`;
   }
   let key = null;
-  if (a.api_key && Number.isFinite(parseNumber(a.api_key.days_left))) {
-    const days = parseNumber(a.api_key.days_left);
+  if (a.api_key && optNumber(a.api_key.days_left) !== null) {
+    const days = optNumber(a.api_key.days_left);
     const until = typeof a.api_key.valid_until === "string" ? a.api_key.valid_until.slice(0, 10) : "?";
+    // tone-warn is the card's red: ≤ 7 d or expired, where orders are
+    // about to start failing. The 8–30 d window is amber (tone-caution):
+    // time to rotate, nothing broken yet.
     key = {
       label: a.api_key.expired ? `EXPIRED ${until}` : `${Math.floor(days)} d left (${until})`,
-      tone: isArcusVolKeyRed(a) ? "warn" : a.api_key.warn ? "warn" : "ok",
+      tone: isArcusVolKeyRed(a) ? "warn" : a.api_key.warn ? "caution" : "ok",
       show: true,
     };
   }
@@ -2948,7 +2957,7 @@ const arcusVolViewModel = (a, status = "active") => {
 const renderArcusVolStatus = (card, a, status) => {
   const view = arcusVolViewModel(a, status);
   const setTone = (el, tone) => {
-    el.classList.remove("tone-ok", "tone-warn", "tone-neutral");
+    el.classList.remove("tone-ok", "tone-warn", "tone-caution", "tone-neutral");
     el.classList.add(`tone-${tone}`);
   };
   const set = (name, text) => {

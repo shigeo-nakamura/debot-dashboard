@@ -50,7 +50,7 @@ func TestArcusVolFixtureDecodes(t *testing.T) {
 	if r.Status.TS != 1791055800 || r.Status.UpdatedAt != "2026-10-03T19:30:00Z" || r.Status.Dex != "Arcus Perps" {
 		t.Fatalf("ts %d updated %q dex %q", r.Status.TS, r.Status.UpdatedAt, r.Status.Dex)
 	}
-	if a.Quotes.Bid == nil || a.Quotes.Ask == nil {
+	if !a.MeasurementsAvailable || a.Quotes == nil || a.Quotes.Bid == nil || a.Quotes.Ask == nil {
 		t.Fatal("quotes missing")
 	}
 	if a.Quotes.Ask.Px != 771.11 || a.Quotes.Ask.Qty != 3.24374 || *a.Quotes.Ask.DistTouchBps != 6.229 {
@@ -103,7 +103,7 @@ func TestArcusVolFixtureDecodes(t *testing.T) {
 }
 
 func (a *ArcusVolStatus) MakerShareOr(d float64) float64 {
-	if a.Volume.MakerShare == nil {
+	if a.Volume == nil || a.Volume.MakerShare == nil {
 		return d
 	}
 	return *a.Volume.MakerShare
@@ -182,7 +182,9 @@ func TestArcusVolUnavailableAndInvalid(t *testing.T) {
 		if r.Error != "invalid arcus-vol status" || r.ServiceStatus != "unknown" || r.Status.ArcusVol.State != "unavailable" {
 			t.Fatalf("%s: %+v", bad, r)
 		}
+		assertNoMeasurements(t, r)
 	}
+	assertNoMeasurements(t, fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{}), now))
 	// Null quotes and a missing book are a normal pulled state, not an error.
 	payload := mutate(t, arcusFixture(t), func(m map[string]any) {
 		m["plan"] = "pull:no_book"
@@ -192,11 +194,39 @@ func TestArcusVolUnavailableAndInvalid(t *testing.T) {
 	})
 	r = fetchArcusVol(arcusTarget(t, payload, ArcusVolConfig{}), time.UnixMilli(1791055800000))
 	a := r.Status.ArcusVol
-	if r.Error != "" || a.State != "pulled" || a.Book != nil || a.Quotes.Bid != nil || a.Quotes.Ask != nil || a.CostPer1MUSD != nil {
+	if r.Error != "" || a.State != "pulled" || a.Book != nil || a.Quotes == nil || a.Quotes.Bid != nil || a.Quotes.Ask != nil || a.CostPer1MUSD != nil {
 		t.Fatalf("pulled with no book: err=%q %+v", r.Error, a)
 	}
 	if a.PnL.RemainingDaily != nil || a.PnL.DailyStopUSD != nil || a.APIKey != nil {
 		t.Fatalf("unconfigured display values must stay nil: %+v %+v", a.PnL, a.APIKey)
+	}
+}
+
+// A failed read publishes the failure state and a presence sample, and
+// nothing that reads as a measurement: a zero PnL would be counted as a
+// cost of zero by the subsidy bucket.
+func assertNoMeasurements(t *testing.T, r TargetStatus) {
+	t.Helper()
+	a := r.Status.ArcusVol
+	if a.MeasurementsAvailable || a.PnL != nil || a.Volume != nil || a.Inventory != nil || a.Quotes != nil || a.Book != nil || a.Presence == nil {
+		t.Fatalf("failure state carries measurements: %+v", a)
+	}
+	out, err := json.Marshal(r.Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	av := m["arcus_vol"].(map[string]any)
+	for _, k := range []string{"pnl", "volume", "inventory", "quotes", "book", "cost_per_1m_usd"} {
+		if _, present := av[k]; present {
+			t.Fatalf("failure JSON carries %q: %s", k, out)
+		}
+	}
+	if av["measurements_available"] != false {
+		t.Fatalf("measurements_available not false: %s", out)
 	}
 }
 

@@ -14,7 +14,7 @@ makes no venue calls and reads no credential or operator config file.
 
 | Row | Source |
 |---|---|
-| State | `QUOTING` (plan `quote`, both sides resting), `QUOTING (placing)` (one side missing right after a re-peg), `PULLED (<reason>)` (plan `pull:<reason>`, e.g. `stale_book`, `shock`, `dms_unarmed`), `FLATTENING (<reason>)`, `HALTED (<reason>)` (`daily_stop` clears at 00:00 UTC; `kill_switch` and `sticky: …` need the operator), `STALE` (status older than `stale_after_secs`), `UNAVAILABLE` (file unreadable / not this runtime's) |
+| State | `QUOTING` (plan `quote`, both sides resting), `QUOTING (placing)` (one side missing right after a re-peg), `PULLED (<reason>)` (plan `pull:<reason>`, e.g. `stale_book`, `shock`, `dms_unarmed`), `FLATTENING (<reason>)`, `HALTED (<reason>)` (`daily_stop` clears at 00:00 UTC; `kill_switch` and `sticky: …` need the operator), `STALE` (status older than `stale_after_secs`), `UNAVAILABLE` (file unreadable / not this runtime's — the measurement rows then show `—`, never zero, and the target adds nothing to the subsidy bucket's cost) |
 | Market | market · live/paper · configured offset and re-peg band |
 | Bid / Ask | resting price (distance from the touch, bp) × size in USD; `—` for a side not resting |
 | Book | venue best bid / ask the runtime last saw |
@@ -22,7 +22,7 @@ makes no venue calls and reads no credential or operator config file.
 | PnL today / cumulative | net of fees, plus "left of stop" when the stop limits are configured (limit + net, floored at 0) |
 | Volume today / fills | today's traded notional, lifetime fill count, lifetime maker share |
 | Presence 24h | **dashboard-side sampling**: share of the last 24 h (at the dashboard's poll interval) in which the runtime planned to quote with both sides resting, and the number of re-pegs seen (a side's order changing between two consecutive samples). Every poll is a sample: one that finds the file unreadable, invalid or stale counts as not quoting, so an outage lowers the figure instead of vanishing from it. In memory only — it starts over when the dashboard restarts, and the row says how long the window actually covers |
-| API key | days until the configured expiry; warns at ≤ 30 d, red at ≤ 7 d or expired. The runtime cannot renew the key |
+| API key | days until the configured expiry; amber at ≤ 30 d (rotate soon), red at ≤ 7 d or expired (orders about to fail). The runtime cannot renew the key |
 | Halt | the runtime's halt label, when halted |
 
 Header fields follow the generic rules: `Last update` is the status file's

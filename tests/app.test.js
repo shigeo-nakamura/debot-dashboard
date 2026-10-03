@@ -2596,7 +2596,10 @@ test("arcus presence card: pulled, flattening, halted, stale and unavailable sta
 
 test("arcus presence card: api key warning tones and missing display values", () => {
   const warn = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-20T00:00:00Z", days_left: 17, warn: true, expired: false } });
-  assert.equal(JSON.stringify(warn.key), JSON.stringify({ label: "17 d left (2026-10-20)", tone: "warn", show: true }));
+  // 8–30 d is amber (caution); ≤ 7 d and expired are the red tone-warn.
+  assert.equal(JSON.stringify(warn.key), JSON.stringify({ label: "17 d left (2026-10-20)", tone: "caution", show: true }));
+  const redView = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-05T00:00:00Z", days_left: 2, warn: true, expired: false } });
+  assert.equal(redView.key.tone, "warn");
   const red = { ...arcusFixture(), api_key: { valid_until: "2026-10-05T00:00:00Z", days_left: 2, warn: true, expired: false } };
   assert.equal(context.__test.isArcusVolKeyRed(red), true);
   const expired = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-01T00:00:00Z", days_left: -2, warn: true, expired: true } });
@@ -2609,6 +2612,19 @@ test("arcus presence card: api key warning tones and missing display values", ()
   assert.equal(bare.key, null);
   assert.equal(bare.presence, "—");
   assert.equal(bare.volume, "$1,200 today · 2 fills lifetime");
+  // Absent optional figures stay absent: null stops never read as a $0.00
+  // stop, and no maker share is shown before the first fill.
+  const nulls = context.__test.arcusVolViewModel({ ...arcusFixture(),
+    pnl: { daily_net: -1.25, cum_net: -3, daily_stop_usd: null, cum_stop_usd: null, remaining_daily_usd: null, remaining_cum_usd: null },
+    volume: { day: "0", cum: "0", fills: 0, maker_share: null } });
+  assert.equal(nulls.pnlToday.label, "−$1.25");
+  assert.equal(nulls.pnlCum.label, "−$3.00");
+  assert.equal(nulls.volume, "$0 today · 0 fills lifetime");
+  assert.equal(nulls.inventory, "flat");
+  const empty = context.__test.arcusVolViewModel({ ...arcusFixture(), pnl: null, volume: null, inventory: null, measurements_available: false, state: "unavailable" });
+  assert.equal(empty.pnlToday.label, "—");
+  assert.equal(empty.volume, "—");
+  assert.equal(empty.inventory, "—");
 });
 
 test("arcus presence runtime counts as a halt and as unhealthy for the fleet", () => {
@@ -2652,4 +2668,12 @@ test("arcus presence runtime contributes its lifetime net cost to the subsidy bu
   // A runtime that came out ahead reports a negative cost, like trade_stats.
   assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: { cum_net: "4.5" } } }), -4.5);
   assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: {} } }), null);
+  // A failed read carries no measurements: it neither adds a cost nor a
+  // zero to the bucket total.
+  const failed = { target: { bucket: "subsidy", status: { arcus_vol: { state: "unavailable", measurements_available: false, presence: { samples: 3 } } } } };
+  assert.equal(context.__test.subsidyCostFallback(failed.target.status), null);
+  const withFailed = context.__test.bucketAggregateStats("subsidy", [...items, failed]);
+  assert.equal(withFailed[0].value, context.__test.formatUsdc(38.8327));
+  // Belt and braces: even a zero pnl published alongside the flag is ignored.
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { measurements_available: false, pnl: { cum_net: 0 } } }), null);
 });
