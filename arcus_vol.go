@@ -468,17 +468,26 @@ func fetchArcusVol(target TargetConfig, now time.Time) TargetStatus {
 	}
 	s := StatusData{Dex: "Arcus Perps"}
 	r.Status = &s
+	key := target.Service + "|" + cfg.StatusPath
+	// Every attempted poll is a presence sample. A poll that finds no
+	// readable, valid, fresh status is a non-quoting one: an outage between
+	// two quoting samples must lower the fraction, not vanish from it, and
+	// its empty order ids keep a re-peg from being counted across the gap.
+	miss := func(state, errText string) TargetStatus {
+		r.Error = errText
+		a := &ArcusVolStatus{State: state}
+		p := arcusVolPresence.record(key, arcusVolSample{at: now}, arcusVolPresenceWindow, arcusVolPresenceMaxSamples)
+		a.Presence = &p
+		s.ArcusVol = a
+		return r
+	}
 	payload, err := os.ReadFile(cfg.StatusPath)
 	if err != nil {
-		r.Error = "Arcus-vol status unavailable"
-		s.ArcusVol = &ArcusVolStatus{State: "unavailable", Plan: ""}
-		return r
+		return miss("unavailable", "Arcus-vol status unavailable")
 	}
 	a, tsMs, bidID, askID, err := decodeArcusVol(payload, cfg, now)
 	if err != nil {
-		r.Error = err.Error()
-		s.ArcusVol = &ArcusVolStatus{State: "unavailable"}
-		return r
+		return miss("unavailable", err.Error())
 	}
 	s.TS = tsMs / 1000
 	s.UpdatedAt = time.UnixMilli(tsMs).UTC().Format(time.RFC3339)
@@ -496,7 +505,12 @@ func fetchArcusVol(target TargetConfig, now time.Time) TargetStatus {
 	// Sample presence only from a fresh status: a frozen file is not the
 	// runtime quoting, whatever its last plan said.
 	quoting := !stale && a.Plan == "quote" && a.Quotes.Bid != nil && a.Quotes.Ask != nil
-	key := target.Service + "|" + cfg.StatusPath
+	if stale {
+		// A frozen file carries the ids of orders the dead process left
+		// behind; they are not resting quotes and must not pair up into a
+		// re-peg with the ids seen after a restart.
+		bidID, askID = "", ""
+	}
 	p := arcusVolPresence.record(key, arcusVolSample{at: now, quoting: quoting, bidID: bidID, askID: askID}, arcusVolPresenceWindow, arcusVolPresenceMaxSamples)
 	a.Presence = &p
 	s.ArcusVol = a

@@ -21,7 +21,7 @@ makes no venue calls and reads no credential or operator config file.
 | Inventory | `flat` or quantity (USD) |
 | PnL today / cumulative | net of fees, plus "left of stop" when the stop limits are configured (limit + net, floored at 0) |
 | Volume today / fills | today's traded notional, lifetime fill count, lifetime maker share |
-| Presence 24h | **dashboard-side sampling**: share of the last 24 h (at the dashboard's poll interval) in which the runtime planned to quote with both sides resting, and the number of re-pegs seen (a side's order changing between two consecutive samples). In memory only — it starts over when the dashboard restarts, and the row says how long the window actually covers |
+| Presence 24h | **dashboard-side sampling**: share of the last 24 h (at the dashboard's poll interval) in which the runtime planned to quote with both sides resting, and the number of re-pegs seen (a side's order changing between two consecutive samples). Every poll is a sample: one that finds the file unreadable, invalid or stale counts as not quoting, so an outage lowers the figure instead of vanishing from it. In memory only — it starts over when the dashboard restarts, and the row says how long the window actually covers |
 | API key | days until the configured expiry; warns at ≤ 30 d, red at ≤ 7 d or expired. The runtime cannot renew the key |
 | Halt | the runtime's halt label, when halted |
 
@@ -49,8 +49,8 @@ managed by the deploy workflow), keeping every existing target:
       stale_after_secs: 20       # optional, default 20
 ```
 
-- `status_path` must be absolute; do not set `s3_bucket` / `s3_key` on this
-  target. The dashboard user needs read access to the file and its directory
+- `status_path` must be absolute; do not set `s3_bucket` / `s3_key` or
+  `bull_holder` on this target (one source per target). The dashboard user needs read access to the file and its directory
   (the runtime writes it 0644 in a 0755 directory).
 - `daily_stop_usd`, `cum_stop_usd` and `api_key_valid_until` are display
   values copied from the operator's files. Change them here when they change
@@ -58,7 +58,9 @@ managed by the deploy workflow), keeping every existing target:
   row rather than showing a wrong figure.
 - `bucket: subsidy` is declared explicitly: the return-source taxonomy
   (`docs/buckets.md`, mirroring bot-strategy) does not list the service yet,
-  so without it the card renders as "Unclassified". Adding the service to the
+  so without it the card renders as "Unclassified". In the subsidy bucket the
+  runtime's lifetime net result (negated) feeds the bucket's "Cost paid"
+  figure, the same way `trade_stats.pnl` does for pairtrade targets. Adding the service to the
   taxonomy is a bot-strategy ledger change first.
 
 ## Rollout

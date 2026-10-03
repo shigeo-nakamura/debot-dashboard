@@ -839,6 +839,9 @@ func normalizeConfig(cfg *Config) error {
 				return fmt.Errorf("targets[%d]: %w", i, err)
 			}
 		}
+		if target.BullHolder != nil && target.ArcusVol != nil {
+			return fmt.Errorf("targets[%d]: choose bull_holder or arcus_vol, not both", i)
+		}
 		if target.BullHolder != nil {
 			if target.S3Bucket != "" || target.S3Key != "" {
 				return fmt.Errorf("targets[%d]: choose bull_holder or S3", i)

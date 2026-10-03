@@ -254,6 +254,61 @@ func TestArcusVolPresenceRingBuffer(t *testing.T) {
 	}
 }
 
+// An outage between two quoting polls is time the runtime was not seen
+// quoting; it must lower the fraction, not disappear from it. The ids
+// seen before and after it must not pair up into a re-peg either.
+func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
+	defer arcusVolTrackerForTest()()
+	payload := arcusFixture(t)
+	target := arcusTarget(t, payload, ArcusVolConfig{})
+	t0 := time.UnixMilli(1791055800000).Add(time.Second)
+	r := fetchArcusVol(target, t0)
+	if *r.Status.ArcusVol.Presence.QuotingFraction != 1 {
+		t.Fatalf("first poll: %+v", r.Status.ArcusVol.Presence)
+	}
+	// Three unreadable polls, one invalid, one stale (the file frozen).
+	if err := os.Remove(target.ArcusVol.StatusPath); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		r = fetchArcusVol(target, t0.Add(time.Duration(i)*time.Second))
+		if r.Error != "Arcus-vol status unavailable" || r.Status.ArcusVol.Presence == nil {
+			t.Fatalf("unreadable poll %d: %+v", i, r)
+		}
+	}
+	if err := os.WriteFile(target.ArcusVol.StatusPath, []byte(`{"bot":"other"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = fetchArcusVol(target, t0.Add(4*time.Second))
+	if r.Error != "invalid arcus-vol status" || r.Status.ArcusVol.Presence.Samples != 5 {
+		t.Fatalf("invalid poll: %+v", r)
+	}
+	// Same ids, but the file is now stale: not quoting, and no re-peg.
+	frozen := mutate(t, payload, func(m map[string]any) {
+		m["quotes"].(map[string]any)["ask"].(map[string]any)["order_id"] = "zzzz"
+	})
+	if err := os.WriteFile(target.ArcusVol.StatusPath, frozen, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = fetchArcusVol(target, t0.Add(60*time.Second))
+	if r.ServiceStatus != "stale" || r.Status.ArcusVol.State != "stale" {
+		t.Fatalf("stale poll: %+v", r)
+	}
+	// Back to a fresh quoting status with a new ask id.
+	if err := os.WriteFile(target.ArcusVol.StatusPath, mutate(t, payload, func(m map[string]any) {
+		m["ts_ms"] = t0.Add(61 * time.Second).UnixMilli()
+		m["quotes"].(map[string]any)["ask"].(map[string]any)["order_id"] = "new-ask"
+	}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = fetchArcusVol(target, t0.Add(62*time.Second))
+	p := r.Status.ArcusVol.Presence
+	// 7 polls, 2 quoting: 1 (first) + 1 (last).
+	if p.Samples != 7 || *p.QuotingFraction < 0.285 || *p.QuotingFraction > 0.286 || p.Requotes != 0 {
+		t.Fatalf("after outage: %+v", p)
+	}
+}
+
 func TestArcusVolAPIKeyWarning(t *testing.T) {
 	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	ok := arcusVolAPIKey("2027-03-30T06:32:00Z", now)
@@ -281,12 +336,19 @@ func TestArcusVolConfigValidation(t *testing.T) {
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", APIKeyValidUntil: "2027-03-30"}},
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", StaleAfterSecs: -1}},
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status"}, S3Bucket: "bucket", S3Key: "key"},
+		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status"}, BullHolder: &BullHolderConfig{StatusPath: "/tmp/other"}},
 	} {
 		target.Service = "debot-arcus-vol"
 		target.Region = "ap-northeast-1"
 		if normalizeConfig(&Config{Targets: []TargetConfig{target}}) == nil {
 			t.Fatalf("invalid config accepted: %+v", target.ArcusVol)
 		}
+	}
+	both := Config{Region: "ap-northeast-1", Targets: []TargetConfig{{
+		Service: "debot-arcus-vol", ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status"}, BullHolder: &BullHolderConfig{StatusPath: "/tmp/other"},
+	}}}
+	if err := normalizeConfig(&both); err == nil || !strings.Contains(err.Error(), "bull_holder or arcus_vol") {
+		t.Fatalf("two local sources accepted or misreported: %v", err)
 	}
 	valid := Config{Region: "ap-northeast-1", Targets: []TargetConfig{{
 		Service:  "debot-arcus-vol",

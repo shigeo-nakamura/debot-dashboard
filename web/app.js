@@ -1785,6 +1785,13 @@ const subsidyCostFallback = (data) => {
   if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
     return -Number(data.trade_stats.pnl);
   }
+  // The Arcus presence runtime (bot-strategy#1093) reports its lifetime
+  // net result on its own block; like trade_stats.pnl the cost is that
+  // result negated (positive when money was given up, see SubsidyUnits).
+  if (data.arcus_vol && data.arcus_vol.pnl) {
+    const net = parseNumber(data.arcus_vol.pnl.cum_net);
+    if (net !== null) return -net;
+  }
   return null;
 };
 

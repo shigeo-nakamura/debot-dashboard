@@ -2638,3 +2638,18 @@ test("arcus presence renderer tolerates missing elements and null quotes", () =>
   assert.equal(fields.get('[data-field="arcus-quotes"]').textContent, "— / —");
   assert.equal(fields.get('[data-field="arcus-halt-row"]').hidden, true);
 });
+
+test("arcus presence runtime contributes its lifetime net cost to the subsidy bucket", () => {
+  // Cost is positive when money was given up (SubsidyUnits): −cum_net.
+  const items = [
+    { target: { bucket: "subsidy", status: { arcus_vol: arcusFixture() } } },
+    { target: { bucket: "subsidy", status: { trade_stats: { pnl: -10 } } } },
+  ];
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: arcusFixture() }), 28.8327);
+  const stats = context.__test.bucketAggregateStats("subsidy", items);
+  assert.equal(stats[0].label, "Cost paid");
+  assert.equal(stats[0].value, context.__test.formatUsdc(38.8327));
+  // A runtime that came out ahead reports a negative cost, like trade_stats.
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: { cum_net: "4.5" } } }), -4.5);
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: {} } }), null);
+});
