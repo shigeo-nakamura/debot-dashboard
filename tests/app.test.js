@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2523,4 +2523,157 @@ test("hedge holder renders into the card rows and counts as a fleet halt", () =>
   // A halted holder is an unhealthy target (services down), like a halted book.
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } }), true);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
+});
+
+// ---- Arcus presence runtime (bot-strategy#1093) ----------------------------
+const arcusFixture = () => ({
+  market: "SPY-USD",
+  mode: "live",
+  state: "quoting",
+  plan: "quote",
+  plan_reason: "",
+  halt: null,
+  quote_offset_bps: 5,
+  repeg_band_bps: 2,
+  book: { bid: 770.62, ask: 770.63 },
+  quotes: {
+    bid: { px: 770.32, qty: 3.24374, notional_usd: 2498.6, dist_touch_bps: 3.893, filled: 0 },
+    ask: { px: 771.11, qty: 3.24374, notional_usd: 2501.2, dist_touch_bps: 6.229, filled: 0 },
+  },
+  inventory: { qty: 0, usd: 0, avg_px: 0, opened_at_ms: null },
+  pnl: { daily_net: -1.25, cum_net: -28.8327, cum_realized: -25.7125, cum_fees: 3.1202, daily_stop_usd: 5, cum_stop_usd: 50, remaining_daily_usd: 3.75, remaining_cum_usd: 21.1673 },
+  volume: { day: 0, cum: 201901.61, cum_maker: 188034.22, cum_taker: 13867.39, fills: 420, maker_share: 0.9313 },
+  presence: { window_secs: 86400, covered_secs: 7200, samples: 360, quoting_fraction: 0.975, requotes: 12 },
+  api_key: { valid_until: "2027-03-30T06:32:00Z", days_left: 177.5, warn: false, expired: false },
+});
+
+test("arcus presence card: quoting state, quotes with distance and size, stops and presence", () => {
+  const view = context.__test.arcusVolViewModel(arcusFixture(), "active");
+  assert.equal(JSON.stringify(view.state), JSON.stringify({ label: "QUOTING", tone: "ok" }));
+  assert.equal(view.market, "SPY-USD · live · rests 5.0 bp behind ±2.0 bp");
+  assert.equal(view.quotes, "770.32 (3.9 bp) × $2,499 / 771.11 (6.2 bp) × $2,501");
+  assert.equal(view.book, "770.62 / 770.63");
+  assert.equal(view.inventory, "flat");
+  assert.equal(view.pnlToday.label, "−$1.25 · $3.75 left of $5.00 stop");
+  assert.equal(view.pnlCum.label, "−$28.83 · $21.17 left of $50.00 stop");
+  assert.equal(view.volume, "$0 today · 420 fills lifetime · 93% maker");
+  assert.equal(view.presence, "98% quoting over 2.0h · 12 re-pegs");
+  assert.equal(JSON.stringify(view.key), JSON.stringify({ label: "177 d left (2027-03-30)", tone: "ok", show: true }));
+  assert.equal(view.halt, null);
+  assert.equal(context.__test.isArcusVolDegraded(arcusFixture()), false);
+});
+
+test("arcus presence card: pulled, flattening, halted, stale and unavailable states", () => {
+  const pulled = context.__test.arcusVolViewModel({ ...arcusFixture(), state: "pulled", plan: "pull:stale_book", plan_reason: "stale_book", quotes: { bid: null, ask: null }, book: null });
+  assert.equal(JSON.stringify(pulled.state), JSON.stringify({ label: "PULLED (stale_book)", tone: "neutral" }));
+  assert.equal(pulled.quotes, "— / —");
+  assert.equal(pulled.book, "—");
+  const flattening = context.__test.arcusVolViewModel({ ...arcusFixture(), state: "pulled", plan: "flatten:MaxHold", plan_reason: "MaxHold" });
+  assert.equal(flattening.state.label, "FLATTENING (MaxHold)");
+  const placing = context.__test.arcusVolViewModel({ ...arcusFixture(), quotes: { bid: arcusFixture().quotes.bid, ask: null } });
+  assert.equal(placing.state.label, "QUOTING (placing)");
+  const halted = { ...arcusFixture(), state: "halted", plan: "pull:halt", halt: "daily_stop" };
+  const haltedView = context.__test.arcusVolViewModel(halted);
+  assert.equal(JSON.stringify(haltedView.state), JSON.stringify({ label: "HALTED (daily stop)", tone: "warn" }));
+  assert.equal(haltedView.halt, "daily_stop");
+  assert.equal(context.__test.isArcusVolHalted({ arcus_vol: halted }), true);
+  assert.equal(context.__test.isArcusVolDegraded(halted), true);
+  assert.equal(context.__test.arcusVolHaltLabel({ halt: "sticky: cum_stop" }), "sticky halt (cum_stop)");
+  assert.equal(context.__test.arcusVolHaltLabel({ halt: "kill_switch" }), "kill switch");
+  const stale = context.__test.arcusVolViewModel({ ...arcusFixture(), state: "stale" });
+  assert.equal(JSON.stringify(stale.state), JSON.stringify({ label: "STALE", tone: "warn" }));
+  assert.equal(context.__test.isArcusVolDegraded({ ...arcusFixture(), state: "stale" }), true);
+  // A fresh payload whose service went stale by the dashboard's own clock also reads STALE.
+  assert.equal(context.__test.arcusVolViewModel(arcusFixture(), "stale").state.label, "STALE");
+  const unavailable = context.__test.arcusVolViewModel({ state: "unavailable" });
+  assert.equal(JSON.stringify(unavailable.state), JSON.stringify({ label: "UNAVAILABLE", tone: "warn" }));
+  assert.equal(unavailable.quotes, "— / —");
+  assert.equal(unavailable.inventory, "—");
+  assert.equal(unavailable.pnlToday.label, "—");
+  assert.equal(unavailable.presence, "—");
+  assert.equal(unavailable.key, null);
+});
+
+test("arcus presence card: api key warning tones and missing display values", () => {
+  const warn = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-20T00:00:00Z", days_left: 17, warn: true, expired: false } });
+  // 8–30 d is amber (caution); ≤ 7 d and expired are the red tone-warn.
+  assert.equal(JSON.stringify(warn.key), JSON.stringify({ label: "17 d left (2026-10-20)", tone: "caution", show: true }));
+  const redView = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-05T00:00:00Z", days_left: 2, warn: true, expired: false } });
+  assert.equal(redView.key.tone, "warn");
+  const red = { ...arcusFixture(), api_key: { valid_until: "2026-10-05T00:00:00Z", days_left: 2, warn: true, expired: false } };
+  assert.equal(context.__test.isArcusVolKeyRed(red), true);
+  const expired = context.__test.arcusVolViewModel({ ...arcusFixture(), api_key: { valid_until: "2026-10-01T00:00:00Z", days_left: -2, warn: true, expired: true } });
+  assert.equal(expired.key.label, "EXPIRED 2026-10-01");
+  assert.equal(expired.key.tone, "warn");
+  // No stops / key configured: the figures render without the stop suffix and no key row.
+  const bare = context.__test.arcusVolViewModel({ ...arcusFixture(), pnl: { daily_net: 0.5, cum_net: -3 }, api_key: null, presence: null, volume: { day: 1200, fills: 2 } });
+  assert.equal(bare.pnlToday.label, "$0.50");
+  assert.equal(bare.pnlCum.label, "−$3.00");
+  assert.equal(bare.key, null);
+  assert.equal(bare.presence, "—");
+  assert.equal(bare.volume, "$1,200 today · 2 fills lifetime");
+  // Absent optional figures stay absent: null stops never read as a $0.00
+  // stop, and no maker share is shown before the first fill.
+  const nulls = context.__test.arcusVolViewModel({ ...arcusFixture(),
+    pnl: { daily_net: -1.25, cum_net: -3, daily_stop_usd: null, cum_stop_usd: null, remaining_daily_usd: null, remaining_cum_usd: null },
+    volume: { day: "0", cum: "0", fills: 0, maker_share: null } });
+  assert.equal(nulls.pnlToday.label, "−$1.25");
+  assert.equal(nulls.pnlCum.label, "−$3.00");
+  assert.equal(nulls.volume, "$0 today · 0 fills lifetime");
+  assert.equal(nulls.inventory, "flat");
+  const empty = context.__test.arcusVolViewModel({ ...arcusFixture(), pnl: null, volume: null, inventory: null, measurements_available: false, state: "unavailable" });
+  assert.equal(empty.pnlToday.label, "—");
+  assert.equal(empty.volume, "—");
+  assert.equal(empty.inventory, "—");
+});
+
+test("arcus presence runtime counts as a halt and as unhealthy for the fleet", () => {
+  const halted = { service_status: "active", status: { arcus_vol: { ...arcusFixture(), state: "halted", halt: "daily_stop" } } };
+  assert.equal(context.__test.isTargetUnhealthy(halted), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { arcus_vol: arcusFixture() } }), false);
+  assert.equal(JSON.stringify(context.__test.entryBlockingHalts(halted, halted.status)), JSON.stringify(["daily stop"]));
+  context.__test.updateFleetSummary([
+    halted,
+    { service_status: "active", status: { arcus_vol: arcusFixture() } },
+  ]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("fleet-halts"), "1");
+  // No pairtrade position fields on this shape: nothing is added to the pair count.
+  assert.equal(value("fleet-positions-total"), "0");
+});
+
+test("arcus presence renderer tolerates missing elements and null quotes", () => {
+  const fields = new Map();
+  const card = { querySelector(selector) {
+    if (selector.includes("arcus-key-row") || selector.includes("arcus-book")) return null;
+    if (!fields.has(selector)) fields.set(selector, { textContent: "", hidden: false, classList: { add() {}, remove() {}, toggle() {} } });
+    return fields.get(selector);
+  } };
+  context.__test.renderArcusVolStatus(card, { ...arcusFixture(), quotes: { bid: null, ask: null }, state: "pulled", plan: "pull:no_book", plan_reason: "no_book" }, "active");
+  assert.equal(fields.get('[data-field="arcus-state"]').textContent, "PULLED (no_book)");
+  assert.equal(fields.get('[data-field="arcus-quotes"]').textContent, "— / —");
+  assert.equal(fields.get('[data-field="arcus-halt-row"]').hidden, true);
+});
+
+test("arcus presence runtime contributes its lifetime net cost to the subsidy bucket", () => {
+  // Cost is positive when money was given up (SubsidyUnits): −cum_net.
+  const items = [
+    { target: { bucket: "subsidy", status: { arcus_vol: arcusFixture() } } },
+    { target: { bucket: "subsidy", status: { trade_stats: { pnl: -10 } } } },
+  ];
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: arcusFixture() }), 28.8327);
+  const stats = context.__test.bucketAggregateStats("subsidy", items);
+  assert.equal(stats[0].label, "Cost paid");
+  assert.equal(stats[0].value, context.__test.formatUsdc(38.8327));
+  // A runtime that came out ahead reports a negative cost, like trade_stats.
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: { cum_net: "4.5" } } }), -4.5);
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { pnl: {} } }), null);
+  // A failed read carries no measurements: it neither adds a cost nor a
+  // zero to the bucket total.
+  const failed = { target: { bucket: "subsidy", status: { arcus_vol: { state: "unavailable", measurements_available: false, presence: { samples: 3 } } } } };
+  assert.equal(context.__test.subsidyCostFallback(failed.target.status), null);
+  const withFailed = context.__test.bucketAggregateStats("subsidy", [...items, failed]);
+  assert.equal(withFailed[0].value, context.__test.formatUsdc(38.8327));
+  // Belt and braces: even a zero pnl published alongside the flag is ignored.
+  assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { measurements_available: false, pnl: { cum_net: 0 } } }), null);
 });

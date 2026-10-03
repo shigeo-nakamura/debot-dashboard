@@ -734,6 +734,12 @@ body::after {
   color: var(--ink);
 }
 
+/* Amber: attention without breakage (an API key inside its rotation
+   window). tone-warn stays the red for something failing or about to. */
+.han-bridge-view .tone-caution {
+  color: var(--warning);
+}
+
 /* Shared equity headline: the one always-visible capital figure on
    every card type (generic trading view, HYPE accumulator,
    bull-holder). Same block, same position (right after the identity

@@ -562,7 +562,8 @@ const updateFleetSummary = (targets) => {
   targets.forEach((target) => {
     const data = target.status;
     if (isBullHolderStatus(data) && data.bull_holder.halted === true) halts += 1;
-    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data)) {
+    if (isArcusVolHalted(data)) halts += 1;
+    if (data && !isAccumulatorStatus(data) && !isBullHolderStatus(data) && !isArcusVolStatus(data)) {
       if (data.positions_ready !== false && typeof data.position_count === "number") {
         // A cross-sectional book holds one position per symbol; only
         // pairtrade's legs come in pairs (see the halving below). The
@@ -750,6 +751,20 @@ const createCard = (key) => {
           <div data-field="holder-details-body"></div>
         </details>
       </section>
+      <section class="han-bridge-view arcus-vol-view" data-field="arcus-vol-view" hidden aria-label="Arcus presence runtime">
+        <div class="han-bridge-header" title="bot-strategy#1093: one post-only quote per side rests a few bp behind the touch of one Arcus Perps market and is re-pegged only when the touch leaves a band. The question is whether it was quoting, and what the fills cost — not whether it made money.">Arcus presence quoting</div>
+        <div class="row"><span>State</span><strong class="tone-neutral" data-field="arcus-state"></strong></div>
+        <div class="row"><span>Market</span><strong data-field="arcus-market"></strong></div>
+        <div class="row" title="Resting quotes: price (distance from the touch in bp) × size. The book is the venue's best bid / ask the runtime last saw."><span>Bid / Ask</span><strong data-field="arcus-quotes"></strong></div>
+        <div class="row"><span>Book</span><strong data-field="arcus-book"></strong></div>
+        <div class="row"><span>Inventory</span><strong data-field="arcus-inventory"></strong></div>
+        <div class="row" title="Net of fees. The stops are the runtime's own limits; 'left' is the room before each trips."><span>PnL today</span><strong data-field="arcus-pnl-today"></strong></div>
+        <div class="row"><span>PnL cumulative</span><strong data-field="arcus-pnl-cum"></strong></div>
+        <div class="row" title="Fills are lifetime; maker share is the share of lifetime volume done as maker (taker = the stop flattening)."><span>Volume today / fills</span><strong data-field="arcus-volume"></strong></div>
+        <div class="row" title="Dashboard-side sampling at its poll interval: share of the last 24 h in which the runtime planned to quote with both sides resting, and the number of re-pegs seen. Resets when the dashboard restarts."><span>Presence 24h</span><strong data-field="arcus-presence"></strong></div>
+        <div class="row" data-field="arcus-key-row" hidden><span>API key</span><strong data-field="arcus-key"></strong></div>
+        <div class="row" data-field="arcus-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="arcus-halt"></strong></div>
+      </section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
         <div class="equity-headline">
           <div class="equity-headline-label"><span>Total equity</span></div>
@@ -866,6 +881,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // cannot read a venue: it keeps publishing (no stale pill) but every
   // figure on the card is frozen and no guard is being evaluated.
   const hedgeDegraded = isHedgeHolderHalted(data) || isHedgeHolderFeedBlind(data);
+  const arcusVol = isArcusVolStatus(data) ? data.arcus_vol : null;
+  // A halted presence runtime is a bot that stopped doing its one job; so
+  // is one whose status file froze (the process died or hung).
+  const arcusDegraded = arcusVol !== null && isArcusVolDegraded(arcusVol);
   // An α candidate's card must not carry a running result anywhere
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
@@ -873,7 +892,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const blindResult = bucketOf(target) === "alpha_candidate";
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded || arcusDegraded) ? "degraded" : status;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
     : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
@@ -1112,6 +1131,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isBookHalted(data) ||
     isHedgeHolderHalted(data) ||
     isHedgeHolderFeedBlind(data) ||
+    (arcusVol && (arcusDegraded || status !== "active" || isArcusVolKeyRed(arcusVol))) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     // A red API wallet (under 7 d, expired, unknown while live) is operator
     // trouble a collapsed card would hide (Codex, PR #61).
@@ -1198,9 +1218,20 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const accumulatorViewEl = card.querySelector('[data-field="accumulator-view"]');
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
+  const arcusViewEl = card.querySelector('[data-field="arcus-vol-view"]');
   if (holderViewEl) holderViewEl.hidden = bullHolder === null;
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
-  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null;
+  if (arcusViewEl) arcusViewEl.hidden = arcusVol === null;
+  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcusVol !== null;
+  if (arcusVol) {
+    renderArcusVolStatus(card, arcusVol, status);
+    errorEl.hidden = !target.error;
+    errorEl.textContent = target.error || "";
+    if (target.kill_switch_active === true) {
+      killSwitchEl.title = "Arcus-vol KILL_SWITCH: quotes pulled, inventory flattened, no new quotes until the file is removed.";
+    }
+    return;
+  }
   if (bullHolder) {
     renderHolderSummary(card, bullHolder, filterHistoryByRange(history), status, data.dry_run);
     renderHolderBenchmark(card, bullHolder, pnlTotalValue, history, updateBenchmarkCache(key, data), {
@@ -1754,6 +1785,13 @@ const subsidyCostFallback = (data) => {
   if (data.trade_stats && Number.isFinite(data.trade_stats.pnl)) {
     return -Number(data.trade_stats.pnl);
   }
+  // The Arcus presence runtime (bot-strategy#1093) reports its lifetime
+  // net result on its own block; like trade_stats.pnl the cost is that
+  // result negated (positive when money was given up, see SubsidyUnits).
+  if (data.arcus_vol && data.arcus_vol.measurements_available !== false && data.arcus_vol.pnl) {
+    const net = optNumber(data.arcus_vol.pnl.cum_net);
+    if (net !== null) return -net;
+  }
   return null;
 };
 
@@ -1925,6 +1963,7 @@ const entryBlockingHalts = (target, data) => {
   if (isHanBridgeHalted(data)) labels.push("session halt");
   if (isHedgeHolderHalted(data)) labels.push("hedge halt");
   if (isHedgeHolderFeedBlind(data)) labels.push("feed problem");
+  if (isArcusVolHalted(data)) labels.push(arcusVolHaltLabel(data.arcus_vol));
   const book = data.book || null;
   if (book) {
     if (book.session_halted) labels.push("session halt");
@@ -2815,7 +2854,142 @@ const isTargetUnhealthy = (target) => {
     || (isBullHolderStatus(target.status) && isBullHolderDegraded(target.status.bull_holder))
     || isBookHalted(target.status)
     || isHedgeHolderHalted(target.status)
-    || isHedgeHolderFeedBlind(target.status);
+    || isHedgeHolderFeedBlind(target.status)
+    || (isArcusVolStatus(target.status) && isArcusVolDegraded(target.status.arcus_vol));
+};
+
+// ---- Arcus presence runtime (bot-strategy#1093) ----------------------------
+const isArcusVolStatus = (data) => Boolean(data && data.arcus_vol);
+const isArcusVolHalted = (data) =>
+  Boolean(data && data.arcus_vol && typeof data.arcus_vol.halt === "string" && data.arcus_vol.halt);
+// Halted, stale or unreadable: the runtime is not quoting and will not
+// resume on its own (a daily stop clears at 00:00 UTC, the others never).
+const isArcusVolDegraded = (a) =>
+  Boolean(a && (a.state === "halted" || a.state === "stale" || a.state === "unavailable"));
+// Under 7 days or expired is operator trouble: the runtime cannot renew
+// the key and every order would start failing while the process ran on.
+const isArcusVolKeyRed = (a) =>
+  Boolean(a && a.api_key && (a.api_key.expired === true || (optNumber(a.api_key.days_left) !== null && Number(a.api_key.days_left) <= 7)));
+const arcusVolHaltLabel = (a) => {
+  const halt = a && typeof a.halt === "string" ? a.halt : "";
+  if (halt === "daily_stop") return "daily stop";
+  if (halt === "kill_switch") return "kill switch";
+  if (halt.startsWith("sticky")) return `sticky halt (${halt.replace(/^sticky:\s*/, "")})`;
+  return halt ? `halt (${halt})` : "halt";
+};
+// parseNumber reads null/"" as 0; an optional figure that is absent must
+// stay absent, not become a zero that reads as a measurement.
+const optNumber = (value) =>
+  value === null || value === undefined || value === "" ? null : parseNumber(value);
+const arcusMoney = (value) => {
+  const n = optNumber(value);
+  if (n === null) return "—";
+  return `${n < 0 ? "−" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+const arcusUsd0 = (value) => {
+  const n = optNumber(value);
+  return n === null ? "—" : `$${Math.round(n).toLocaleString("en-US")}`;
+};
+const arcusBps = (value) => {
+  const n = optNumber(value);
+  return n === null ? "?" : `${n.toFixed(1)} bp`;
+};
+const arcusQuoteText = (q) => {
+  if (!q || optNumber(q.px) === null) return "—";
+  const px = optNumber(q.px);
+  const dist = q.dist_touch_bps == null ? "" : ` (${arcusBps(q.dist_touch_bps)})`;
+  return `${px.toLocaleString("en-US", { maximumFractionDigits: 2 })}${dist} × ${arcusUsd0(q.notional_usd)}`;
+};
+const arcusVolViewModel = (a, status = "active") => {
+  const plan = typeof a.plan === "string" ? a.plan : "";
+  const reason = typeof a.plan_reason === "string" && a.plan_reason ? a.plan_reason : "";
+  let state;
+  if (a.state === "unavailable") state = { label: "UNAVAILABLE", tone: "warn" };
+  else if (a.state === "stale" || status === "stale") state = { label: "STALE", tone: "warn" };
+  else if (a.state === "halted") state = { label: `HALTED (${arcusVolHaltLabel(a)})`, tone: "warn" };
+  else if (a.state === "quoting") {
+    const both = Boolean(a.quotes && a.quotes.bid && a.quotes.ask);
+    state = both ? { label: "QUOTING", tone: "ok" } : { label: "QUOTING (placing)", tone: "neutral" };
+  } else if (plan.startsWith("flatten")) state = { label: `FLATTENING (${reason || "?"})`, tone: "warn" };
+  else state = { label: `PULLED (${reason || plan || "?"})`, tone: "neutral" };
+  const offset = a.quote_offset_bps != null ? ` · rests ${arcusBps(a.quote_offset_bps)} behind ±${arcusBps(a.repeg_band_bps)}` : "";
+  const market = `${a.market || "?"} · ${a.mode === "dry_run" ? "paper" : "live"}${offset}`;
+  const quotes = `${arcusQuoteText(a.quotes && a.quotes.bid)} / ${arcusQuoteText(a.quotes && a.quotes.ask)}`;
+  const book = a.book && Number.isFinite(parseNumber(a.book.bid)) && Number.isFinite(parseNumber(a.book.ask))
+    ? `${parseNumber(a.book.bid).toLocaleString("en-US", { maximumFractionDigits: 2 })} / ${parseNumber(a.book.ask).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+    : "—";
+  const invQty = optNumber(a.inventory && a.inventory.qty);
+  const inventory = invQty === null ? "—" : invQty === 0 ? "flat" : `${invQty.toLocaleString("en-US", { maximumFractionDigits: 5 })} (${arcusMoney(a.inventory.usd)})`;
+  const pnl = a.pnl || {};
+  const stopText = (left, limit) =>
+    optNumber(left) === null || optNumber(limit) === null ? "" : ` · ${arcusMoney(left)} left of ${arcusMoney(limit)} stop`;
+  const pnlToday = { label: `${arcusMoney(pnl.daily_net)}${stopText(pnl.remaining_daily_usd, pnl.daily_stop_usd)}`, value: optNumber(pnl.daily_net) };
+  const pnlCum = { label: `${arcusMoney(pnl.cum_net)}${stopText(pnl.remaining_cum_usd, pnl.cum_stop_usd)}`, value: optNumber(pnl.cum_net) };
+  const vol = a.volume || {};
+  const share = optNumber(vol.maker_share);
+  const fills = optNumber(vol.fills);
+  const volume = a.volume
+    ? `${arcusUsd0(vol.day)} today · ${fills === null ? "—" : fills} fills lifetime${share === null ? "" : ` · ${Math.round(share * 100)}% maker`}`
+    : "—";
+  const p = a.presence || null;
+  let presence = "—";
+  if (p && optNumber(p.samples) !== null && Number(p.samples) > 0) {
+    const frac = optNumber(p.quoting_fraction);
+    const covered = Number(p.covered_secs) || 0;
+    const span = covered < 3600 ? `${Math.max(1, Math.round(covered / 60))}m` : `${(covered / 3600).toFixed(1)}h`;
+    presence = `${frac === null ? "—" : `${Math.round(frac * 100)}%`} quoting over ${span} · ${Number(p.requotes) || 0} re-pegs`;
+  }
+  let key = null;
+  if (a.api_key && optNumber(a.api_key.days_left) !== null) {
+    const days = optNumber(a.api_key.days_left);
+    const until = typeof a.api_key.valid_until === "string" ? a.api_key.valid_until.slice(0, 10) : "?";
+    // tone-warn is the card's red: ≤ 7 d or expired, where orders are
+    // about to start failing. The 8–30 d window is amber (tone-caution):
+    // time to rotate, nothing broken yet.
+    key = {
+      label: a.api_key.expired ? `EXPIRED ${until}` : `${Math.floor(days)} d left (${until})`,
+      tone: isArcusVolKeyRed(a) ? "warn" : a.api_key.warn ? "caution" : "ok",
+      show: true,
+    };
+  }
+  return { state, market, quotes, book, inventory, pnlToday, pnlCum, volume, presence, key, halt: isArcusVolHalted({ arcus_vol: a }) ? String(a.halt) : null };
+};
+const renderArcusVolStatus = (card, a, status) => {
+  const view = arcusVolViewModel(a, status);
+  const setTone = (el, tone) => {
+    el.classList.remove("tone-ok", "tone-warn", "tone-caution", "tone-neutral");
+    el.classList.add(`tone-${tone}`);
+  };
+  const set = (name, text) => {
+    const el = card.querySelector(`[data-field="${name}"]`);
+    if (el) el.textContent = text;
+    return el;
+  };
+  const stateEl = set("arcus-state", view.state.label);
+  if (stateEl) setTone(stateEl, view.state.tone);
+  set("arcus-market", view.market);
+  set("arcus-quotes", view.quotes);
+  set("arcus-book", view.book);
+  set("arcus-inventory", view.inventory);
+  const todayEl = set("arcus-pnl-today", view.pnlToday.label);
+  if (todayEl) applySignedClass(todayEl, view.pnlToday.value);
+  const cumEl = set("arcus-pnl-cum", view.pnlCum.label);
+  if (cumEl) applySignedClass(cumEl, view.pnlCum.value);
+  set("arcus-volume", view.volume);
+  set("arcus-presence", view.presence);
+  const keyRowEl = card.querySelector('[data-field="arcus-key-row"]');
+  const keyEl = card.querySelector('[data-field="arcus-key"]');
+  if (keyRowEl && keyEl) {
+    keyRowEl.hidden = view.key === null;
+    keyEl.textContent = view.key === null ? "" : view.key.label;
+    if (view.key !== null) setTone(keyEl, view.key.tone);
+  }
+  const haltRowEl = card.querySelector('[data-field="arcus-halt-row"]');
+  const haltEl = card.querySelector('[data-field="arcus-halt"]');
+  if (haltRowEl && haltEl) {
+    haltRowEl.hidden = view.halt === null;
+    haltEl.textContent = view.halt === null ? "" : view.halt;
+  }
 };
 
 const formatHype = (value) => {
