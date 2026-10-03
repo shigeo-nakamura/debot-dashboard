@@ -48,10 +48,13 @@ type AuthConfig struct {
 type TargetConfig struct {
 	StaleAfterSecs int               `yaml:"stale_after_secs"`
 	BullHolder     *BullHolderConfig `yaml:"bull_holder"`
-	Name           string            `yaml:"name"`
-	InstanceID     string            `yaml:"instance_id"`
-	Service        string            `yaml:"service"`
-	Region         string            `yaml:"region"`
+	// ArcusVol is the same-host Arcus presence runtime (bot-strategy#1093);
+	// like bull_holder it replaces the S3 source for the target.
+	ArcusVol   *ArcusVolConfig `yaml:"arcus_vol"`
+	Name       string          `yaml:"name"`
+	InstanceID string          `yaml:"instance_id"`
+	Service    string          `yaml:"service"`
+	Region     string          `yaml:"region"`
 	// Bucket name and full key for the bot's `<id>.json` object.
 	// Sibling files (equity_history.jsonl) are derived by suffix-
 	// replacing the key. The bot mirrors `status.json` to this key
@@ -421,6 +424,7 @@ type StatusData struct {
 	Accumulator         *AccumulatorStatus     `json:"accumulator,omitempty"`
 	AccumulatorOps      *AccumulatorOperations `json:"operations,omitempty"`
 	BullHolder          *BullHolderStatus      `json:"bull_holder,omitempty"`
+	ArcusVol            *ArcusVolStatus        `json:"arcus_vol,omitempty"`
 	HanBridge           *HanBridgeStatus       `json:"han_bridge,omitempty"`
 	HedgeHolder         *HedgeHolderStatus     `json:"hedge_holder,omitempty"`
 	// Engine B's frozen session boundaries for the current date --
@@ -844,6 +848,15 @@ func normalizeConfig(cfg *Config) error {
 			}
 			continue
 		}
+		if target.ArcusVol != nil {
+			if target.S3Bucket != "" || target.S3Key != "" {
+				return fmt.Errorf("targets[%d]: choose arcus_vol or S3", i)
+			}
+			if err := target.ArcusVol.validate(); err != nil {
+				return fmt.Errorf("targets[%d]: %w", i, err)
+			}
+			continue
+		}
 		// Standard targets require bucket + key. instance_id is kept for FE labeling and disk-watch
 		// disambiguation but is no longer required to reach the bot.
 		if target.S3Bucket == "" {
@@ -939,6 +952,8 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			defer wg.Done()
 			if target.BullHolder != nil {
 				results[i] = fetchBullHolder(ctx, target, http.DefaultClient)
+			} else if target.ArcusVol != nil {
+				results[i] = fetchArcusVol(target, time.Now())
 			} else {
 				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 			}

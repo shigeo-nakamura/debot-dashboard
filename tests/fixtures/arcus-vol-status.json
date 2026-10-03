@@ -1,0 +1,25 @@
+{
+  "backoff": false,
+  "book": {"ask": "770.63", "bid": "770.62"},
+  "bot": "arcus_vol_runtime",
+  "cooldown": false,
+  "cost_per_1m_usd": "142.81",
+  "effective_cap_usd": "5000",
+  "halt": null,
+  "inventory": {"avg_px": "0", "opened_at_ms": null, "qty": "0", "usd": "0"},
+  "market": "SPY-USD",
+  "mode": "live",
+  "paper_tick": null,
+  "pending_unresolved": [],
+  "plan": "quote",
+  "pnl": {"cum_fees": "3.1202", "cum_net": "-28.8327", "cum_realized": "-25.7125", "daily_net": "-1.2500"},
+  "quote_offset_bps": "5",
+  "quotes": {
+    "ask": {"dist_bps": "6.229", "dist_touch_bps": "6.229", "filled": "0", "order_id": "87e6ea10b143486d", "px": "771.11", "qty": "3.24374"},
+    "bid": {"dist_bps": "3.893", "dist_touch_bps": "3.893", "filled": "0", "order_id": "8e2f72c225cd4391", "px": "770.32", "qty": "3.24374"}
+  },
+  "repeg_band_bps": "2",
+  "tape": {"gap_since_ms": null, "ready": false},
+  "ts_ms": 1791055800000,
+  "volume": {"cum": "201901.61", "cum_maker": "188034.22", "cum_taker": "13867.39", "day": "0", "fills": 420}
+}

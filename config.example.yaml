@@ -142,6 +142,26 @@ targets:
 #              price_usd: 4300
 # Use the dedicated funded account address/index, not an API signing wallet.
 # Empty identifiers show "not configured"; no signing keys are needed.
+
+# Arcus presence runtime (bot-strategy#1093) reads its same-host status
+# file; no S3, no venue calls, no credentials. The runtime's stop limits
+# and its API key's expiry live in files the dashboard must not read, so
+# they are repeated here as display values. `bucket: subsidy` is declared
+# until the return-source taxonomy lists the service. See
+# deploy/arcus-vol.md.
+#  - name: Arcus presence (SPY)
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: debot-arcus-vol
+#    region: ap-northeast-1
+#    bucket: subsidy
+#    arcus_vol:
+#      status_path: /var/lib/debot-arcus-vol/state/status.json
+#      daily_stop_usd: 5
+#      cum_stop_usd: 21
+#      api_key_valid_until: "2027-01-01T00:00:00Z"
+#      # Optional: the runtime rewrites status.json about once a second;
+#      # an older file means a dead or hung process (default 20 s).
+#      stale_after_secs: 20
 # auth:
 #   username: admin
 #   password: change-me
