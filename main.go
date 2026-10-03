@@ -956,7 +956,9 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			if target.BullHolder != nil {
 				results[i] = fetchBullHolder(ctx, target, http.DefaultClient)
 			} else if target.ArcusVol != nil {
-				results[i] = fetchArcusVol(target, time.Now())
+				// Only the scheduled poll samples presence; a history/range
+				// request (every page load) must not add observations.
+				results[i] = fetchArcusVol(target, time.Now(), !includeHistory)
 			} else {
 				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 			}

@@ -245,6 +245,19 @@ type arcusVolTracker struct {
 
 var arcusVolPresence = &arcusVolTracker{samples: map[string][]arcusVolSample{}}
 
+// summary returns the window summary for `key` as of `now` without
+// recording anything (expired samples are still dropped).
+func (t *arcusVolTracker) summary(key string, now time.Time, window time.Duration) ArcusVolPres {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	all := t.samples[key]
+	cutoff := now.Add(-window)
+	first := sort.Search(len(all), func(i int) bool { return !all[i].at.Before(cutoff) })
+	all = all[first:]
+	t.samples[key] = all
+	return summariseArcusVol(all, window)
+}
+
 // record appends a sample for `key` and returns the window summary. A
 // re-quote is counted when a side's order id changes between consecutive
 // samples while both are non-empty (a pull and a fresh place show as
@@ -460,7 +473,10 @@ func decodeArcusVol(payload []byte, cfg *ArcusVolConfig, now time.Time) (*ArcusV
 // fetchArcusVol builds the target's status from the same-host status file.
 // Kill switch, halt and staleness feed the generic header fields so the
 // fleet summary and alerting see them without knowing this shape.
-func fetchArcusVol(target TargetConfig, now time.Time) TargetStatus {
+// `sample` is true only for the scheduled poll: it records a presence
+// observation. Other callers (history / range requests, one per page load
+// or viewer) read the current summary without adding to it.
+func fetchArcusVol(target TargetConfig, now time.Time, sample bool) TargetStatus {
 	cfg := target.ArcusVol
 	staleAfter := cfg.staleAfter()
 	r := TargetStatus{
@@ -479,10 +495,16 @@ func fetchArcusVol(target TargetConfig, now time.Time) TargetStatus {
 	// readable, valid, fresh status is a non-quoting one: an outage between
 	// two quoting samples must lower the fraction, not vanish from it, and
 	// its empty order ids keep a re-peg from being counted across the gap.
+	observe := func(s arcusVolSample) ArcusVolPres {
+		if sample {
+			return arcusVolPresence.record(key, s, arcusVolPresenceWindow, arcusVolPresenceMaxSamples)
+		}
+		return arcusVolPresence.summary(key, now, arcusVolPresenceWindow)
+	}
 	miss := func(state, errText string) TargetStatus {
 		r.Error = errText
 		a := &ArcusVolStatus{State: state}
-		p := arcusVolPresence.record(key, arcusVolSample{at: now}, arcusVolPresenceWindow, arcusVolPresenceMaxSamples)
+		p := observe(arcusVolSample{at: now})
 		a.Presence = &p
 		s.ArcusVol = a
 		return r
@@ -517,7 +539,7 @@ func fetchArcusVol(target TargetConfig, now time.Time) TargetStatus {
 		// re-peg with the ids seen after a restart.
 		bidID, askID = "", ""
 	}
-	p := arcusVolPresence.record(key, arcusVolSample{at: now, quoting: quoting, bidID: bidID, askID: askID}, arcusVolPresenceWindow, arcusVolPresenceMaxSamples)
+	p := observe(arcusVolSample{at: now, quoting: quoting, bidID: bidID, askID: askID})
 	a.Presence = &p
 	s.ArcusVol = a
 	return r

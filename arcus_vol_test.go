@@ -39,7 +39,7 @@ func TestArcusVolFixtureDecodes(t *testing.T) {
 	defer arcusVolTrackerForTest()()
 	now := time.UnixMilli(1791055800000).Add(2 * time.Second)
 	cfg := ArcusVolConfig{DailyStopUSD: f64(5), CumStopUSD: f64(50), APIKeyValidUntil: "2027-03-30T06:32:00Z"}
-	r := fetchArcusVol(arcusTarget(t, arcusFixture(t), cfg), now)
+	r := fetchArcusVol(arcusTarget(t, arcusFixture(t), cfg), now, true)
 	if r.Error != "" || r.ServiceStatus != "active" {
 		t.Fatalf("error=%q status=%q", r.Error, r.ServiceStatus)
 	}
@@ -145,7 +145,7 @@ func TestArcusVolStateDerivation(t *testing.T) {
 		{"stale beats quoting", func(m map[string]any) { m["plan"] = "quote" }, now.Add(10 * time.Minute), "stale", "stale", false},
 	}
 	for _, c := range cases {
-		r := fetchArcusVol(arcusTarget(t, mutate(t, base, c.edit), ArcusVolConfig{}), c.at)
+		r := fetchArcusVol(arcusTarget(t, mutate(t, base, c.edit), ArcusVolConfig{}), c.at, true)
 		a := r.Status.ArcusVol
 		if a.State != c.state || r.ServiceStatus != c.svc || r.Error != "" {
 			t.Fatalf("%s: state=%q service=%q err=%q", c.name, a.State, r.ServiceStatus, r.Error)
@@ -158,7 +158,7 @@ func TestArcusVolStateDerivation(t *testing.T) {
 		}
 	}
 	// A configured stale window shorter than the default is honoured.
-	r := fetchArcusVol(arcusTarget(t, base, ArcusVolConfig{StaleAfterSecs: 1}), now)
+	r := fetchArcusVol(arcusTarget(t, base, ArcusVolConfig{StaleAfterSecs: 1}), now, true)
 	if r.ServiceStatus != "stale" || r.StaleAfterSecs != 1 {
 		t.Fatalf("custom stale window: %q %d", r.ServiceStatus, r.StaleAfterSecs)
 	}
@@ -167,7 +167,7 @@ func TestArcusVolStateDerivation(t *testing.T) {
 func TestArcusVolUnavailableAndInvalid(t *testing.T) {
 	defer arcusVolTrackerForTest()()
 	now := time.Now()
-	r := fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{}), now)
+	r := fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{}), now, true)
 	if r.Error != "Arcus-vol status unavailable" || r.ServiceStatus != "unknown" || r.Status.ArcusVol.State != "unavailable" {
 		t.Fatalf("missing file: %+v", r)
 	}
@@ -178,13 +178,13 @@ func TestArcusVolUnavailableAndInvalid(t *testing.T) {
 		`{"bot":"arcus_vol_runtime","ts_ms":1,"market":"","mode":"live"}`,
 		`{"bot":"arcus_vol_runtime","ts_ms":1,"market":"SPY-USD","mode":"paper"}`,
 	} {
-		r := fetchArcusVol(arcusTarget(t, []byte(bad), ArcusVolConfig{}), now)
+		r := fetchArcusVol(arcusTarget(t, []byte(bad), ArcusVolConfig{}), now, true)
 		if r.Error != "invalid arcus-vol status" || r.ServiceStatus != "unknown" || r.Status.ArcusVol.State != "unavailable" {
 			t.Fatalf("%s: %+v", bad, r)
 		}
 		assertNoMeasurements(t, r)
 	}
-	assertNoMeasurements(t, fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{}), now))
+	assertNoMeasurements(t, fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{}), now, true))
 	// Null quotes and a missing book are a normal pulled state, not an error.
 	payload := mutate(t, arcusFixture(t), func(m map[string]any) {
 		m["plan"] = "pull:no_book"
@@ -192,7 +192,7 @@ func TestArcusVolUnavailableAndInvalid(t *testing.T) {
 		m["quotes"] = map[string]any{"bid": nil, "ask": nil}
 		m["cost_per_1m_usd"] = nil
 	})
-	r = fetchArcusVol(arcusTarget(t, payload, ArcusVolConfig{}), time.UnixMilli(1791055800000))
+	r = fetchArcusVol(arcusTarget(t, payload, ArcusVolConfig{}), time.UnixMilli(1791055800000), true)
 	a := r.Status.ArcusVol
 	if r.Error != "" || a.State != "pulled" || a.Book != nil || a.Quotes == nil || a.Quotes.Bid != nil || a.Quotes.Ask != nil || a.CostPer1MUSD != nil {
 		t.Fatalf("pulled with no book: err=%q %+v", r.Error, a)
@@ -292,7 +292,7 @@ func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
 	payload := arcusFixture(t)
 	target := arcusTarget(t, payload, ArcusVolConfig{})
 	t0 := time.UnixMilli(1791055800000).Add(time.Second)
-	r := fetchArcusVol(target, t0)
+	r := fetchArcusVol(target, t0, true)
 	if *r.Status.ArcusVol.Presence.QuotingFraction != 1 {
 		t.Fatalf("first poll: %+v", r.Status.ArcusVol.Presence)
 	}
@@ -301,7 +301,7 @@ func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 3; i++ {
-		r = fetchArcusVol(target, t0.Add(time.Duration(i)*time.Second))
+		r = fetchArcusVol(target, t0.Add(time.Duration(i)*time.Second), true)
 		if r.Error != "Arcus-vol status unavailable" || r.Status.ArcusVol.Presence == nil {
 			t.Fatalf("unreadable poll %d: %+v", i, r)
 		}
@@ -309,7 +309,7 @@ func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
 	if err := os.WriteFile(target.ArcusVol.StatusPath, []byte(`{"bot":"other"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r = fetchArcusVol(target, t0.Add(4*time.Second))
+	r = fetchArcusVol(target, t0.Add(4*time.Second), true)
 	if r.Error != "invalid arcus-vol status" || r.Status.ArcusVol.Presence.Samples != 5 {
 		t.Fatalf("invalid poll: %+v", r)
 	}
@@ -320,7 +320,7 @@ func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
 	if err := os.WriteFile(target.ArcusVol.StatusPath, frozen, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r = fetchArcusVol(target, t0.Add(60*time.Second))
+	r = fetchArcusVol(target, t0.Add(60*time.Second), true)
 	if r.ServiceStatus != "stale" || r.Status.ArcusVol.State != "stale" {
 		t.Fatalf("stale poll: %+v", r)
 	}
@@ -331,11 +331,46 @@ func TestArcusVolFailedPollsCountAsNotQuoting(t *testing.T) {
 	}), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r = fetchArcusVol(target, t0.Add(62*time.Second))
+	r = fetchArcusVol(target, t0.Add(62*time.Second), true)
 	p := r.Status.ArcusVol.Presence
 	// 7 polls, 2 quoting: 1 (first) + 1 (last).
 	if p.Samples != 7 || *p.QuotingFraction < 0.285 || *p.QuotingFraction > 0.286 || p.Requotes != 0 {
 		t.Fatalf("after outage: %+v", p)
+	}
+}
+
+// Every page load asks for /api/status?range=…, which goes through the
+// same fetcher. Those reads must not count as presence observations or
+// reloads and extra viewers would inflate the sample count and skew the
+// quoting fraction; only the scheduled poll records.
+func TestArcusVolHistoryRequestsDoNotRecordPresence(t *testing.T) {
+	defer arcusVolTrackerForTest()()
+	payload := arcusFixture(t)
+	target := arcusTarget(t, payload, ArcusVolConfig{})
+	t0 := time.UnixMilli(1791055800000).Add(time.Second)
+	if p := fetchArcusVol(target, t0, true).Status.ArcusVol.Presence; p.Samples != 1 {
+		t.Fatalf("poll 1: %+v", p)
+	}
+	// Two history reads in between, one of them while the file is missing.
+	if p := fetchArcusVol(target, t0.Add(time.Second), false).Status.ArcusVol.Presence; p.Samples != 1 || *p.QuotingFraction != 1 {
+		t.Fatalf("history read changed the summary: %+v", p)
+	}
+	if err := os.Remove(target.ArcusVol.StatusPath); err != nil {
+		t.Fatal(err)
+	}
+	r := fetchArcusVol(target, t0.Add(2*time.Second), false)
+	if r.Error != "Arcus-vol status unavailable" || r.Status.ArcusVol.Presence.Samples != 1 || *r.Status.ArcusVol.Presence.QuotingFraction != 1 {
+		t.Fatalf("failed history read recorded a sample: %+v", r.Status.ArcusVol.Presence)
+	}
+	if err := os.WriteFile(target.ArcusVol.StatusPath, mutate(t, payload, func(m map[string]any) { m["ts_ms"] = t0.Add(3 * time.Second).UnixMilli() }), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if p := fetchArcusVol(target, t0.Add(4*time.Second), true).Status.ArcusVol.Presence; p.Samples != 2 || *p.QuotingFraction != 1 {
+		t.Fatalf("poll 2: %+v", p)
+	}
+	// A history read still drops expired samples from the summary it shows.
+	if p := fetchArcusVol(target, t0.Add(arcusVolPresenceWindow+5*time.Second), false).Status.ArcusVol.Presence; p.Samples != 0 || p.QuotingFraction != nil {
+		t.Fatalf("expired samples shown: %+v", p)
 	}
 }
 
