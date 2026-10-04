@@ -269,6 +269,11 @@ type HanBridgeStatus struct {
 // HedgeHolderLeg is one side of the cross-venue points hedge
 // (bot-strategy#1046): the leg's size and the venue's own equity behind it.
 type HedgeHolderLeg struct {
+	// Exchange is the venue kind ("lighter", "arcus"); Instance is the env
+	// suffix naming the deployment ("rh", "core", "arcus"). The card labels
+	// each leg from them, so a second holder with an Arcus long
+	// (bot-strategy#1123) is not drawn as "RH".
+	Exchange    string  `json:"exchange,omitempty"`
 	Instance    string  `json:"instance"`
 	Side        string  `json:"side"`
 	Qty         float64 `json:"qty"`
@@ -320,6 +325,29 @@ type HedgeHolderStatus struct {
 	SnapshotAt        *int64                    `json:"snapshot_at"`
 	ConfigFp          string                    `json:"config_fp"`
 	Legs              map[string]HedgeHolderLeg `json:"legs"`
+	// Books is the per-symbol state of the multi-symbol holder
+	// (pairtrade#352); the top-level legs describe its primary symbol.
+	Books map[string]HedgeHolderBook `json:"books,omitempty"`
+	// UncertainOrders are sends the venue has not yet confirmed or denied
+	// (bot-strategy#1116), keyed by symbol. Opaque here: the card only
+	// says which symbols have one outstanding.
+	UncertainOrders map[string]json.RawMessage `json:"uncertain_orders,omitempty"`
+}
+
+// HedgeHolderBook is one symbol's book in the multi-symbol hedge holder.
+type HedgeHolderBook struct {
+	Mode              string   `json:"mode"`
+	ArmedAt           *int64   `json:"armed_at"`
+	ExitReason        *string  `json:"exit_reason"`
+	LongQty           float64  `json:"long_qty"`
+	ShortQty          float64  `json:"short_qty"`
+	TargetQty         float64  `json:"target_qty"`
+	TargetNotionalUsd float64  `json:"target_notional_usd"`
+	NetQty            float64  `json:"net_qty"`
+	NetUsd            float64  `json:"net_usd"`
+	BasisBps          *float64 `json:"basis_bps"`
+	MarkLong          *float64 `json:"mark_long"`
+	MarkShort         *float64 `json:"mark_short"`
 }
 
 // BookDecision is one entry of the book runtime's decision history: the
@@ -1032,6 +1060,17 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 		Key:    aws.String(target.S3Key),
 	})
 	if err != nil {
+		// A bot that has never run has never written its status object.
+		// Say so instead of reporting an S3 error, but only once a listing
+		// confirms the key is absent: under a prefix-scoped s3:ListBucket
+		// grant a missing key reads as AccessDenied, not NoSuchKey, and a
+		// real permission or network failure must stay an error.
+		listCtx, listCancel := context.WithTimeout(ctx, commandTimeout)
+		defer listCancel()
+		if absent, listErr := statusObjectAbsent(listCtx, client, target.S3Bucket, target.S3Key); listErr == nil && absent {
+			result.ServiceStatus = serviceStatusNotStarted
+			return result
+		}
 		result.Error = fmt.Sprintf("s3 get error: %v", err)
 		return result
 	}
@@ -1096,6 +1135,35 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 	}
 	result.Status = &status
 	return result
+}
+
+// serviceStatusNotStarted marks a target whose status object does not
+// exist yet: a service that is configured on the dashboard ahead of its
+// install (bot-strategy#1123). Not a failure, so the frontend neither
+// counts it as down nor shows an error.
+const serviceStatusNotStarted = "not_started"
+
+type s3ListAPI interface {
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
+// statusObjectAbsent reports whether `key` is positively absent from
+// `bucket`: a prefix listing succeeded and did not return the key itself.
+func statusObjectAbsent(ctx context.Context, client s3ListAPI, bucket, key string) (bool, error) {
+	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(bucket),
+		Prefix:  aws.String(key),
+		MaxKeys: aws.Int32(1),
+	})
+	if err != nil {
+		return false, err
+	}
+	for _, obj := range out.Contents {
+		if aws.ToString(obj.Key) == key {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func decodeStatusPayload(payload []byte) (StatusData, error) {

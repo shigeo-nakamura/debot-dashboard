@@ -115,16 +115,22 @@ body::after {
 .grid {
   display: grid;
   gap: 20px;
-  /* Frankfurt now runs A/B/C + canary (bot-strategy#376), so the default
-     cap is 4 columns. The 60px in the calc accounts for the 3 inter-card
-     gaps (3 × 20px) in a 4-column row — using the pre-#376 40px would
-     over-state the min track and force auto-fit back to 3 columns at
-     typical widescreen widths. On narrow screens the max() falls back
-     to 260px so cards stay readable; on wide screens each card takes
-     exactly 1/4 of the grid and extra bots wrap onto a new row. Cards
-     are grouped by return-source bucket (bot-strategy#959), so a group
-     holds 1-3 cards today and the auto-fit rule is all that is needed. */
-  grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 60px) / 4)), 1fr));
+  /* Exactly two cards per row on desktop, in every bucket group, so the
+     sections line up with each other and every card — holder, hedge,
+     book, pairtrade — gets the same half-width track. The former
+     auto-fit rule packed up to four cards in one section and pinned the
+     holder/accumulator/hedge cards to full rows, so the column count
+     changed from section to section. minmax(0, 1fr) lets a card shrink
+     below its content's intrinsic width (long position symbols, wide
+     pills) instead of pushing the grid wider than the page. Phone
+     widths drop to one column (see the media query below). */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 720px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .regions.live .card {
@@ -594,6 +600,11 @@ body::after {
   background: rgba(220, 38, 38, 0.12);
 }
 
+.status-pill.not-started {
+  color: var(--muted);
+  background: rgba(28, 26, 23, 0.08);
+}
+
 .status-pill.unknown {
   color: var(--warning);
   background: rgba(245, 158, 11, 0.14);
@@ -969,6 +980,16 @@ body::after {
   font-variant-numeric: tabular-nums;
 }
 
+.notice {
+  margin-top: 12px;
+  background: rgba(28, 26, 23, 0.05);
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
 .error {
   margin-top: 12px;
   background: rgba(220, 38, 38, 0.1);
@@ -1007,20 +1028,12 @@ body::after {
   }
 }
 .bull-holder-view { margin-top: 16px; }
-/* Keep detailed holder and accumulator panels on their own
-   full-width rows. Without this, an accumulator card sharing a bucket
-   with a bull-holder card (both "beta") gets stranded in a narrow
-   leftover single track: auto-fit sizes the grid's columns from the
-   whole bucket (bull-holder's full span keeps those columns from
-   collapsing), so the accumulator card — placed alone in the next row
-   — only fills its own ~270px track instead of stretching, leaving a
-   large blank gap beside it (bot-strategy debot-dashboard, reported
-   from a live screenshot after #48/#49). Full width also gives the
-   two-column detail grid inside the card (.row-grid) room to read
-   cleanly instead of squeezing into a half-width column. */
-.grid > .card.bull-holder,
-.grid > .card.accumulator,
-.grid > .card.hedge-holder { grid-column: 1 / -1; }
+/* Holder, accumulator and hedge cards used to take a full row each
+   (grid-column: 1 / -1) because the auto-fit grid stranded them in a
+   leftover ~270px track. With the fixed two-column grid above every card
+   has a half-width track, and the detail grids inside them (.row-grid)
+   drop to one column at phone width, so they sit two per row like
+   every other card. */
 .card.bull-holder .risk-panel { display: none; }
 .bull-holder-view h3 { margin: 18px 0 10px; font-size: 15px; }
 .bull-holder-view h4 { margin: 0 0 10px; font-size: 14px; }

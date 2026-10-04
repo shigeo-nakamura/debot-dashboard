@@ -2,10 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const accumulatorFixturePath = "tests/fixtures/hype-accumulator-status-v1.json"
@@ -508,5 +514,112 @@ func TestHedgeHolderDecodes(t *testing.T) {
 	target = TargetConfig{Service: "debot-xvenue-hedge-holder", Bucket: BucketBeta}
 	if err := resolveBucket(&target); err == nil {
 		t.Fatal("a beta declaration for the hedge holder was accepted")
+	}
+}
+
+const hedgeHolderArcusFixturePath = "tests/fixtures/hedge-holder-arcus-status-v1.json"
+
+// The second hedge holder (bot-strategy#1123): Arcus long / Lighter Core
+// short on QQQ. The card names each leg from `exchange` / `instance` and
+// the symbol from `books`, so those fields must survive the API round
+// trip; there is no subsidy block (Arcus points are not collected), and
+// the service is a subsidy bot in the taxonomy.
+func TestHedgeHolderArcusInstanceDecodes(t *testing.T) {
+	payload, err := os.ReadFile(hedgeHolderArcusFixturePath)
+	if err != nil {
+		t.Fatalf("read arcus hedge fixture: %v", err)
+	}
+	status, err := decodeStatusPayload(payload)
+	if err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	h := status.HedgeHolder
+	if h == nil {
+		t.Fatal("hedge_holder status missing")
+	}
+	if long := h.Legs["long"]; long.Exchange != "arcus" || long.Instance != "arcus" {
+		t.Fatalf("long leg = %+v, want exchange/instance arcus", long)
+	}
+	if short := h.Legs["short"]; short.Exchange != "lighter" || short.Instance != "core" {
+		t.Fatalf("short leg = %+v, want lighter/core", short)
+	}
+	book, ok := h.Books["QQQ"]
+	if !ok || len(h.Books) != 1 || book.Mode != "On" || book.TargetNotionalUsd != 7500 {
+		t.Fatalf("books = %+v, want a single On QQQ book at $7,500", h.Books)
+	}
+	if status.Subsidy != nil {
+		t.Fatalf("subsidy = %+v, want none (Arcus points are not collected)", status.Subsidy)
+	}
+	withUncertain, err := decodeStatusPayload([]byte(`{"hedge_holder":{"mode":"On","legs":{},"uncertain_orders":{"QQQ":{"leg":"long","since":1791300000}}}}`))
+	if err != nil {
+		t.Fatalf("decode uncertain payload: %v", err)
+	}
+	out, err := json.Marshal(withUncertain.HedgeHolder)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if !strings.Contains(string(out), `"uncertain_orders":{"QQQ":{"leg":"long","since":1791300000}}`) {
+		t.Fatalf("uncertain_orders did not survive re-encode: %s", out)
+	}
+	out, err = json.Marshal(h)
+	if err != nil {
+		t.Fatalf("re-encode fixture block: %v", err)
+	}
+	for _, want := range []string{`"exchange":"arcus"`, `"books":{"QQQ":`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("%s did not survive re-encode: %s", want, out)
+		}
+	}
+	target := TargetConfig{Service: "debot-xvenue-hedge-arcus"}
+	if err := resolveBucket(&target); err != nil || target.Bucket != BucketSubsidy {
+		t.Fatalf("resolveBucket = %v / %q, want nil / %q", err, target.Bucket, BucketSubsidy)
+	}
+}
+
+type fakeS3List struct {
+	keys []string
+	err  error
+	got  *s3.ListObjectsV2Input
+}
+
+func (f *fakeS3List) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	f.got = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := &s3.ListObjectsV2Output{}
+	for _, k := range f.keys {
+		if strings.HasPrefix(k, aws.ToString(in.Prefix)) {
+			out.Contents = append(out.Contents, s3types.Object{Key: aws.String(k)})
+		}
+	}
+	return out, nil
+}
+
+// A status object that was never written reads as "not started" only when
+// a listing positively confirms it is absent; a failed listing (the
+// permission or network failure that also broke the read) keeps the error.
+func TestStatusObjectAbsent(t *testing.T) {
+	key := "debot/status/robinhood-lighter/xvenue-hedge-arcus.json"
+	ctx := context.Background()
+	cases := []struct {
+		name       string
+		list       *fakeS3List
+		wantAbsent bool
+		wantErr    bool
+	}{
+		{"never written", &fakeS3List{keys: []string{"debot/status/robinhood-lighter/xvenue-hedge-holder.json"}}, true, false},
+		{"only a sibling under the key as prefix", &fakeS3List{keys: []string{key + ".bak"}}, true, false},
+		{"present", &fakeS3List{keys: []string{key}}, false, false},
+		{"listing denied", &fakeS3List{err: errors.New("AccessDenied")}, false, true},
+	}
+	for _, tc := range cases {
+		absent, err := statusObjectAbsent(ctx, tc.list, "debot-dashboard", key)
+		if absent != tc.wantAbsent || (err != nil) != tc.wantErr {
+			t.Fatalf("%s: absent=%v err=%v, want absent=%v err=%v", tc.name, absent, err, tc.wantAbsent, tc.wantErr)
+		}
+		if aws.ToString(tc.list.got.Prefix) != key || aws.ToString(tc.list.got.Bucket) != "debot-dashboard" {
+			t.Fatalf("%s: listed %+v, want the status key as prefix", tc.name, tc.list.got)
+		}
 	}
 }
