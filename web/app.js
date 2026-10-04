@@ -5,6 +5,9 @@ const pollIntervalEl = document.getElementById("poll-interval");
 const rangeToggleEl = document.getElementById("range-toggle");
 
 const POLL_MS = 5000;
+// main.go serviceStatusNotStarted: the target's status object does not
+// exist yet (a service configured ahead of its install).
+const SERVICE_NOT_STARTED = "not_started";
 const cardMap = new Map();
 const historyByKey = new Map();
 // Which keys' cached history is the server's recorded series
@@ -836,17 +839,21 @@ const createCard = (key) => {
         <div class="row" data-field="book-note-row" hidden><span>Note</span><strong class="tone-warn" data-field="book-note"></strong></div>
       </div>
       <div class="han-bridge-view" data-field="hedge-view" hidden>
-        <div class="han-bridge-header" title="bot-strategy#1046: BTC long on Lighter on Robinhood Chain hedged by an equal short on Lighter Core, held for the weekly points drop. Funding nets out across the two deployments, so the cost is the round trips and the basis.">Points hedge (RH long / Core short)</div>
+        <div class="han-bridge-header" data-field="hedge-header">Points hedge</div>
         <div class="row"><span>Mode</span><strong class="tone-neutral" data-field="hedge-mode"></strong></div>
         <div class="row"><span>Book</span><strong data-field="hedge-book"></strong></div>
+        <div class="row" data-field="hedge-books-row" hidden title="Every symbol the holder manages; the rows above describe its primary symbol."><span>Books</span><strong data-field="hedge-books"></strong></div>
         <div class="row"><span>Legs equal</span><strong data-field="hedge-net"></strong></div>
-        <div class="row" title="Percentage points of notional between each venue's equity and its maintenance requirement. Margin is not shared across venues: the lower side is the one that liquidates first."><span>Liq. headroom (RH / Core)</span><strong data-field="hedge-headroom"></strong></div>
-        <div class="row" title="Robinhood-chain mark vs Lighter Core mark. Phase 0 mean −1.3 bps, sd 1 bps; the book was opened at +3.1 bps."><span>Basis (RH − Core)</span><strong data-field="hedge-basis"></strong></div>
-        <div class="row" title="Both venues' equity now minus at ARM: the price paid for the points earned since ARM (the KPI panel above divides the two)."><span>Since ARM</span><strong data-field="hedge-pnl"></strong></div>
+        <div class="row" title="Percentage points of notional between each venue's equity and its maintenance requirement. Margin is not shared across venues: the lower side is the one that liquidates first."><span data-field="hedge-headroom-label">Liq. headroom (long / short)</span><strong data-field="hedge-headroom"></strong></div>
+        <div class="row" title="Long-venue mark vs short-venue mark, in bps of the short mark."><span data-field="hedge-basis-label">Basis (long − short)</span><strong data-field="hedge-basis"></strong></div>
+        <div class="row" title="Both venues' equity now minus at ARM: the price paid for the points earned since ARM."><span>Since ARM</span><strong data-field="hedge-pnl"></strong></div>
+        <div class="row"><span>Points since ARM</span><strong data-field="hedge-points"></strong></div>
+        <div class="row" data-field="hedge-uncertain-row" hidden title="An order the venue has neither confirmed nor denied yet (bot-strategy#1116). The holder sends nothing more on that symbol until it settles, and halts if it does not within its grace period."><span>Unsettled orders</span><strong class="tone-warn" data-field="hedge-uncertain"></strong></div>
         <div class="row" data-field="hedge-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="hedge-halt"></strong></div>
         <div class="row" data-field="hedge-feed-row" hidden title="A venue is unreachable or the two marks diverge: the bot sends nothing and the figures above are from its last good read."><span>Feed</span><strong class="tone-warn" data-field="hedge-feed"></strong></div>
       </div>
       </div>
+      <div class="notice" data-field="notice" hidden></div>
       <div class="error" data-field="error" hidden></div>
       </div>
     `;
@@ -893,11 +900,16 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
     : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded || arcusDegraded) ? "degraded" : status;
+  // A configured service whose status object does not exist yet (main.go
+  // serviceStatusNotStarted, e.g. bot-strategy#1123 before its install):
+  // neutral, not stale and not an error.
+  const notStarted = status === SERVICE_NOT_STARTED;
   const statusClass = displayStatus === "healthy" || displayStatus === "active"
     ? "active"
-    : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded" : "unknown";
+    : displayStatus === "inactive" ? "inactive" : displayStatus === "degraded" ? "degraded"
+    : notStarted ? "not-started" : "unknown";
   const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
-  const stale = status === "stale" || isStale(updatedAt, target.stale_after_secs);
+  const stale = !notStarted && (status === "stale" || isStale(updatedAt, target.stale_after_secs));
   const pnlTodayValue = parseNumber(data.pnl_today);
   // "Equity total" is capital, so it goes through the same book-aware
   // helper the fleet total and the sparkline use: a book's capital lives
@@ -927,9 +939,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
   );
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.classList.toggle("accumulator", accumulator !== null);
-  // Full-row card like the other two-venue holders: the points-hedge
-  // section plus the KPI panel and positions do not read in a quarter
-  // track (bot-strategy#1046).
+  // Marks the points-hedge card (bot-strategy#1046). It used to force a
+  // full row; the grid is now a fixed two columns, so it sits in a
+  // half-width track like every other card.
   card.classList.toggle("hedge-holder", isHedgeHolderStatus(data));
   card.style.animationDelay = `${index * 0.04}s`;
 
@@ -950,8 +962,18 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const chartEmptyEl = card.querySelector('[data-field="equity-empty"]');
 
   nameEl.textContent = target.name || target.service || "debot";
-  statusEl.textContent = displayStatus;
+  statusEl.textContent = notStarted ? "not started" : displayStatus;
   statusEl.className = `status-pill ${statusClass}`;
+  statusEl.title = notStarted
+    ? "The service has not written its status object yet: configured on the dashboard ahead of its install."
+    : "";
+  const noticeEl = card.querySelector('[data-field="notice"]');
+  if (noticeEl) {
+    noticeEl.hidden = !notStarted;
+    noticeEl.textContent = notStarted
+      ? `Not started: no status from ${target.service || "this service"} yet. The card fills in once the service is installed and publishes its first status.`
+      : "";
+  }
 
   // Bucket badge: the card sits inside its bucket group already, but the
   // badge keeps the classification attached to the card when it is read
@@ -1400,7 +1422,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (hedgeViewEl) {
     hedgeViewEl.hidden = hedge === null;
     if (hedge) {
-      renderHedgeHolderStatus(card, hedge);
+      renderHedgeHolderStatus(card, hedge, data);
       // Lifetime trade stats are a pairtrade concept; a hedge holder
       // reports none and the empty block would read as "no trades".
       for (const field of ["trading-stats-header", "trading-stats"]) {
@@ -2621,7 +2643,22 @@ const isHedgeHolderFeedBlind = (data) =>
 // (points / cost since ARM) panel; this block answers the hedge-specific
 // questions: are the legs equal, how far is each venue from liquidating
 // its side, and what has the book cost since ARM.
-const hedgeHolderViewModel = (hedge, now = Date.now()) => {
+// Leg names come from the producer (`instance`, the env suffix; `exchange`,
+// the venue kind) so the second holder — Arcus long / Lighter Core short
+// (bot-strategy#1123) — is not drawn as Robinhood.
+const HEDGE_INSTANCE_LABELS = { rh: "RH", core: "Core", arcus: "Arcus" };
+const hedgeLegLabel = (leg) => {
+  const instance = leg && typeof leg.instance === "string" ? leg.instance.trim() : "";
+  const exchange = leg && typeof leg.exchange === "string" ? leg.exchange.trim() : "";
+  const known = HEDGE_INSTANCE_LABELS[instance.toLowerCase()];
+  if (known) return known;
+  const raw = instance || exchange;
+  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : null;
+};
+
+// `top` is the status object around the block: the primary symbol and
+// the subsidy (points) ledger live at its top level.
+const hedgeHolderViewModel = (hedge, now = Date.now(), top = {}) => {
   const legs = hedge.legs || {};
   const long = legs.long || {};
   const short = legs.short || {};
@@ -2644,12 +2681,54 @@ const hedgeHolderViewModel = (hedge, now = Date.now()) => {
     mode = { label: hedge.kill_switch ? "Off (kill switch)" : "Off", tone: "neutral" };
   }
   const qtyText = (q) => (Number.isFinite(q) ? q.toFixed(5).replace(/0+$/, "").replace(/\.$/, "") : "-");
+  const books = hedge.books && typeof hedge.books === "object" ? hedge.books : {};
+  const bookSymbols = Object.keys(books).sort();
+  // The top-level legs describe the primary book. The API does not pass
+  // the producer's top-level `symbol` through, so name it from the books:
+  // the only one, or the one whose target and long mark the legs carry.
+  const primaryBook = bookSymbols.find((sym) => {
+    const b = books[sym] || {};
+    return holderNumber(b.target_qty) === targetQty && holderNumber(b.mark_long) === holderNumber(long.mark);
+  });
+  const symbol =
+    bookSymbols.length === 1
+      ? bookSymbols[0]
+      : primaryBook || (top && typeof top.symbol === "string" && top.symbol.trim() ? top.symbol.trim() : "");
+  const unit = symbol ? ` ${symbol}` : "";
   const book =
     targetQty > 0
-      ? `${qtyText(longQty)} / ${qtyText(shortQty)} BTC (target ${qtyText(targetQty)}${targetUsd === null ? "" : ` ≈ ${formatUsdc(targetUsd)}`})`
+      ? `${qtyText(longQty)} / ${qtyText(shortQty)}${unit} (target ${qtyText(targetQty)}${targetUsd === null ? "" : ` ≈ ${formatUsdc(targetUsd)}`})`
       : longQty > 0 || shortQty > 0
-        ? `${qtyText(longQty)} / ${qtyText(shortQty)} BTC (no target)`
+        ? `${qtyText(longQty)} / ${qtyText(shortQty)}${unit} (no target)`
         : "flat";
+  // The multi-symbol holder (pairtrade#352): the rows here describe the
+  // primary symbol, so name every book it manages when there is more
+  // than one.
+  let booksText = null;
+  if (bookSymbols.length > 1) {
+    const on = bookSymbols.filter((sym) => books[sym] && books[sym].mode === "On").length;
+    booksText = `${bookSymbols.length} (${on} On): ${bookSymbols.join(", ")}`;
+  }
+  const uncertainSymbols =
+    hedge.uncertain_orders && typeof hedge.uncertain_orders === "object"
+      ? Object.keys(hedge.uncertain_orders).sort()
+      : [];
+  const uncertain = uncertainSymbols.length > 0 ? `${uncertainSymbols.join(", ")} awaiting the venue` : null;
+  const longName = hedgeLegLabel(long);
+  const shortName = hedgeLegLabel(short);
+  // Points come only from the producer's subsidy ledger, which it fills
+  // from the long account's points history — and only for a Lighter
+  // long. An Arcus long has no collector yet (bot-strategy#1123), so the
+  // card says n/a rather than borrowing another account's series.
+  const unitsTotal =
+    top && top.subsidy && Number.isFinite(top.subsidy.units_total) ? Number(top.subsidy.units_total) : null;
+  const longExchange = typeof long.exchange === "string" ? long.exchange.toLowerCase() : "";
+  const points =
+    unitsTotal !== null
+      ? { label: formatUnits(unitsTotal, top.subsidy.unit || "points"), title: "From the bot's subsidy ledger: the long account's points since ARM." }
+      : longExchange === "arcus" || String(long.instance || "").toLowerCase() === "arcus"
+        ? { label: "n/a", title: "Arcus points are not collected yet (bot-strategy#1123); the G0 readout reads them from Arcus directly." }
+        : { label: "n/a", title: "The bot reports no points ledger (none until the first ARM with a points baseline)." };
   const netOver = netTol !== null && Math.abs(netUsd) > netTol;
   const net = {
     label: Math.abs(netUsd) < 0.5 ? "yes" : `off by ${formatSignedUsdc(netUsd)}${netTol === null ? "" : ` (tol ${formatUsdc(netTol)})`}`,
@@ -2683,23 +2762,46 @@ const hedgeHolderViewModel = (hedge, now = Date.now()) => {
     feed = `${hedge.feed_problem} · ${age}`;
   }
   return {
+    header: longName && shortName ? `Points hedge (${longName} long / ${shortName} short)` : "Points hedge",
+    headroomLabel: `Liq. headroom (${longName || "long"} / ${shortName || "short"})`,
+    basisLabel: `Basis (${longName || "long"} − ${shortName || "short"})`,
     mode,
     book,
+    books: booksText,
     net,
     headroom,
     basis,
     pnl,
+    points,
+    uncertain,
     halt: halted ? String(hedge.halt_reason || "halted") : null,
     feed,
   };
 };
 
-const renderHedgeHolderStatus = (card, hedge) => {
-  const view = hedgeHolderViewModel(hedge);
+const renderHedgeHolderStatus = (card, hedge, top = {}) => {
+  const view = hedgeHolderViewModel(hedge, Date.now(), top);
   const setTone = (el, tone) => {
     el.classList.remove("tone-ok", "tone-warn", "tone-neutral");
     el.classList.add(`tone-${tone}`);
   };
+  const setText = (field, text) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (el) el.textContent = text;
+    return el;
+  };
+  setText("hedge-header", view.header);
+  setText("hedge-headroom-label", view.headroomLabel);
+  setText("hedge-basis-label", view.basisLabel);
+  const pointsEl = setText("hedge-points", view.points.label);
+  if (pointsEl) pointsEl.title = view.points.title;
+  const toggleRow = (rowField, field, text) => {
+    const rowEl = card.querySelector(`[data-field="${rowField}"]`);
+    if (rowEl) rowEl.hidden = text === null;
+    setText(field, text === null ? "" : text);
+  };
+  toggleRow("hedge-books-row", "hedge-books", view.books);
+  toggleRow("hedge-uncertain-row", "hedge-uncertain", view.uncertain);
   const modeEl = card.querySelector('[data-field="hedge-mode"]');
   if (modeEl) {
     modeEl.textContent = view.mode.label;
@@ -2844,8 +2946,12 @@ const renderBookStatus = (card, book, options) => {
 };
 
 const isTargetUnhealthy = (target) => {
+  // A service that has not been installed yet is not a service that went
+  // down (bot-strategy#1123): it is configured ahead of its install.
   const serviceUnhealthy = Boolean(
-    target.service_status && target.service_status !== "active",
+    target.service_status &&
+      target.service_status !== "active" &&
+      target.service_status !== SERVICE_NOT_STARTED,
   );
   const accumulator = isAccumulatorStatus(target.status)
     ? target.status.accumulator

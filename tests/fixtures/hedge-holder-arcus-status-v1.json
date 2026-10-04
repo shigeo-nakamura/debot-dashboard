@@ -1,0 +1,85 @@
+{
+  "ts": 1791300000,
+  "updated_at": "2026-10-06T14:40:00+00:00",
+  "process_started_at": 1791290000,
+  "bot": "xvenue_hedge_holder",
+  "id": "xvenue_hedge_holder",
+  "dex": "Arcus / Lighter Core",
+  "symbol": "QQQ",
+  "dry_run": false,
+  "kill_switch_active": false,
+  "pnl_total": 4980.0,
+  "pnl_today": -1.5,
+  "pnl_source": "equity",
+  "positions_ready": true,
+  "position_count": 2,
+  "has_position": true,
+  "positions": [
+    { "symbol": "QQQ (arcus)", "side": "long", "size": "9.973", "entry_price": null },
+    { "symbol": "QQQ (core)", "side": "short", "size": "9.973", "entry_price": null }
+  ],
+  "hedge_holder": {
+    "mode": "On",
+    "halted": false,
+    "halt_reason": null,
+    "kill_switch": false,
+    "target_qty": 9.973,
+    "target_notional_usd": 7500.0,
+    "armed_at": 1791295000,
+    "exited_at": null,
+    "exit_reason": null,
+    "cycles": 1,
+    "net_qty": 0.0,
+    "net_usd": 0.0,
+    "net_tolerance_usd": 3000.0,
+    "basis_bps": 1.2,
+    "equity_total_usd": 4980.0,
+    "equity_at_arm_usd": 4983.0,
+    "pnl_since_arm_usd": -3.0,
+    "points_at_arm": null,
+    "feed_problem": null,
+    "snapshot_at": 1791300000,
+    "config_fp": "a1b2c3d4e5f6",
+    "books": {
+      "QQQ": {
+        "armed_at": 1791295000,
+        "basis_bps": 1.2,
+        "exit_reason": null,
+        "long_qty": 9.973,
+        "mark_long": 752.1,
+        "mark_short": 752.01,
+        "mmr_pct": 2.0,
+        "mode": "On",
+        "net_qty": 0.0,
+        "net_usd": 0.0,
+        "short_mmr_pct": 2.0,
+        "short_qty": 9.973,
+        "target_notional_usd": 7500.0,
+        "target_qty": 9.973
+      }
+    },
+    "uncertain_orders": {},
+    "legs": {
+      "long": {
+        "exchange": "arcus",
+        "instance": "arcus",
+        "side": "long",
+        "qty": 9.973,
+        "notional_usd": 7500.7,
+        "mark": 752.1,
+        "equity_usd": 2480.0,
+        "liq_headroom_pct": 31.0
+      },
+      "short": {
+        "exchange": "lighter",
+        "instance": "core",
+        "side": "short",
+        "qty": 9.973,
+        "notional_usd": 7499.8,
+        "mark": 752.01,
+        "equity_usd": 2500.0,
+        "liq_headroom_pct": 31.3
+      }
+    }
+  }
+}

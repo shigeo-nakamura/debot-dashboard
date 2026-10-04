@@ -2398,8 +2398,16 @@ test("hedge holder view model: holding, lopsided, halted, flat", () => {
   const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/hedge-holder-status-v1.json`, "utf8"));
   assert.equal(context.__test.isHedgeHolderStatus(fixture), true);
   assert.equal(context.__test.isHedgeHolderHalted(fixture), false);
-  const held = context.__test.hedgeHolderViewModel(fixture.hedge_holder);
+  const held = context.__test.hedgeHolderViewModel(fixture.hedge_holder, Date.now(), fixture);
   assert.equal(held.mode.label, "Holding");
+  assert.equal(held.header, "Points hedge (RH long / Core short)");
+  assert.equal(held.headroomLabel, "Liq. headroom (RH / Core)");
+  assert.equal(held.basisLabel, "Basis (RH − Core)");
+  assert.equal(held.points.label, "7.00 points");
+  assert.equal(held.books, null);
+  assert.equal(held.uncertain, null);
+  // Without the surrounding status there is no symbol to name.
+  assert.equal(context.__test.hedgeHolderViewModel(fixture.hedge_holder).book, "0.247 / 0.247 (target 0.247 ≈ 20,000.0 USDC)");
   assert.equal(held.mode.tone, "ok");
   assert.equal(held.book, "0.247 / 0.247 BTC (target 0.247 ≈ 20,000.0 USDC)");
   assert.equal(held.net.label, "yes");
@@ -2478,6 +2486,9 @@ test("hedge holder view model: holding, lopsided, halted, flat", () => {
 
   // Flat and Off: nothing held, no target.
   const flat = context.__test.hedgeHolderViewModel({ mode: "Off", halted: false, target_qty: 0, legs: {} });
+  assert.equal(flat.header, "Points hedge");
+  assert.equal(flat.headroomLabel, "Liq. headroom (long / short)");
+  assert.equal(flat.points.label, "n/a");
   assert.equal(flat.mode.label, "Off");
   assert.equal(flat.mode.tone, "neutral");
   assert.equal(flat.book, "flat");
@@ -2523,6 +2534,90 @@ test("hedge holder renders into the card rows and counts as a fleet halt", () =>
   // A halted holder is an unhealthy target (services down), like a halted book.
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { ...fixture, hedge_holder: { ...fixture.hedge_holder, halted: true } } }), true);
   assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: fixture }), false);
+});
+
+// Second hedge holder (bot-strategy#1123): Arcus long / Lighter Core short
+// on QQQ. Same card, labelled from the legs; Arcus points are not
+// collected, so the points row is n/a rather than RH's series.
+test("arcus hedge holder: legs named from the producer, QQQ book, points n/a", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/hedge-holder-arcus-status-v1.json`, "utf8"));
+  const view = context.__test.hedgeHolderViewModel(fixture.hedge_holder, Date.now(), fixture);
+  assert.equal(view.header, "Points hedge (Arcus long / Core short)");
+  assert.equal(view.headroomLabel, "Liq. headroom (Arcus / Core)");
+  assert.equal(view.basisLabel, "Basis (Arcus − Core)");
+  assert.equal(view.mode.label, "Holding");
+  assert.equal(view.book, "9.973 / 9.973 QQQ (target 9.973 ≈ 7,500.0 USDC)");
+  assert.equal(view.headroom.label, "31.0% / 31.3%");
+  assert.equal(view.books, null);
+  assert.equal(view.points.label, "n/a");
+  assert.match(view.points.title, /Arcus points are not collected/);
+  // Even if a subsidy block appeared, the n/a branch is only for its absence.
+  const withLedger = context.__test.hedgeHolderViewModel(fixture.hedge_holder, Date.now(), {
+    ...fixture,
+    subsidy: { unit: "points", units_total: 1.5 },
+  });
+  assert.equal(withLedger.points.label, "1.50 points");
+  // The symbol falls back to the only book when the top level lacks it.
+  const noSymbol = context.__test.hedgeHolderViewModel(fixture.hedge_holder, Date.now(), { ...fixture, symbol: undefined });
+  assert.equal(noSymbol.book, "9.973 / 9.973 QQQ (target 9.973 ≈ 7,500.0 USDC)");
+  // An unsettled order names its symbol.
+  const uncertain = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, uncertain_orders: { QQQ: { leg: "long" } } },
+    Date.now(),
+    fixture,
+  );
+  assert.equal(uncertain.uncertain, "QQQ awaiting the venue");
+
+  const fields = new Map();
+  const card = { querySelector(selector) {
+    if (!fields.has(selector)) fields.set(selector, { textContent: "", title: "", hidden: null, classList: { add() {}, remove() {} } });
+    return fields.get(selector);
+  } };
+  context.__test.renderHedgeHolderStatus(card, fixture.hedge_holder, fixture);
+  const value = (name) => fields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("hedge-header"), "Points hedge (Arcus long / Core short)");
+  assert.equal(value("hedge-points"), "n/a");
+  assert.equal(fields.get('[data-field="hedge-books-row"]').hidden, true);
+  assert.equal(fields.get('[data-field="hedge-uncertain-row"]').hidden, true);
+});
+
+test("multi-symbol hedge holder lists its books", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/hedge-holder-status-v1.json`, "utf8"));
+  const view = context.__test.hedgeHolderViewModel(
+    { ...fixture.hedge_holder, books: { BTC: { mode: "On" }, META: { mode: "On" }, AMZN: { mode: "Off" } } },
+    Date.now(),
+    fixture,
+  );
+  assert.equal(view.books, "3 (2 On): AMZN, BTC, META");
+  assert.equal(view.book, "0.247 / 0.247 BTC (target 0.247 ≈ 20,000.0 USDC)");
+  // The API drops the producer's top-level symbol: the primary book is the
+  // one whose target and long mark the top-level legs carry.
+  const matched = context.__test.hedgeHolderViewModel(
+    {
+      ...fixture.hedge_holder,
+      books: {
+        BTC: { mode: "On", target_qty: 0.247, mark_long: 81349.4 },
+        META: { mode: "On", target_qty: 13.6, mark_long: 731.3 },
+      },
+    },
+    Date.now(),
+    { ...fixture, symbol: undefined },
+  );
+  assert.equal(matched.book, "0.247 / 0.247 BTC (target 0.247 ≈ 20,000.0 USDC)");
+});
+
+// A configured service with no status object yet renders as "not
+// started": not down, not stale, no error (bot-strategy#1123).
+test("a not-started target is neither unhealthy nor counted as down", () => {
+  const target = { name: "Arcus×Core QQQ hedge (#1123)", service: "debot-xvenue-hedge-arcus", service_status: "not_started", bucket: "subsidy" };
+  assert.equal(context.__test.isTargetUnhealthy(target), false);
+  assert.equal(context.__test.isTargetUnhealthy({ ...target, service_status: "stale" }), true);
+  context.__test.updateFleetSummary([target]);
+  assert.equal(fleetFields.get('[data-field="fleet-services-down"]').textContent, "0");
+  // The subsidy bucket's aggregate skips it without breaking.
+  const stats = context.__test.subsidyAggregateStats([{ target, index: 0 }]);
+  assert.equal(stats[0].label, "Cost paid");
+  assert.equal(stats[0].value, "-");
 });
 
 // ---- Arcus presence runtime (bot-strategy#1093) ----------------------------
