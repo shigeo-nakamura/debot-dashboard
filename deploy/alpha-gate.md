@@ -1,11 +1,18 @@
 # α candidates: gate progress instead of PnL
 
-`book-runtime-xsmom-695` (bot-strategy#695, readout 2026-10-02) and
-`engine-b-live` (#866) are α candidates: hypotheses with a gate that was frozen
+`engine-b-live` (#866) is an α candidate: hypotheses with a gate that was frozen
 before anyone looked at the data. Showing their running PnL, equity curve, win
 rate or CAGR is peeking, and peeking is how a pre-registered study stops being
 one (taxonomy §4.3). The card therefore hides those and shows only what the
 gate needs.
+
+**XSMOM is no longer an α candidate.** `book-runtime-xsmom-695` passed its
+pre-registered readout on 2026-10-08 (bot-strategy#695, VERDICT GO) and moved
+to the `alpha` bucket (taxonomy §4.4): its card shows PnL and equity, and a
+`gate:` block on it is now a config error (gates are valid only on
+`alpha_candidate`). The shadow track `xsmom-695-shadow` stays an α candidate.
+Blinding is decided by the bucket alone; whether a book is paper or live is
+read from `status.dry_run` / `pnl_source`, never from the service name.
 
 ## Configuration
 
