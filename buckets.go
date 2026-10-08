@@ -13,8 +13,12 @@ import (
 // bucket instead (bot-strategy#959).
 const (
 	BucketAlphaCandidate = "alpha_candidate"
-	BucketBeta           = "beta"
-	BucketSubsidy        = "subsidy"
+	// BucketAlpha is an α candidate whose pre-registered readout passed
+	// (taxonomy §4.4). Same benchmark (zero after costs), but the gate is
+	// closed, so its running result is shown instead of blinded.
+	BucketAlpha   = "alpha"
+	BucketBeta    = "beta"
+	BucketSubsidy = "subsidy"
 	// BucketUnclassified is assigned to a target whose service is not in
 	// the taxonomy and that does not declare `bucket:` in config. Such a
 	// target still renders a card (with its health) but is excluded from
@@ -33,14 +37,18 @@ var taxonomyBuckets = map[string]string{
 	"debot-pair-robinhood-lighter": BucketSubsidy,
 	"debot-xvenue-hedge-holder":    BucketSubsidy,
 	"debot-xvenue-hedge-arcus":     BucketSubsidy,
+	"debot-arcus-vol":              BucketSubsidy,
+	"debot-arcus-vol-gld":          BucketSubsidy,
+	"debot-arcus-vol-qqq":          BucketSubsidy,
+	"debot-arcus-vol-nvda":         BucketSubsidy,
 	"engine-b-live":                BucketAlphaCandidate,
-	"book-runtime-xsmom-695":       BucketAlphaCandidate,
+	"book-runtime-xsmom-695":       BucketAlpha,
 	"xsmom-695-shadow":             BucketAlphaCandidate,
 }
 
 func validBucket(bucket string) bool {
 	switch bucket {
-	case BucketAlphaCandidate, BucketBeta, BucketSubsidy:
+	case BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy:
 		return true
 	}
 	return false
@@ -50,7 +58,7 @@ func validBucket(bucket string) bool {
 // taxonomy's classification for the service (so the deployed config does
 // not have to repeat what the ledger already states), and falls back to
 // "unclassified" for a service the taxonomy does not know yet. An
-// explicit value must be one of the three buckets and must not
+// explicit value must be one of the four buckets and must not
 // contradict the taxonomy — a bot cannot be re-bucketed by editing the
 // dashboard config alone.
 func resolveBucket(target *TargetConfig) error {
@@ -66,8 +74,8 @@ func resolveBucket(target *TargetConfig) error {
 	}
 	if !validBucket(declared) {
 		return fmt.Errorf(
-			"unknown bucket %q (want %s, %s or %s)",
-			declared, BucketAlphaCandidate, BucketBeta, BucketSubsidy,
+			"unknown bucket %q (want %s, %s, %s or %s)",
+			declared, BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy,
 		)
 	}
 	if known && registered != declared {

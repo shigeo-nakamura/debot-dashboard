@@ -180,9 +180,9 @@ targets:
 #    s3_region: eu-central-1
 #    s3_key: debot/status/book-xsmom-695/status.json
 #    dex: "Lighter (zkLighter mainnet)"
-#    # No `gate:` here on purpose: this runtime follows the XSMOM shadow
-#    # track, and the 2026-10-02 readout is computed from the shadow
-#    # ledger below, not from the runtime's decisions (bot-strategy#964).
+#    # No `gate:`: this runtime passed its readout on 2026-10-08 and is in
+#    # the `alpha` bucket (bot-strategy#695), where a gate block is a config
+#    # error. Its card shows PnL and equity.
 
 # The XSMOM shadow-paper track (bot-strategy#695): the zero-capital watcher
 # whose daily marks the readout is computed from. It publishes only the

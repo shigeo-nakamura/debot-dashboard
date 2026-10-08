@@ -35,6 +35,7 @@ let hasRendered = false;
 // card mean anything against (bot-strategy#959). The region stays on
 // each card's "AWS Region" row.
 const BUCKET_LABELS = {
+  alpha: "α — passed its readout",
   alpha_candidate: "α candidate",
   beta: "β — risk premium",
   subsidy: "Subsidy capture",
@@ -45,6 +46,8 @@ const BUCKET_LABELS = {
 // benchmark is visible next to the numbers instead of living only in
 // the taxonomy document.
 const BUCKET_BENCHMARKS = {
+  alpha:
+    "Benchmark: zero after all costs. Promoted after its pre-registered readout passed, so the running result is shown (bot-strategy taxonomy §4.4).",
   alpha_candidate:
     "Benchmark: zero after all costs. Judged by its pre-registered gate on the readout date — not by running PnL.",
   beta: "Benchmark: buying the same exposure as spot and holding it.",
@@ -54,10 +57,11 @@ const BUCKET_BENCHMARKS = {
     "Not in the return-source taxonomy — add a row to docs/buckets.md. Excluded from every aggregate.",
 };
 
-// Stable display order: α candidates first (they are the ones with a
-// pending decision), then β, then subsidy, and anything unclassified
-// last so a missing taxonomy row is visible at the bottom.
-const BUCKET_ORDER = ["alpha_candidate", "beta", "subsidy", "unclassified"];
+// Stable display order: passed α first (real capital on a proven
+// signal), then α candidates (a pending decision), then β, then subsidy,
+// and anything unclassified last so a missing taxonomy row is visible at
+// the bottom.
+const BUCKET_ORDER = ["alpha", "alpha_candidate", "beta", "subsidy", "unclassified"];
 
 const RANGE_OPTIONS = [
   { id: "1d", label: "1D", ms: 24 * 60 * 60 * 1000 },
@@ -230,6 +234,12 @@ const reconcileBucketOrder = () => {
   });
 };
 
+// Blinding follows the bucket alone: only an α candidate, whose gate is
+// still open, hides its running result. A passed α (`alpha`) shows it,
+// and paper vs live is a separate question answered by `status.dry_run`
+// (bot-strategy#695, taxonomy §4.4).
+const isBlindedBucket = (bucket) => bucket === "alpha_candidate";
+
 // Per-bucket aggregates. Only figures that mean the same thing for every
 // card in the bucket belong here; there is deliberately no cross-bucket
 // total (bot-strategy#959).
@@ -237,6 +247,7 @@ const reconcileBucketOrder = () => {
 const bucketAggregateStats = (bucket, items) => {
   if (bucket === "subsidy") return subsidyAggregateStats(items);
   if (bucket === "alpha_candidate") return alphaAggregateStats(items);
+  if (bucket === "alpha") return passedAlphaAggregateStats(items);
   if (bucket !== "beta") return [];
   let equityTotal = 0;
   let equityCount = 0;
@@ -409,6 +420,53 @@ const subsidyAggregateStats = (items) => {
 // The α bucket aggregates nothing about performance — that is the whole
 // point. What it can usefully say is how many studies are running and
 // when the next decision is owed.
+// A passed α is judged against zero after costs, like a candidate, but its
+// result is no longer withheld (taxonomy §4.4). Only live targets count:
+// a DRY_RUN result is paper, and summing it with real capital would make
+// the header claim money that was never at risk. Paper vs live is read
+// from the status (`dry_run`), never from the service name.
+const passedAlphaAggregateStats = (items) => {
+  let equity = 0;
+  let pnl = 0;
+  let equityCount = 0;
+  let pnlCount = 0;
+  let paper = 0;
+  items.forEach(({ target }) => {
+    const data = target.status;
+    if (!data) return;
+    if (data.dry_run !== false) {
+      paper += 1;
+      return;
+    }
+    const e = snapshotEquityValue(data);
+    if (e !== null) {
+      equity += e;
+      equityCount += 1;
+    }
+    if (Number.isFinite(data.pnl_total)) {
+      pnl += Number(data.pnl_total);
+      pnlCount += 1;
+    }
+  });
+  const stats = [
+    {
+      label: "Live equity",
+      value: equityCount > 0 ? formatUsdc(equity) : "-",
+      title: "Venue equity of the live α books in this bucket. Paper (DRY_RUN) books are left out.",
+    },
+    {
+      label: "Live PnL",
+      value: pnlCount > 0 ? formatSignedUsdc(pnl) : "-",
+      signed: pnlCount > 0 ? pnl : null,
+      title: "Sum of each live book's reported total PnL (its own source: venue equity against its starting reference). Benchmark: zero after all costs.",
+    },
+  ];
+  if (paper > 0) {
+    stats.push({ label: "Paper", value: String(paper), title: "Targets in this bucket that report dry_run (not counted above)." });
+  }
+  return stats;
+};
+
 const alphaAggregateStats = (items) => {
   let nearest = null;
   let due = 0;
@@ -896,7 +954,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
   // PR #39). Halt *state* stays: it is safety, not performance.
-  const blindResult = bucketOf(target) === "alpha_candidate";
+  const blindResult = isBlindedBucket(bucketOf(target));
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
     : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded || arcusDegraded) ? "degraded" : status;
@@ -2878,6 +2936,7 @@ const bookViewModel = (book, { blindResult = false, pnlTotal = null, maxDd = nul
   const decision = last
     ? `${last.key} ${last.outcome}${lastSha ? ` · ${lastSha}` : ""}${lastReason ? ` · ${lastReason}` : ""}${last.attempts > 1 ? ` (${last.attempts} attempts)` : ""}`
     : "None yet";
+  const isNum = (v) => typeof v === "number" && Number.isFinite(v);
   const money = (v) => (typeof v === "number" && Number.isFinite(v) ? usdCurrency(v) : "-");
   // `+ 0` folds -0 (a negated zero max_dd) into 0, which
   // Intl.NumberFormat would otherwise render as "-$0.0".
@@ -2903,9 +2962,16 @@ const bookViewModel = (book, { blindResult = false, pnlTotal = null, maxDd = nul
     // the running result, so an α candidate gets none of them —
     // otherwise the one number the blinding exists to hide walks back in
     // through these rows (Codex, PR #39).
+    // Sub-values a producer has not reported yet (a live book before its
+    // first fill) are left out rather than rendered as "-", so a fresh
+    // book reads "$0.00" instead of looking broken.
     pnl: blindResult
       ? null
-      : `${signedMoney(pnlTotal)} · realized ${signedMoney(book.cum_realized_usd)} · unrealized ${signedMoney(book.unrealized_usd)}`,
+      : [
+          signedMoney(pnlTotal),
+          isNum(book.cum_realized_usd) ? `realized ${signedMoney(book.cum_realized_usd)}` : null,
+          isNum(book.unrealized_usd) ? `unrealized ${signedMoney(book.unrealized_usd)}` : null,
+        ].filter(Boolean).join(" · "),
     equity: blindResult
       ? null
       : `${money(book.equity_usd)} · max DD ${typeof maxDd === "number" && Number.isFinite(maxDd) ? signedMoney(-maxDd) : "-"}`,

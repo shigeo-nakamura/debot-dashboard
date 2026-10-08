@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, bucketAggregateStats, BUCKET_LABELS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2771,4 +2771,52 @@ test("arcus presence runtime contributes its lifetime net cost to the subsidy bu
   assert.equal(withFailed[0].value, context.__test.formatUsdc(38.8327));
   // Belt and braces: even a zero pnl published alongside the flag is ignored.
   assert.equal(context.__test.subsidyCostFallback({ arcus_vol: { measurements_available: false, pnl: { cum_net: 0 } } }), null);
+});
+
+test("a passed α (alpha bucket) shows its result; an α candidate stays blinded (bot-strategy#695)", () => {
+  assert.equal(context.__test.BUCKET_ORDER[0], "alpha");
+  assert.ok(context.__test.BUCKET_LABELS.alpha);
+  assert.match(context.__test.BUCKET_BENCHMARKS.alpha, /zero after all costs/);
+  const book = bookFixture.book;
+  const shown = context.__test.bookViewModel(book, { blindResult: false, pnlTotal: 12.5, maxDd: 3 });
+  assert.match(shown.pnl, /^\+\$12\.50*\b/);
+  assert.match(shown.equity, /max DD/);
+  const blinded = context.__test.bookViewModel(book, { blindResult: true, pnlTotal: 12.5, maxDd: 3 });
+  assert.equal(blinded.pnl, null);
+  assert.equal(blinded.equity, null);
+  assert.equal(context.__test.bucketOf({ bucket: "alpha" }), "alpha");
+  assert.equal(context.__test.isBlindedBucket("alpha"), false);
+  assert.equal(context.__test.isBlindedBucket("alpha_candidate"), true);
+  for (const b of ["beta", "subsidy", "unclassified"]) assert.equal(context.__test.isBlindedBucket(b), false);
+});
+
+test("a fresh live XSMOM book before its first fill renders cleanly", () => {
+  const fresh = {
+    instance_id: "xsmom-695",
+    venue: "lighter",
+    equity_usd: 1000.01,
+    gross_usd: 0,
+    net_usd: 0,
+    positions_source: "venue",
+    equity_ready: true,
+    last_decision: null,
+    next_decision_key: "2026-10-11",
+    next_decision_at: "2026-10-11T00:30:00Z",
+    signal_status: "waiting_for_file",
+  };
+  const view = context.__test.bookViewModel(fresh, { blindResult: false, pnlTotal: 0, maxDd: null });
+  // Only the total is reported before the first fill: no "realized -" parts.
+  assert.match(view.pnl, /^\$0\.0+$/);
+  assert.match(view.equity, /^\$1,000\.0\d* · max DD /);
+  assert.equal(view.decision, "None yet");
+});
+
+test("the alpha bucket header counts live books only, keyed on dry_run", () => {
+  const live = { status: { dry_run: false, pnl_source: "venue_equity", pnl_total: 2.5, book: { equity_usd: 1002.5 } } };
+  const paper = { status: { dry_run: true, pnl_source: "paper", pnl_total: 9.9, book: { equity_usd: 1009.9 } } };
+  const stats = context.__test.bucketAggregateStats("alpha", [{ target: live, index: 0 }, { target: paper, index: 1 }]);
+  const byLabel = Object.fromEntries(stats.map((s) => [s.label, s.value]));
+  assert.match(byLabel["Live equity"], /1,002\.5/);
+  assert.match(byLabel["Live PnL"], /2\.5/);
+  assert.equal(byLabel["Paper"], "1");
 });

@@ -107,9 +107,19 @@ func TestNormalizeConfigRejectsGateOutsideTheAlphaCandidateBucket(t *testing.T) 
 		t.Fatalf("err = %v, want a bucket mismatch", err)
 	}
 
-	ok := Config{
+	// A passed α (bot-strategy#695, 2026-10-08) has no gate left to count
+	// against: a leftover `gate:` on its target is a config error.
+	promoted := Config{
 		Region:  "eu-central-1",
 		Targets: []TargetConfig{{Service: "book-runtime-xsmom-695", Gate: &cfg, S3Bucket: "b", S3Key: "k"}},
+	}
+	if err := normalizeConfig(&promoted); err == nil || !strings.Contains(err.Error(), "gate configured for a alpha target") {
+		t.Fatalf("err = %v, want a gate on an alpha target rejected", err)
+	}
+
+	ok := Config{
+		Region:  "eu-central-1",
+		Targets: []TargetConfig{{Service: "xsmom-695-shadow", Gate: &cfg, S3Bucket: "b", S3Key: "k"}},
 	}
 	if err := normalizeConfig(&ok); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -119,7 +129,7 @@ func TestNormalizeConfigRejectsGateOutsideTheAlphaCandidateBucket(t *testing.T) 
 	invalid.RequiredSamples = 0
 	rejected := Config{
 		Region:  "eu-central-1",
-		Targets: []TargetConfig{{Service: "book-runtime-xsmom-695", Gate: &invalid, S3Bucket: "b", S3Key: "k"}},
+		Targets: []TargetConfig{{Service: "xsmom-695-shadow", Gate: &invalid, S3Bucket: "b", S3Key: "k"}},
 	}
 	if err := normalizeConfig(&rejected); err == nil {
 		t.Fatal("invalid gate accepted at startup")
