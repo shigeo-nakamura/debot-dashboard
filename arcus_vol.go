@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +37,10 @@ type ArcusVolConfig struct {
 	// The runtime rewrites status.json about once a second, so a file
 	// older than this is a stalled or dead process. Default 20 s.
 	StaleAfterSecs int `yaml:"stale_after_secs"`
+	// Optional short display label for the venue account the runtime
+	// trades (e.g. "0xA2C7"): the consolidated Arcus panel groups its rows
+	// and subtotals by it. A label, never a full address.
+	WalletLabel string `yaml:"wallet_label"`
 }
 
 const (
@@ -64,8 +69,17 @@ func (c ArcusVolConfig) validate() error {
 	if c.StaleAfterSecs < 0 {
 		return errors.New("arcus_vol.stale_after_secs must be positive")
 	}
+	if !arcusVolWalletLabelRe.MatchString(c.WalletLabel) || arcusVolAddressRe.MatchString(c.WalletLabel) {
+		return errors.New("arcus_vol.wallet_label must be a short label (up to 16 of A-Z a-z 0-9 . _ -), not an address")
+	}
 	return nil
 }
+
+var (
+	arcusVolWalletLabelRe = regexp.MustCompile(`^[A-Za-z0-9._-]{0,16}$`)
+	// A 0x prefix followed by more than 8 hex digits reads as an address.
+	arcusVolAddressRe = regexp.MustCompile(`(?i)^0x[0-9a-f]{9,}`)
+)
 
 func (c ArcusVolConfig) staleAfter() int {
 	if c.StaleAfterSecs > 0 {
@@ -107,6 +121,15 @@ type ArcusVolStatus struct {
 	PendingUnres          int             `json:"pending_unresolved"`
 	Presence              *ArcusVolPres   `json:"presence"`
 	APIKey                *ArcusVolAPIKey `json:"api_key"`
+	// WalletLabel is the target's configured display label (empty = none).
+	WalletLabel string `json:"wallet_label,omitempty"`
+	// Session is the runtime's venue-session flag ("in" / "off"); empty
+	// when the runtime does not report one.
+	Session string `json:"session,omitempty"`
+	// PositionStopBps is the runtime's per-position stop (nil = off or not
+	// reported); PositionStopsToday how many fired this UTC day.
+	PositionStopBps    *float64 `json:"position_stop_bps,omitempty"`
+	PositionStopsToday *int64   `json:"position_stops_today,omitempty"`
 }
 
 type ArcusVolBook struct {
@@ -217,8 +240,11 @@ type arcusVolRaw struct {
 		CumTaker string `json:"cum_taker"`
 		Fills    int64  `json:"fills"`
 	} `json:"volume"`
-	CostPer1MUSD      *string           `json:"cost_per_1m_usd"`
-	PendingUnresolved []json.RawMessage `json:"pending_unresolved"`
+	CostPer1MUSD       *string           `json:"cost_per_1m_usd"`
+	PendingUnresolved  []json.RawMessage `json:"pending_unresolved"`
+	Session            *string           `json:"session"`
+	PositionStopBps    *string           `json:"position_stop_bps"`
+	PositionStopsToday *int64            `json:"position_stops_today"`
 }
 
 type arcusVolRawQuote struct {
@@ -467,6 +493,19 @@ func decodeArcusVol(payload []byte, cfg *ArcusVolConfig, now time.Time) (*ArcusV
 	if raw.CostPer1MUSD != nil {
 		s.CostPer1MUSD = optNumber(*raw.CostPer1MUSD)
 	}
+	if raw.Session != nil && (*raw.Session == "in" || *raw.Session == "off") {
+		s.Session = *raw.Session
+	}
+	if raw.PositionStopBps != nil {
+		s.PositionStopBps = optNumber(*raw.PositionStopBps)
+	}
+	if raw.PositionStopsToday != nil && *raw.PositionStopsToday >= 0 {
+		n := *raw.PositionStopsToday
+		s.PositionStopsToday = &n
+	}
+	if cfg != nil {
+		s.WalletLabel = cfg.WalletLabel
+	}
 	return s, raw.TSMs, bidID, askID, nil
 }
 
@@ -503,7 +542,7 @@ func fetchArcusVol(target TargetConfig, now time.Time, sample bool) TargetStatus
 	}
 	miss := func(state, errText string) TargetStatus {
 		r.Error = errText
-		a := &ArcusVolStatus{State: state}
+		a := &ArcusVolStatus{State: state, WalletLabel: cfg.WalletLabel}
 		p := observe(arcusVolSample{at: now})
 		a.Presence = &p
 		s.ArcusVol = a

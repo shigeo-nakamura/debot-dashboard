@@ -1071,3 +1071,105 @@ body::after {
 .panel-details > summary::-webkit-details-marker { display: none; }
 .panel-details > summary::before { content: "▸ "; }
 .panel-details[open] > summary::before { content: "▾ "; }
+
+/* Consolidated Arcus volume-bot panel (bot-strategy#1093): one full-width
+   panel per bucket with a row per market; a row expands to that market's
+   card. The table scrolls sideways inside the panel on narrow screens so
+   the page itself never scrolls horizontally. */
+.arcus-panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 18px;
+}
+
+.arcus-panel-header h3 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+
+.arcus-panel-totals,
+.arcus-panel-wallets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+.arcus-panel-wallet b {
+  margin-right: 4px;
+}
+
+.arcus-muted {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.arcus-panel-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.arcus-panel-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 860px;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.arcus-panel-table th,
+.arcus-panel-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.arcus-panel-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.arcus-panel-table .tone-ok { color: var(--success); }
+.arcus-panel-table .tone-warn,
+.arcus-panel-totals .tone-warn { color: var(--danger); }
+.arcus-panel-table .tone-neutral { color: var(--ink); }
+.arcus-panel-table .tone-caution { color: var(--warning); }
+
+/* A halted or stale market stands out across the whole row. */
+.arcus-row-warn {
+  background: rgba(220, 38, 38, 0.07);
+}
+
+.arcus-row-toggle {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px 0 0;
+  font: inherit;
+  color: var(--muted);
+}
+
+.arcus-panel-details {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.arcus-panel-details:empty {
+  display: none;
+}
+
+.arcus-panel .positive { color: var(--success); }
+.arcus-panel .negative { color: var(--danger); }

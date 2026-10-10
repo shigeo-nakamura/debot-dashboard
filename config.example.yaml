@@ -162,6 +162,9 @@ targets:
 #      # Optional: the runtime rewrites status.json about once a second;
 #      # an older file means a dead or hung process (default 20 s).
 #      stale_after_secs: 20
+#      # Optional short tag for the venue account; the consolidated Arcus
+#      # panel groups and subtotals its rows by it. Never a full address.
+#      wallet_label: "0xA2C7"
 # auth:
 #   username: admin
 #   password: change-me

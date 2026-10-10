@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2819,4 +2819,82 @@ test("the alpha bucket header counts live books only, keyed on dry_run", () => {
   assert.match(byLabel["Live equity"], /1,002\.5/);
   assert.match(byLabel["Live PnL"], /2\.5/);
   assert.equal(byLabel["Paper"], "1");
+});
+
+// ---- Consolidated Arcus panel (bot-strategy#1093) ----
+const arcusItem = (key, overrides = {}, target = {}) => ({
+  key,
+  target: { name: key, service: key, service_status: "active", bucket: "subsidy", ...target, status: { arcus_vol: { ...arcusFixture(), ...overrides } } },
+});
+
+test("arcus panel: totals, wallet subtotals, remaining-to-stop and state counts over six markets", () => {
+  const items = [
+    arcusItem("spy", { market: "SPY-USD", wallet_label: "0xA2C7", pnl: { ...arcusFixture().pnl, daily_net: -1.5, cum_net: -8.0, remaining_cum_usd: 42 }, volume: { ...arcusFixture().volume, day: 100000 }, position_stops_today: 1, position_stop_bps: "25", session: "in" }),
+    arcusItem("gld", { market: "GLD-USD", wallet_label: "0xA2C7", state: "halted", plan: "pull:halt", halt: "daily_stop", pnl: { ...arcusFixture().pnl, daily_net: -5.2, cum_net: -12, remaining_cum_usd: 8, cum_stop_usd: 20 }, volume: { ...arcusFixture().volume, day: 20000 } }),
+    arcusItem("nvda", { market: "NVDA-USD", wallet_label: "0x812B", pnl: { ...arcusFixture().pnl, daily_net: 2.25, cum_net: -17 }, volume: { ...arcusFixture().volume, day: 50000 }, position_stops_today: 2 }),
+    arcusItem("aapl", { market: "AAPL-USD", wallet_label: "0x812B", state: "stale", pnl: { ...arcusFixture().pnl, daily_net: 0.5, cum_net: 0.5 }, volume: { ...arcusFixture().volume, day: 5000 } }),
+    arcusItem("hood", { market: "HOOD-USD", wallet_label: "0x812B", state: "pulled", plan: "pull:shock", plan_reason: "shock", volume: { ...arcusFixture().volume, day: 0 }, pnl: { ...arcusFixture().pnl, daily_net: 0, cum_net: 0 } }),
+    // Unreadable status: no measurements, must not count as zeros.
+    arcusItem("slv", { market: "SLV-USD", wallet_label: "0x812B", state: "unavailable", measurements_available: false, pnl: undefined, volume: undefined, quotes: undefined }),
+  ];
+  const model = context.__test.arcusPanelModel(items);
+  const t = model.totals;
+  assert.equal(t.count, 6);
+  assert.equal(t.dayVol, 175000);
+  assert.equal(Math.round(t.dayNet * 100) / 100, -3.95);
+  assert.equal(Math.round(t.cumNet * 100) / 100, -36.5);
+  assert.equal(t.quoting, 2);
+  assert.equal(t.pulled, 1);
+  assert.equal(t.halted, 1);
+  assert.equal(t.stale, 2); // stale + unavailable
+  assert.equal(t.stopsToday, 3);
+  const w = Object.fromEntries(model.wallets.map((x) => [x.wallet, x]));
+  assert.equal(w["0xA2C7"].count, 2);
+  assert.equal(w["0xA2C7"].dayVol, 120000);
+  assert.equal(Math.round(w["0x812B"].dayNet * 100) / 100, 2.75);
+  // Rows sorted by wallet, then market.
+  assert.deepEqual(model.rows.map((r) => r.market), ["AAPL-USD", "HOOD-USD", "NVDA-USD", "SLV-USD", "GLD-USD", "SPY-USD"]);
+  const gld = model.rows.find((r) => r.market === "GLD-USD");
+  assert.equal(gld.halted, true);
+  assert.equal(gld.remainingCum, 8);
+  assert.equal(gld.cumStop, 20);
+  const slv = model.rows.find((r) => r.market === "SLV-USD");
+  assert.equal(slv.stale, true);
+  assert.equal(slv.dayNet, null);
+  assert.equal(slv.dayVol, null);
+  const html = context.__test.arcusPanelHtml(model, new Set(["gld"]));
+  assert.equal((html.match(/<tr class="arcus-row/g) || []).length, 6);
+  // Halted and stale rows stand out; the others do not.
+  assert.equal((html.match(/arcus-row arcus-row-warn/g) || []).length, 3);
+  assert.match(html, /1 halted/);
+  assert.match(html, /2 stale/);
+  assert.match(html, /HALTED \(daily stop\)/);
+  assert.match(html, /\$8\.00 left of \$20\.00/);
+  assert.match(html, /1 @25\.0 bp/);
+  assert.match(html, /<b>0xA2C7<\/b> 2/);
+  assert.match(html, /data-arcus-key="gld" aria-expanded="true"/);
+  assert.match(html, /data-arcus-key="spy" aria-expanded="false"/);
+});
+
+test("arcus panel: a single market renders without a wallet line; labels are escaped", () => {
+  const model = context.__test.arcusPanelModel([arcusItem("one", { market: "SPY-USD<script>" })]);
+  assert.equal(model.totals.count, 1);
+  assert.equal(model.wallets.length, 1);
+  assert.equal(model.wallets[0].wallet, "—");
+  const html = context.__test.arcusPanelHtml(model);
+  assert.equal((html.match(/<tr class="arcus-row/g) || []).length, 1);
+  assert.doesNotMatch(html, /arcus-panel-wallets/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /1 market</);
+  assert.match(html, /1 quoting/);
+  assert.doesNotMatch(html, /halted|stale/);
+});
+
+test("arcus panel: only arcus_vol targets join the panel", () => {
+  const isArcus = context.__test.isArcusVolTarget;
+  assert.equal(isArcus(arcusItem("a").target), true);
+  assert.equal(isArcus({ status: { pnl_total: 1 } }), false);
+  assert.equal(isArcus({ status: { bull_holder: {} } }), false);
+  assert.equal(isArcus({ status: null }), false);
+  assert.equal(isArcus(null), false);
 });
