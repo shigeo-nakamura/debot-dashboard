@@ -402,6 +402,11 @@ func TestArcusVolConfigValidation(t *testing.T) {
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", StaleAfterSecs: -1}},
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status"}, S3Bucket: "bucket", S3Key: "key"},
 		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status"}, BullHolder: &BullHolderConfig{StatusPath: "/tmp/other"}},
+		// A wallet label is a short display tag, never an address.
+		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", WalletLabel: "0xa2c78e14dfd5586444ce4fe28fc4e36308a066d6"}},
+		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", WalletLabel: "0xa2c78e14df"}},
+		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", WalletLabel: "wallet one"}},
+		{ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", WalletLabel: "abcdefghijklmnopq"}},
 	} {
 		target.Service = "debot-arcus-vol"
 		target.Region = "ap-northeast-1"
@@ -454,5 +459,54 @@ func TestConfigWithoutArcusVolLoadsUnchanged(t *testing.T) {
 	}
 	if len(example.Targets) == 0 {
 		t.Fatal("example config has no targets")
+	}
+}
+
+// The consolidated panel groups by an optional short wallet label and
+// shows the runtime's session and per-position stop. All three are
+// optional: absent in config or status, they stay absent in the API.
+func TestArcusVolWalletLabelSessionAndPositionStop(t *testing.T) {
+	defer arcusVolTrackerForTest()()
+	now := time.UnixMilli(1791055800000).Add(2 * time.Second)
+	for _, label := range []string{"", "0xA2C7", "main", "acct_1.b-2"} {
+		cfg := Config{Region: "ap-northeast-1", Targets: []TargetConfig{{
+			Service: "debot-arcus-vol", Bucket: BucketSubsidy,
+			ArcusVol: &ArcusVolConfig{StatusPath: "/tmp/status", WalletLabel: label},
+		}}}
+		if err := normalizeConfig(&cfg); err != nil {
+			t.Fatalf("label %q rejected: %v", label, err)
+		}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(arcusFixture(t), &raw); err != nil {
+		t.Fatal(err)
+	}
+	plain := fetchArcusVol(arcusTarget(t, arcusFixture(t), ArcusVolConfig{}), now, false)
+	out, _ := json.Marshal(plain.Status.ArcusVol)
+	for _, k := range []string{"wallet_label", "session", "position_stop_bps", "position_stops_today"} {
+		if strings.Contains(string(out), `"`+k+`"`) {
+			t.Fatalf("%s present without a source: %s", k, out)
+		}
+	}
+	raw["session"] = "off"
+	raw["position_stop_bps"] = "25"
+	raw["position_stops_today"] = 2
+	payload, _ := json.Marshal(raw)
+	r := fetchArcusVol(arcusTarget(t, payload, ArcusVolConfig{WalletLabel: "0xA2C7"}), now, false)
+	a := r.Status.ArcusVol
+	if a.WalletLabel != "0xA2C7" || a.Session != "off" || a.PositionStopBps == nil || *a.PositionStopBps != 25 ||
+		a.PositionStopsToday == nil || *a.PositionStopsToday != 2 {
+		t.Fatalf("decoded: %+v", a)
+	}
+	raw["session"] = "lunch"
+	payload, _ = json.Marshal(raw)
+	if got := fetchArcusVol(arcusTarget(t, payload, ArcusVolConfig{}), now, false).Status.ArcusVol.Session; got != "" {
+		t.Fatalf("unknown session value forwarded: %q", got)
+	}
+	// An unreadable status still carries the label, so its row stays in
+	// its wallet group.
+	miss := fetchArcusVol(arcusTarget(t, nil, ArcusVolConfig{WalletLabel: "0x812B"}), now, false)
+	if miss.Status.ArcusVol.State != "unavailable" || miss.Status.ArcusVol.WalletLabel != "0x812B" {
+		t.Fatalf("miss: %+v", miss.Status.ArcusVol)
 	}
 }

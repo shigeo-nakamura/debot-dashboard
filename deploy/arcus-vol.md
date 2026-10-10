@@ -47,6 +47,7 @@ managed by the deploy workflow), keeping every existing target:
       cum_stop_usd: 21           # = CUM_STOP_USD
       api_key_valid_until: "2027-03-30T06:32:00Z"
       stale_after_secs: 20       # optional, default 20
+      wallet_label: "0xA2C7"     # optional short tag (≤ 16 of A-Z a-z 0-9 . _ -), never a full address
 ```
 
 - `status_path` must be absolute; do not set `s3_bucket` / `s3_key` or
@@ -62,6 +63,25 @@ managed by the deploy workflow), keeping every existing target:
   runtime's lifetime net result (negated) feeds the bucket's "Cost paid"
   figure, the same way `trade_stats.pnl` does for pairtrade targets. Adding the service to the
   taxonomy is a bot-strategy ledger change first.
+
+## Consolidated panel (several markets)
+
+Every target with an `arcus_vol` block is listed in **one "Arcus volume bots"
+panel** at the top of its bucket instead of one card per market. The panel
+header shows today's volume and net, the cumulative net, how many markets are
+quoting / pulled / halted / stale (stale includes an unreadable status) and
+the position stops fired today, plus a subtotal per `wallet_label` when the
+targets carry one. Each market is a table row (state, session and offset,
+bid / ask distance, inventory, volume today with lifetime fills and maker
+share, PnL today with the room left before the daily stop, cumulative PnL
+with the room left before the cumulative stop, position stops, 24 h
+presence). A halted or stale row is tinted. The ▸ button on a row opens that
+market's full card underneath the table — the same card as before, so
+nothing is lost. The fleet summary, alerting and the subsidy bucket's
+aggregate still count each market as its own target. Session and position
+stop come from the runtime's `status.json` (`session`,
+`position_stop_bps`, `position_stops_today`); a runtime that does not report
+them shows "—" / "off".
 
 ## Rollout
 

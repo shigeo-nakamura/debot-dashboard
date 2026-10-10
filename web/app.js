@@ -127,22 +127,39 @@ const render = (data) => {
   for (const bucket of cardsByBucket.keys()) {
     const group = getOrCreateBucketGroup(bucket);
     const orderedCards = [];
+    const arcusItems = [];
     const items = cardsByBucket.get(bucket);
     items.forEach(({ target, index }) => {
       const key = keyForTarget(target, index);
+      // Arcus volume-bot targets are rows of one consolidated panel; their
+      // full cards live inside it, shown when a row is expanded
+      // (bot-strategy#1093).
+      const arcus = isArcusVolTarget(target);
+      const home = arcus ? getOrCreateArcusPanel(group).details : group.grid;
       let card = cardMap.get(key);
       if (!card) {
         card = createCard(key);
         cardMap.set(key, card);
-        group.grid.appendChild(card);
-      } else if (card.parentElement !== group.grid) {
-        // Re-bucketed target (config change) — move the card.
-        group.grid.appendChild(card);
+      }
+      if (card.parentElement !== home) {
+        // New card, re-bucketed target (config change), or a target that
+        // moved into or out of the Arcus panel.
+        if (!arcus) card.hidden = false;
+        home.appendChild(card);
       }
       updateCard(card, target, pollSecs, index, key);
       seenKeys.add(key);
-      orderedCards.push(card);
+      if (arcus) arcusItems.push({ target, key, card });
+      else orderedCards.push(card);
     });
+    if (arcusItems.length > 0) {
+      const panel = getOrCreateArcusPanel(group);
+      renderArcusPanel(panel, arcusItems);
+      orderedCards.unshift(panel.el);
+    } else if (group.arcusPanel) {
+      group.arcusPanel.el.remove();
+      group.arcusPanel = null;
+    }
     reconcileOrderInGrid(group.grid, orderedCards);
     const countEl = group.container.querySelector('[data-field="bucket-count"]');
     if (countEl) {
@@ -3162,6 +3179,185 @@ const renderArcusVolStatus = (card, a, status) => {
     haltRowEl.hidden = view.halt === null;
     haltEl.textContent = view.halt === null ? "" : view.halt;
   }
+};
+
+// ---- Consolidated Arcus panel (bot-strategy#1093) -------------------------
+// One panel for every Arcus volume-bot target of a bucket: totals, per-wallet
+// subtotals and a row per market. Each row expands to that market's full
+// card, which keeps rendering exactly as before (and keeps feeding the fleet
+// summary and the bucket aggregate per instance).
+const isArcusVolTarget = (target) => Boolean(target && isArcusVolStatus(target.status));
+
+const arcusPanelRow = (target, key) => {
+  const a = target.status.arcus_vol;
+  const status = target.service_status || "unknown";
+  const view = arcusVolViewModel(a, status);
+  const measured = a.measurements_available !== false;
+  const pnl = (measured && a.pnl) || {};
+  const vol = (measured && a.volume) || {};
+  const q = (measured && a.quotes) || {};
+  const stale = a.state === "stale" || a.state === "unavailable" || status === "stale";
+  const halted = !stale && a.state === "halted";
+  const quoting = !stale && !halted && a.state === "quoting";
+  const samples = a.presence ? optNumber(a.presence.samples) : null;
+  return {
+    key,
+    market: a.market || target.name || "?",
+    wallet: typeof a.wallet_label === "string" && a.wallet_label ? a.wallet_label : "—",
+    state: view.state,
+    stale,
+    halted,
+    quoting,
+    session: a.session === "in" ? "session" : a.session === "off" ? "off-hours" : "—",
+    offsetBps: measured ? optNumber(a.quote_offset_bps) : null,
+    bidBps: q.bid ? optNumber(q.bid.dist_touch_bps) : null,
+    askBps: q.ask ? optNumber(q.ask.dist_touch_bps) : null,
+    inventoryUsd: measured && a.inventory ? optNumber(a.inventory.usd) : null,
+    dayVol: optNumber(vol.day),
+    fills: optNumber(vol.fills),
+    makerShare: optNumber(vol.maker_share),
+    dayNet: optNumber(pnl.daily_net),
+    cumNet: optNumber(pnl.cum_net),
+    cumStop: optNumber(pnl.cum_stop_usd),
+    remainingCum: optNumber(pnl.remaining_cum_usd),
+    remainingDaily: optNumber(pnl.remaining_daily_usd),
+    stopsToday: optNumber(a.position_stops_today),
+    stopBps: optNumber(a.position_stop_bps),
+    presence: samples !== null && samples > 0 ? optNumber(a.presence.quoting_fraction) : null,
+  };
+};
+
+const arcusAddTotals = (acc, row) => {
+  acc.count += 1;
+  if (row.dayVol !== null) acc.dayVol += row.dayVol;
+  if (row.dayNet !== null) acc.dayNet += row.dayNet;
+  if (row.cumNet !== null) acc.cumNet += row.cumNet;
+  return acc;
+};
+
+// Pure: the panel's numbers from `[{ target, key }]`. Unmeasured figures
+// are skipped, never counted as zero.
+const arcusPanelModel = (items) => {
+  const rows = items.map(({ target, key }) => arcusPanelRow(target, key));
+  rows.sort((a, b) => a.wallet.localeCompare(b.wallet) || a.market.localeCompare(b.market));
+  const totals = { count: 0, dayVol: 0, dayNet: 0, cumNet: 0, quoting: 0, pulled: 0, halted: 0, stale: 0, stopsToday: 0 };
+  const wallets = new Map();
+  rows.forEach((row) => {
+    arcusAddTotals(totals, row);
+    if (row.stale) totals.stale += 1;
+    else if (row.halted) totals.halted += 1;
+    else if (row.quoting) totals.quoting += 1;
+    else totals.pulled += 1;
+    if (row.stopsToday !== null) totals.stopsToday += row.stopsToday;
+    if (!wallets.has(row.wallet)) wallets.set(row.wallet, { wallet: row.wallet, count: 0, dayVol: 0, dayNet: 0, cumNet: 0 });
+    arcusAddTotals(wallets.get(row.wallet), row);
+  });
+  return { rows, totals, wallets: Array.from(wallets.values()) };
+};
+
+const arcusSignedClass = (n) => (n === null || n === 0 ? "" : n > 0 ? "positive" : "negative");
+const arcusPct = (n) => (n === null ? "—" : `${Math.round(n * 100)}%`);
+const arcusDist = (n) => (n === null ? "—" : n.toFixed(1));
+
+// Pure: HTML for the panel body. `expanded` holds the row keys whose card
+// is open.
+const arcusPanelHtml = (model, expanded = new Set()) => {
+  const t = model.totals;
+  const money = (n) => escapeHtml(arcusMoney(n));
+  const labelled = model.wallets.some((w) => w.wallet !== "—");
+  const walletLine = labelled
+    ? `<div class="arcus-panel-wallets">${model.wallets.map((w) =>
+      `<span class="arcus-panel-wallet"><b>${escapeHtml(w.wallet)}</b> ${w.count} · ${escapeHtml(arcusUsd0(w.dayVol))} today · <span class="${arcusSignedClass(w.dayNet)}">${money(w.dayNet)}</span> today · <span class="${arcusSignedClass(w.cumNet)}">${money(w.cumNet)}</span> cum</span>`).join("")}</div>`
+    : "";
+  const counts = [
+    `${t.quoting} quoting`,
+    t.pulled ? `${t.pulled} pulled` : "",
+    t.halted ? `<span class="tone-warn">${t.halted} halted</span>` : "",
+    t.stale ? `<span class="tone-warn">${t.stale} stale</span>` : "",
+  ].filter(Boolean).join(" · ");
+  const rows = model.rows.map((r) => {
+    const rowTone = r.stale || r.halted ? " arcus-row-warn" : "";
+    const open = expanded.has(r.key);
+    const key = escapeHtml(r.key);
+    const cum = r.cumStop === null
+      ? money(r.cumNet)
+      : `${money(r.cumNet)}<div class="arcus-muted">${money(r.remainingCum)} left of ${money(r.cumStop)}</div>`;
+    const stops = r.stopBps === null ? "off" : `${r.stopsToday === null ? 0 : r.stopsToday} @${arcusDist(r.stopBps)} bp`;
+    return `<tr class="arcus-row${rowTone}" data-arcus-row="${key}">
+      <td><button type="button" class="arcus-row-toggle" data-arcus-key="${key}" aria-expanded="${open}" title="Show / hide this market's card">${open ? "▾" : "▸"}</button> <b>${escapeHtml(r.market)}</b><div class="arcus-muted">${escapeHtml(r.wallet)}</div></td>
+      <td class="tone-${escapeHtml(r.state.tone)}">${escapeHtml(r.state.label)}</td>
+      <td>${escapeHtml(r.session)}<div class="arcus-muted">${r.offsetBps === null ? "—" : `${arcusDist(r.offsetBps)} bp`}</div></td>
+      <td>${arcusDist(r.bidBps)} / ${arcusDist(r.askBps)}</td>
+      <td>${money(r.inventoryUsd)}</td>
+      <td>${escapeHtml(arcusUsd0(r.dayVol))}<div class="arcus-muted">${r.fills === null ? "—" : r.fills} fills${r.makerShare === null ? "" : ` · ${arcusPct(r.makerShare)} maker`}</div></td>
+      <td class="${arcusSignedClass(r.dayNet)}">${money(r.dayNet)}<div class="arcus-muted">${r.remainingDaily === null ? "" : `${money(r.remainingDaily)} left`}</div></td>
+      <td class="${arcusSignedClass(r.cumNet)}">${cum}</td>
+      <td>${escapeHtml(stops)}</td>
+      <td>${arcusPct(r.presence)}</td>
+    </tr>`;
+  }).join("");
+  return `
+    <header class="arcus-panel-header">
+      <h3>Arcus volume bots <span class="arcus-muted">${t.count} ${t.count === 1 ? "market" : "markets"}</span></h3>
+      <div class="arcus-panel-totals">
+        <span>Today ${escapeHtml(arcusUsd0(t.dayVol))} · <span class="${arcusSignedClass(t.dayNet)}">${money(t.dayNet)}</span></span>
+        <span>Cumulative <span class="${arcusSignedClass(t.cumNet)}">${money(t.cumNet)}</span></span>
+        <span>${counts}</span>
+        <span>Position stops today ${t.stopsToday}</span>
+      </div>
+      ${walletLine}
+    </header>
+    <div class="arcus-panel-scroll">
+      <table class="arcus-panel-table">
+        <thead><tr><th>Market</th><th>State</th><th>Session · offset</th><th title="Distance of the resting bid / ask from the touch">Bid / ask bp</th><th>Inventory</th><th title="Volume today; fills and maker share are lifetime">Volume today</th><th title="Net of fees; room left before the daily stop">PnL today</th><th title="Room left before the cumulative stop">PnL cumulative</th><th title="Position stops fired today @ threshold">Stops</th><th title="Share of the last 24 h quoting both sides (dashboard sampling)">Presence 24h</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+};
+
+const getOrCreateArcusPanel = (group) => {
+  if (group.arcusPanel) return group.arcusPanel;
+  const el = document.createElement("section");
+  el.className = "arcus-panel";
+  el.setAttribute("aria-label", "Arcus volume bots");
+  el.innerHTML = '<div data-field="arcus-panel-body"></div><div class="arcus-panel-details" data-field="arcus-panel-details"></div>';
+  const panel = {
+    el,
+    body: el.querySelector('[data-field="arcus-panel-body"]'),
+    details: el.querySelector('[data-field="arcus-panel-details"]'),
+    expanded: new Set(),
+    cards: new Map(),
+  };
+  el.addEventListener("click", (event) => {
+    const toggle = event.target && event.target.closest ? event.target.closest("button[data-arcus-key]") : null;
+    if (!toggle) return;
+    const key = toggle.getAttribute("data-arcus-key");
+    const open = !panel.expanded.has(key);
+    if (open) panel.expanded.add(key);
+    else panel.expanded.delete(key);
+    const card = panel.cards.get(key);
+    if (card) card.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "▾" : "▸";
+  });
+  group.arcusPanel = panel;
+  return panel;
+};
+
+const renderArcusPanel = (panel, items) => {
+  const model = arcusPanelModel(items);
+  const live = new Set(items.map((item) => item.key));
+  for (const key of Array.from(panel.expanded)) {
+    if (!live.has(key)) panel.expanded.delete(key);
+  }
+  panel.cards = new Map(items.map(({ key, card }) => [key, card]));
+  panel.body.innerHTML = arcusPanelHtml(model, panel.expanded);
+  // Cards follow the table order; only expanded ones are visible.
+  const order = model.rows.map((row) => panel.cards.get(row.key)).filter(Boolean);
+  order.forEach((card) => {
+    card.hidden = !panel.expanded.has(card.dataset.key);
+  });
+  reconcileOrderInGrid(panel.details, order);
 };
 
 const formatHype = (value) => {
