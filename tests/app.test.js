@@ -2948,6 +2948,25 @@ test("arcus panel: a stale status from yesterday adds nothing to today's totals"
   assert.equal(unread.rows[0].stale, true);
 });
 
+test("arcus panel: a healthy row between backend polls is not STALE (no flicker)", () => {
+  // stale_after 20 s against a 20 s backend poll: the snapshot the browser
+  // holds is routinely 21-40 s old although the backend read it fresh.
+  const nowMs = Date.parse("2026-10-11T19:06:00Z");
+  const nowS = nowMs / 1000;
+  const row = (age, poll) =>
+    context.__test.arcusPanelModel([arcusItem("nvda", {}, { stale_after_secs: 20, status: { ts: nowS - age } })], nowMs, poll).rows[0];
+  for (const age of [5, 21, 39, 44]) {
+    const r = row(age, 20);
+    assert.equal(r.stale, false, `age ${age}s`);
+    assert.notEqual(r.state.label, "STALE", `age ${age}s`);
+  }
+  // Beyond one backend poll + one browser poll past the limit it is stale.
+  assert.equal(row(46, 20).stale, true);
+  // A slower backend poll widens the allowance accordingly.
+  assert.equal(row(70, 60).stale, false);
+  assert.equal(row(90, 60).stale, true);
+});
+
 test("arcus panel: totals render — instead of $0 when no row supplies a value", () => {
   const model = context.__test.arcusPanelModel([
     arcusItem("slv", { state: "unavailable", measurements_available: false, pnl: undefined, volume: undefined, quotes: undefined }, { service_status: "stale" }),
