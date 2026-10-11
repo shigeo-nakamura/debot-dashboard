@@ -3188,7 +3188,16 @@ const renderArcusVolStatus = (card, a, status) => {
 // summary and the bucket aggregate per instance).
 const isArcusVolTarget = (target) => Boolean(target && isArcusVolStatus(target.status));
 
-const arcusPanelRow = (target, key) => {
+// Epoch ms of the status file, from the generic header the backend fills
+// from the runtime's ts_ms; null when unknown.
+const arcusStatusMs = (status) => {
+  if (status && Number.isFinite(status.ts) && status.ts > 0) return status.ts * 1000;
+  const parsed = status && status.updated_at ? Date.parse(status.updated_at) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const arcusUtcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+const arcusPanelRow = (target, key, nowMs = Date.now()) => {
   const a = target.status.arcus_vol;
   const status = target.service_status || "unknown";
   const view = arcusVolViewModel(a, status);
@@ -3196,7 +3205,16 @@ const arcusPanelRow = (target, key) => {
   const pnl = (measured && a.pnl) || {};
   const vol = (measured && a.volume) || {};
   const q = (measured && a.quotes) || {};
-  const stale = a.state === "stale" || a.state === "unavailable" || status === "stale";
+  const statusMs = arcusStatusMs(target.status);
+  const ageSecs = statusMs === null ? null : (nowMs - statusMs) / 1000;
+  const limit = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
+  // Today's figures count only from a fresh status written on today's UTC
+  // date: a paused or dead runtime leaves its last day's numbers frozen in
+  // the file (bot-strategy#1093, weekend-paused HOOD/SLV on 2026-10-11).
+  const today = statusMs !== null && arcusUtcDay(statusMs) === arcusUtcDay(nowMs);
+  const fresh = ageSecs !== null && ageSecs >= -60 && ageSecs <= limit;
+  const stale = a.state === "stale" || a.state === "unavailable" || status === "stale" || !fresh || !today;
+  const todayOf = (v) => (stale ? null : optNumber(v));
   const halted = !stale && a.state === "halted";
   const quoting = !stale && !halted && a.state === "quoting";
   const samples = a.presence ? optNumber(a.presence.samples) : null;
@@ -3213,34 +3231,39 @@ const arcusPanelRow = (target, key) => {
     bidBps: q.bid ? optNumber(q.bid.dist_touch_bps) : null,
     askBps: q.ask ? optNumber(q.ask.dist_touch_bps) : null,
     inventoryUsd: measured && a.inventory ? optNumber(a.inventory.usd) : null,
-    dayVol: optNumber(vol.day),
+    dayVol: todayOf(vol.day),
     fills: optNumber(vol.fills),
     makerShare: optNumber(vol.maker_share),
-    dayNet: optNumber(pnl.daily_net),
+    dayNet: todayOf(pnl.daily_net),
     cumNet: optNumber(pnl.cum_net),
     cumStop: optNumber(pnl.cum_stop_usd),
     remainingCum: optNumber(pnl.remaining_cum_usd),
-    remainingDaily: optNumber(pnl.remaining_daily_usd),
-    stopsToday: optNumber(a.position_stops_today),
+    remainingDaily: todayOf(pnl.remaining_daily_usd),
+    stopsToday: todayOf(a.position_stops_today),
     stopBps: optNumber(a.position_stop_bps),
     presence: samples !== null && samples > 0 ? optNumber(a.presence.quoting_fraction) : null,
   };
 };
 
+// A sum stays null until some row supplies a value: "—", never a fake $0.
+const arcusAddKnown = (sum, value) => (value === null ? sum : (sum === null ? 0 : sum) + value);
 const arcusAddTotals = (acc, row) => {
   acc.count += 1;
-  if (row.dayVol !== null) acc.dayVol += row.dayVol;
-  if (row.dayNet !== null) acc.dayNet += row.dayNet;
-  if (row.cumNet !== null) acc.cumNet += row.cumNet;
+  acc.dayVol = arcusAddKnown(acc.dayVol, row.dayVol);
+  acc.dayNet = arcusAddKnown(acc.dayNet, row.dayNet);
+  acc.cumNet = arcusAddKnown(acc.cumNet, row.cumNet);
+  if (row.stale && row.cumNet !== null) acc.cumLastKnown += 1;
   return acc;
 };
+const arcusEmptyTotals = () => ({ count: 0, dayVol: null, dayNet: null, cumNet: null, cumLastKnown: 0 });
 
 // Pure: the panel's numbers from `[{ target, key }]`. Unmeasured figures
-// are skipped, never counted as zero.
-const arcusPanelModel = (items) => {
-  const rows = items.map(({ target, key }) => arcusPanelRow(target, key));
+// are skipped, never counted as zero; stale or not-today rows add nothing
+// to today's figures, and their cumulative is the last known value.
+const arcusPanelModel = (items, nowMs = Date.now()) => {
+  const rows = items.map(({ target, key }) => arcusPanelRow(target, key, nowMs));
   rows.sort((a, b) => a.wallet.localeCompare(b.wallet) || a.market.localeCompare(b.market));
-  const totals = { count: 0, dayVol: 0, dayNet: 0, cumNet: 0, quoting: 0, pulled: 0, halted: 0, stale: 0, stopsToday: 0 };
+  const totals = { ...arcusEmptyTotals(), quoting: 0, pulled: 0, halted: 0, stale: 0, stopsToday: null };
   const wallets = new Map();
   rows.forEach((row) => {
     arcusAddTotals(totals, row);
@@ -3248,8 +3271,8 @@ const arcusPanelModel = (items) => {
     else if (row.halted) totals.halted += 1;
     else if (row.quoting) totals.quoting += 1;
     else totals.pulled += 1;
-    if (row.stopsToday !== null) totals.stopsToday += row.stopsToday;
-    if (!wallets.has(row.wallet)) wallets.set(row.wallet, { wallet: row.wallet, count: 0, dayVol: 0, dayNet: 0, cumNet: 0 });
+    totals.stopsToday = arcusAddKnown(totals.stopsToday, row.stopsToday);
+    if (!wallets.has(row.wallet)) wallets.set(row.wallet, { wallet: row.wallet, ...arcusEmptyTotals() });
     arcusAddTotals(wallets.get(row.wallet), row);
   });
   return { rows, totals, wallets: Array.from(wallets.values()) };
@@ -3265,24 +3288,27 @@ const arcusPanelHtml = (model, expanded = new Set()) => {
   const t = model.totals;
   const money = (n) => escapeHtml(arcusMoney(n));
   const labelled = model.wallets.some((w) => w.wallet !== "—");
+  const lastKnown = (n) => (n ? ` <span class="arcus-muted">(incl. ${n} last known)</span>` : "");
   const walletLine = labelled
     ? `<div class="arcus-panel-wallets">${model.wallets.map((w) =>
-      `<span class="arcus-panel-wallet"><b>${escapeHtml(w.wallet)}</b> ${w.count} · ${escapeHtml(arcusUsd0(w.dayVol))} today · <span class="${arcusSignedClass(w.dayNet)}">${money(w.dayNet)}</span> today · <span class="${arcusSignedClass(w.cumNet)}">${money(w.cumNet)}</span> cum</span>`).join("")}</div>`
+      `<span class="arcus-panel-wallet"><b>${escapeHtml(w.wallet)}</b> ${w.count} · ${escapeHtml(arcusUsd0(w.dayVol))} today · <span class="${arcusSignedClass(w.dayNet)}">${money(w.dayNet)}</span> today · <span class="${arcusSignedClass(w.cumNet)}">${money(w.cumNet)}</span> cum${lastKnown(w.cumLastKnown)}</span>`).join("")}</div>`
     : "";
   const counts = [
     `${t.quoting} quoting`,
     t.pulled ? `${t.pulled} pulled` : "",
     t.halted ? `<span class="tone-warn">${t.halted} halted</span>` : "",
-    t.stale ? `<span class="tone-warn">${t.stale} stale</span>` : "",
+    t.stale ? `<span class="tone-warn">${t.stale} stale/paused</span>` : "",
   ].filter(Boolean).join(" · ");
   const rows = model.rows.map((r) => {
     const rowTone = r.stale || r.halted ? " arcus-row-warn" : "";
     const open = expanded.has(r.key);
     const key = escapeHtml(r.key);
+    const cumNote = r.stale && r.cumNet !== null ? `<div class="arcus-muted">last known</div>` : "";
     const cum = r.cumStop === null
-      ? money(r.cumNet)
-      : `${money(r.cumNet)}<div class="arcus-muted">${money(r.remainingCum)} left of ${money(r.cumStop)}</div>`;
-    const stops = r.stopBps === null ? "off" : `${r.stopsToday === null ? 0 : r.stopsToday} @${arcusDist(r.stopBps)} bp`;
+      ? `${money(r.cumNet)}${cumNote}`
+      : `${money(r.cumNet)}<div class="arcus-muted">${money(r.remainingCum)} left of ${money(r.cumStop)}${r.stale ? " · last known" : ""}</div>`;
+    const stopsCount = r.stale ? "—" : r.stopsToday === null ? 0 : r.stopsToday;
+    const stops = r.stopBps === null ? "off" : `${stopsCount} @${arcusDist(r.stopBps)} bp`;
     return `<tr class="arcus-row${rowTone}" data-arcus-row="${key}">
       <td><button type="button" class="arcus-row-toggle" data-arcus-key="${key}" aria-expanded="${open}" title="Show / hide this market's card">${open ? "▾" : "▸"}</button> <b>${escapeHtml(r.market)}</b><div class="arcus-muted">${escapeHtml(r.wallet)}</div></td>
       <td class="tone-${escapeHtml(r.state.tone)}">${escapeHtml(r.state.label)}</td>
@@ -3301,9 +3327,9 @@ const arcusPanelHtml = (model, expanded = new Set()) => {
       <h3>Arcus volume bots <span class="arcus-muted">${t.count} ${t.count === 1 ? "market" : "markets"}</span></h3>
       <div class="arcus-panel-totals">
         <span>Today ${escapeHtml(arcusUsd0(t.dayVol))} · <span class="${arcusSignedClass(t.dayNet)}">${money(t.dayNet)}</span></span>
-        <span>Cumulative <span class="${arcusSignedClass(t.cumNet)}">${money(t.cumNet)}</span></span>
+        <span>Cumulative <span class="${arcusSignedClass(t.cumNet)}">${money(t.cumNet)}</span>${lastKnown(t.cumLastKnown)}</span>
         <span>${counts}</span>
-        <span>Position stops today ${t.stopsToday}</span>
+        <span>Position stops today ${t.stopsToday === null ? "—" : t.stopsToday}</span>
       </div>
       ${walletLine}
     </header>

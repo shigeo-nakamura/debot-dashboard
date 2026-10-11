@@ -2822,10 +2822,14 @@ test("the alpha bucket header counts live books only, keyed on dry_run", () => {
 });
 
 // ---- Consolidated Arcus panel (bot-strategy#1093) ----
-const arcusItem = (key, overrides = {}, target = {}) => ({
-  key,
-  target: { name: key, service: key, service_status: "active", bucket: "subsidy", ...target, status: { arcus_vol: { ...arcusFixture(), ...overrides } } },
-});
+// A fresh status written now unless `target.status` says otherwise.
+const arcusItem = (key, overrides = {}, target = {}) => {
+  const { status: header = {}, ...rest } = target;
+  return {
+    key,
+    target: { name: key, service: key, service_status: "active", bucket: "subsidy", stale_after_secs: 300, ...rest, status: { ts: Math.floor(Date.now() / 1000), ...header, arcus_vol: { ...arcusFixture(), ...overrides } } },
+  };
+};
 
 test("arcus panel: totals, wallet subtotals, remaining-to-stop and state counts over six markets", () => {
   const items = [
@@ -2840,9 +2844,11 @@ test("arcus panel: totals, wallet subtotals, remaining-to-stop and state counts 
   const model = context.__test.arcusPanelModel(items);
   const t = model.totals;
   assert.equal(t.count, 6);
-  assert.equal(t.dayVol, 175000);
-  assert.equal(Math.round(t.dayNet * 100) / 100, -3.95);
+  // The stale AAPL row adds nothing to today; its cum is the last known.
+  assert.equal(t.dayVol, 170000);
+  assert.equal(Math.round(t.dayNet * 100) / 100, -4.45);
   assert.equal(Math.round(t.cumNet * 100) / 100, -36.5);
+  assert.equal(t.cumLastKnown, 1);
   assert.equal(t.quoting, 2);
   assert.equal(t.pulled, 1);
   assert.equal(t.halted, 1);
@@ -2851,7 +2857,7 @@ test("arcus panel: totals, wallet subtotals, remaining-to-stop and state counts 
   const w = Object.fromEntries(model.wallets.map((x) => [x.wallet, x]));
   assert.equal(w["0xA2C7"].count, 2);
   assert.equal(w["0xA2C7"].dayVol, 120000);
-  assert.equal(Math.round(w["0x812B"].dayNet * 100) / 100, 2.75);
+  assert.equal(Math.round(w["0x812B"].dayNet * 100) / 100, 2.25);
   // Rows sorted by wallet, then market.
   assert.deepEqual(model.rows.map((r) => r.market), ["AAPL-USD", "HOOD-USD", "NVDA-USD", "SLV-USD", "GLD-USD", "SPY-USD"]);
   const gld = model.rows.find((r) => r.market === "GLD-USD");
@@ -2867,7 +2873,8 @@ test("arcus panel: totals, wallet subtotals, remaining-to-stop and state counts 
   // Halted and stale rows stand out; the others do not.
   assert.equal((html.match(/arcus-row arcus-row-warn/g) || []).length, 3);
   assert.match(html, /1 halted/);
-  assert.match(html, /2 stale/);
+  assert.match(html, /2 stale\/paused/);
+  assert.match(html, /\(incl\. 1 last known\)/);
   assert.match(html, /HALTED \(daily stop\)/);
   assert.match(html, /\$8\.00 left of \$20\.00/);
   assert.match(html, /1 @25\.0 bp/);
@@ -2888,6 +2895,62 @@ test("arcus panel: a single market renders without a wallet line; labels are esc
   assert.match(html, /1 market</);
   assert.match(html, /1 quoting/);
   assert.doesNotMatch(html, /halted|stale/);
+});
+
+test("arcus panel: a stale status from yesterday adds nothing to today's totals", () => {
+  // 2026-10-11 05:00Z: HOOD paused Sat 00:00Z, its file frozen on the 10-10
+  // daily net (bot-strategy#1093). The backend has not yet called it stale.
+  const nowMs = Date.parse("2026-10-11T05:00:00Z");
+  const nowS = nowMs / 1000;
+  const frozen = Date.parse("2026-10-10T23:59:58Z") / 1000;
+  const items = [
+    arcusItem("spy", { market: "SPY-USD", wallet_label: "0xA2C7", pnl: { ...arcusFixture().pnl, daily_net: -1.5, cum_net: -8 }, volume: { ...arcusFixture().volume, day: 100000 }, position_stops_today: 1, position_stop_bps: "25" }, { status: { ts: nowS - 5 } }),
+    arcusItem("hood", { market: "HOOD-USD", wallet_label: "0x812B", pnl: { ...arcusFixture().pnl, daily_net: -7.57, cum_net: -12, cum_stop_usd: 20, remaining_cum_usd: 8 }, volume: { ...arcusFixture().volume, day: 80000 }, position_stops_today: 3, position_stop_bps: "25" }, { status: { ts: frozen } }),
+  ];
+  const model = context.__test.arcusPanelModel(items, nowMs);
+  const t = model.totals;
+  assert.equal(t.dayVol, 100000);
+  assert.equal(t.dayNet, -1.5);
+  assert.equal(t.stopsToday, 1);
+  assert.equal(t.cumNet, -20);
+  assert.equal(t.cumLastKnown, 1);
+  assert.equal(t.stale, 1);
+  assert.equal(t.quoting, 1);
+  const hood = model.rows.find((r) => r.market === "HOOD-USD");
+  assert.equal(hood.stale, true);
+  assert.equal(hood.dayNet, null);
+  assert.equal(hood.dayVol, null);
+  assert.equal(hood.stopsToday, null);
+  assert.equal(hood.cumNet, -12);
+  const w = Object.fromEntries(model.wallets.map((x) => [x.wallet, x]));
+  assert.equal(w["0x812B"].dayNet, null);
+  assert.equal(w["0x812B"].cumNet, -12);
+  const html = context.__test.arcusPanelHtml(model);
+  assert.doesNotMatch(html, /7\.57/);
+  assert.match(html, /1 stale\/paused/);
+  assert.match(html, /\$8\.00 left of \$20\.00 · last known/);
+  assert.match(html, /— @25\.0 bp/);
+  assert.match(html, /<b>0x812B<\/b> 1 · — today · <span class="">—<\/span> today/);
+  // Same day but older than stale_after_secs: also left out.
+  const old = context.__test.arcusPanelModel([arcusItem("spy", {}, { status: { ts: nowS - 600 } })], nowMs);
+  assert.equal(old.totals.dayNet, null);
+  assert.equal(old.totals.stale, 1);
+});
+
+test("arcus panel: totals render — instead of $0 when no row supplies a value", () => {
+  const model = context.__test.arcusPanelModel([
+    arcusItem("slv", { state: "unavailable", measurements_available: false, pnl: undefined, volume: undefined, quotes: undefined }, { service_status: "stale" }),
+  ]);
+  const t = model.totals;
+  assert.equal(t.dayVol, null);
+  assert.equal(t.dayNet, null);
+  assert.equal(t.cumNet, null);
+  assert.equal(t.stopsToday, null);
+  const html = context.__test.arcusPanelHtml(model);
+  assert.match(html, /Today — · <span class="">—<\/span>/);
+  assert.match(html, /Cumulative <span class="">—<\/span>/);
+  assert.match(html, /Position stops today —/);
+  assert.doesNotMatch(html, /\$0\b/);
 });
 
 test("arcus panel: only arcus_vol targets join the panel", () => {
