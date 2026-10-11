@@ -2943,6 +2943,9 @@ test("arcus panel: a stale status from yesterday adds nothing to today's totals"
     const m = context.__test.arcusPanelModel([arcusItem("x", { state: st }, { status: { ts: frozen } })], nowMs);
     assert.equal(m.rows[0].state.label, "STALE", st);
   }
+  const unread = context.__test.arcusPanelModel([arcusItem("x", { state: "unavailable", measurements_available: false }, { status: { ts: frozen } })], nowMs);
+  assert.equal(unread.rows[0].state.label, "UNAVAILABLE");
+  assert.equal(unread.rows[0].stale, true);
 });
 
 test("arcus panel: totals render — instead of $0 when no row supplies a value", () => {

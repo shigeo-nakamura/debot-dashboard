@@ -3225,7 +3225,8 @@ const arcusPanelRow = (target, key, nowMs = Date.now()) => {
     // A frontend-detected stale/not-today status must not keep showing the
     // runtime's last state (e.g. a tone-ok QUOTING) next to blanked figures.
     // Staleness takes precedence over every runtime state, as in the backend.
-    state: stale ? { label: "STALE", tone: "warn" } : view.state,
+    // A failed read keeps its own UNAVAILABLE label.
+    state: stale && a.state !== "unavailable" ? { label: "STALE", tone: "warn" } : view.state,
     stale,
     halted,
     quoting,
