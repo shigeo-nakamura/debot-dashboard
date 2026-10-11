@@ -154,7 +154,7 @@ const render = (data) => {
     });
     if (arcusItems.length > 0) {
       const panel = getOrCreateArcusPanel(group);
-      renderArcusPanel(panel, arcusItems);
+      renderArcusPanel(panel, arcusItems, pollSecs);
       orderedCards.unshift(panel.el);
     } else if (group.arcusPanel) {
       group.arcusPanel.el.remove();
@@ -3197,7 +3197,18 @@ const arcusStatusMs = (status) => {
 };
 const arcusUtcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-const arcusPanelRow = (target, key, nowMs = Date.now()) => {
+// The backend reads each status every poll and calls it stale at read time;
+// this check runs later, on the browser clock, against a snapshot that can
+// already be up to one backend poll plus one browser poll old. Without that
+// allowance a 20 s stale_after against a 20 s poll flips every healthy row
+// to STALE once per cycle (2026-10-11).
+const arcusFreshLimitSecs = (target, pollSecs) => {
+  const limit = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
+  const poll = Number.isFinite(pollSecs) && pollSecs > 0 ? pollSecs : 20;
+  return limit + poll + POLL_MS / 1000;
+};
+
+const arcusPanelRow = (target, key, nowMs = Date.now(), pollSecs = 20) => {
   const a = target.status.arcus_vol;
   const status = target.service_status || "unknown";
   const view = arcusVolViewModel(a, status);
@@ -3207,7 +3218,7 @@ const arcusPanelRow = (target, key, nowMs = Date.now()) => {
   const q = (measured && a.quotes) || {};
   const statusMs = arcusStatusMs(target.status);
   const ageSecs = statusMs === null ? null : (nowMs - statusMs) / 1000;
-  const limit = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
+  const limit = arcusFreshLimitSecs(target, pollSecs);
   // Today's figures count only from a fresh status written on today's UTC
   // date: a paused or dead runtime leaves its last day's numbers frozen in
   // the file (bot-strategy#1093, weekend-paused HOOD/SLV on 2026-10-11).
@@ -3264,8 +3275,8 @@ const arcusEmptyTotals = () => ({ count: 0, dayVol: null, dayNet: null, cumNet: 
 // Pure: the panel's numbers from `[{ target, key }]`. Unmeasured figures
 // are skipped, never counted as zero; stale or not-today rows add nothing
 // to today's figures, and their cumulative is the last known value.
-const arcusPanelModel = (items, nowMs = Date.now()) => {
-  const rows = items.map(({ target, key }) => arcusPanelRow(target, key, nowMs));
+const arcusPanelModel = (items, nowMs = Date.now(), pollSecs = 20) => {
+  const rows = items.map(({ target, key }) => arcusPanelRow(target, key, nowMs, pollSecs));
   rows.sort((a, b) => a.wallet.localeCompare(b.wallet) || a.market.localeCompare(b.market));
   const totals = { ...arcusEmptyTotals(), quoting: 0, pulled: 0, halted: 0, stale: 0, stopsToday: null };
   const wallets = new Map();
@@ -3374,8 +3385,8 @@ const getOrCreateArcusPanel = (group) => {
   return panel;
 };
 
-const renderArcusPanel = (panel, items) => {
-  const model = arcusPanelModel(items);
+const renderArcusPanel = (panel, items, pollSecs) => {
+  const model = arcusPanelModel(items, Date.now(), pollSecs);
   const live = new Set(items.map((item) => item.key));
   for (const key of Array.from(panel.expanded)) {
     if (!live.has(key)) panel.expanded.delete(key);
