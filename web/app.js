@@ -3224,7 +3224,8 @@ const arcusPanelRow = (target, key, nowMs = Date.now()) => {
     wallet: typeof a.wallet_label === "string" && a.wallet_label ? a.wallet_label : "—",
     // A frontend-detected stale/not-today status must not keep showing the
     // runtime's last state (e.g. a tone-ok QUOTING) next to blanked figures.
-    state: stale && view.state && view.state.tone === "ok" ? { label: "STALE", tone: "warn" } : view.state,
+    // Staleness takes precedence over every runtime state, as in the backend.
+    state: stale ? { label: "STALE", tone: "warn" } : view.state,
     stale,
     halted,
     quoting,

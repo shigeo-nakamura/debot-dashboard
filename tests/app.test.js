@@ -2938,6 +2938,11 @@ test("arcus panel: a stale status from yesterday adds nothing to today's totals"
   const old = context.__test.arcusPanelModel([arcusItem("spy", {}, { status: { ts: nowS - 600 } })], nowMs);
   assert.equal(old.totals.dayNet, null);
   assert.equal(old.totals.stale, 1);
+  // Any last state (halted, pulled, flattening) yields to STALE once stale.
+  for (const st of ["halted", "pulled", "flattening"]) {
+    const m = context.__test.arcusPanelModel([arcusItem("x", { state: st }, { status: { ts: frozen } })], nowMs);
+    assert.equal(m.rows[0].state.label, "STALE", st);
+  }
 });
 
 test("arcus panel: totals render — instead of $0 when no row supplies a value", () => {
