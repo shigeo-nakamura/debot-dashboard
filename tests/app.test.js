@@ -2922,6 +2922,9 @@ test("arcus panel: a stale status from yesterday adds nothing to today's totals"
   assert.equal(hood.dayVol, null);
   assert.equal(hood.stopsToday, null);
   assert.equal(hood.cumNet, -12);
+  assert.equal(hood.state.label, "STALE");
+  assert.equal(hood.state.tone, "warn");
+  assert.notEqual(model.rows.find((r) => r.market === "SPY-USD").state.label, "STALE");
   const w = Object.fromEntries(model.wallets.map((x) => [x.wallet, x]));
   assert.equal(w["0x812B"].dayNet, null);
   assert.equal(w["0x812B"].cumNet, -12);
