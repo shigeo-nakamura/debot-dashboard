@@ -1,0 +1,68 @@
+{
+ "errors": [],
+ "fail_runs": {
+  "funding": 0,
+  "lit_price": 0,
+  "owner": 0,
+  "pool": 0
+ },
+ "fired": [],
+ "issue": 1179,
+ "level": "OK",
+ "lit": {
+  "funding_hours": 168,
+  "funding_short_7d_ann": 0.0965685714285714,
+  "price": 3.3696
+ },
+ "live_proxy": null,
+ "llp": {
+  "apy_venue": 14.88207553458244,
+  "asof": "2026-10-12T20:00:00Z",
+  "drawdown": 0.0,
+  "operator_fee": 0.0,
+  "r1d": 0.000782,
+  "r30": 0.015605,
+  "r30_ann": 0.207303,
+  "share_price": 0.0035216279102749386,
+  "status": 0,
+  "tvl": 87479322.73
+ },
+ "notify": null,
+ "position": {
+  "collateral": 623.161205,
+  "hedge_pnl_usd": -0.5016130000000139,
+  "liq_price": 5.146289807692307,
+  "llp_pnl_usd": -1.7170358410025983,
+  "llp_shares": 689141.0,
+  "llp_value_tav_usd": 2426.8981797147812,
+  "llp_value_usd": 2498.2829641589974,
+  "perp_upnl": -1.151613,
+  "short_lit": 260.0
+ },
+ "t": "2026-10-13T18:34:59Z",
+ "tvl_change": {
+  "full_7d": false,
+  "value": 0.0
+ },
+ "weekly": [
+  {
+   "funding_short_7d_ann": 0.0965685714285714,
+   "lit": 3.3696,
+   "position": {
+    "collateral": 623.161205,
+    "hedge_pnl_usd": -0.5016130000000139,
+    "liq_price": 5.146289807692307,
+    "llp_pnl_usd": -1.7170358410025983,
+    "llp_shares": 689141.0,
+    "llp_value_tav_usd": 2426.8981797147812,
+    "llp_value_usd": 2498.2829641589974,
+    "perp_upnl": -1.151613,
+    "short_lit": 260.0
+   },
+   "share_price": 0.0035216279102749386,
+   "t": "2026-10-13T18:34:59Z",
+   "tvl": 87479322.73236701,
+   "week": "2026-W42"
+  }
+ ]
+}

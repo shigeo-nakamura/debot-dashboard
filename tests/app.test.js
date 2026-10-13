@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -2990,4 +2990,124 @@ test("arcus panel: only arcus_vol targets join the panel", () => {
   assert.equal(isArcus({ status: { bull_holder: {} } }), false);
   assert.equal(isArcus({ status: null }), false);
   assert.equal(isArcus(null), false);
+});
+
+// ---- Lighter LLP monitor (bot-strategy#1179) ----
+const llpFixture = () => JSON.parse(fs.readFileSync(`${__dirname}/fixtures/llp-monitor-status-v1.json`, "utf8"));
+
+test("llp monitor: position, hedge, funding and pool figures from the monitor's document", () => {
+  const view = context.__test.llpMonitorViewModel(llpFixture());
+  assert.deepEqual({ ...view.level }, { label: "OK", tone: "ok" });
+  assert.equal(view.fired, null);
+  // The deposit is value − P&L until the monitor publishes it on its own.
+  assert.equal(view.value, "2,498.3 USDC of 2,500.0 USDC deposited");
+  assert.equal(context.__test.formatUsdc(view.llpPnl), "-1.7 USDC");
+  assert.equal(view.hedge, "260 LIT short");
+  assert.deepEqual({ ...view.liq }, { label: "3.3696 / 5.1463 (+53% away)", tone: "ok" });
+  assert.equal(view.margin, "-1.2 USDC / 623.2 USDC");
+  assert.equal(Math.round(view.totalPnl * 1e4) / 1e4, Math.round((-1.7170358410025983 - 0.5016130000000139) * 1e4) / 1e4);
+  assert.equal(view.funding.label, "+9.7%/yr to the short (168 h)");
+  assert.equal(view.returns, "+20.7%/yr · +0.08% · 0.00%");
+  assert.equal(view.tvl, "$87.5M (0.0% < 7d history) · 14.9%");
+  assert.equal(view.asof, "2026-10-12");
+  assert.equal(view.errors, null);
+  assert.equal(view.notify, null);
+  assert.equal(view.weekly.length, 1);
+  assert.equal(view.weekly[0].week, "2026-W42");
+  assert.equal(view.weekly[0].lit, "3.3696");
+  assert.equal(context.__test.isLLPMonitorStatus({ llp_monitor: llpFixture() }), true);
+  assert.equal(context.__test.isLLPMonitorDegraded(llpFixture()), false);
+  assert.equal(context.__test.isLLPMonitorDegraded({ ...llpFixture(), notify: "FAILED rc=255: throttled" }), true);
+});
+
+test("llp monitor: null position and pool, failing feeds and a failed notify", () => {
+  const m = {
+    ...llpFixture(),
+    level: "ALERT",
+    fired: [{ rule: "R5", level: "ALERT", msg: "Lighter API failing for >= 3 consecutive runs: pool (3)" }],
+    errors: ["pool: URLError: timed out"],
+    notify: "FAILED rc=255: throttled",
+    llp: null,
+    position: null,
+    tvl_change: { value: null, full_7d: false },
+    lit: { price: 3.31, funding_short_7d_ann: null, funding_hours: 0 },
+    fail_runs: { pool: 3, funding: 0 },
+    weekly: [{ week: "2026-W42", t: "2026-10-13T18:34:59Z", share_price: null, tvl: null, funding_short_7d_ann: null, lit: null, position: null }],
+  };
+  const view = context.__test.llpMonitorViewModel(m);
+  assert.deepEqual({ ...view.level }, { label: "ALERT", tone: "warn" });
+  assert.equal(view.fired, "ALERT R5: Lighter API failing for >= 3 consecutive runs: pool (3)");
+  assert.equal(view.value, "no position reported");
+  assert.equal(view.llpPnl, null);
+  assert.equal(view.hedge, "—");
+  assert.deepEqual({ ...view.liq }, { label: "3.3100 / —", tone: "neutral" });
+  assert.equal(view.totalPnl, null);
+  assert.equal(view.funding.label, "—");
+  assert.equal(view.returns, "—");
+  assert.equal(view.tvl, "—");
+  assert.equal(view.errors, "pool: URLError: timed out · failing runs: pool ×3");
+  assert.equal(view.notify, "FAILED rc=255: throttled");
+  assert.deepEqual({ ...view.weekly[0] }, { week: "2026-W42", tavShare: null, tvl: "—", lit: "—", funding: "—", llpPnl: null, hedgePnl: null });
+  assert.equal(context.__test.isLLPMonitorDegraded(m), true);
+  // A feed error makes the monitor unhealthy; an ALERT alone does not —
+  // it is a market reading, not the monitor failing.
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { llp_monitor: m } }), true);
+  const alertOnly = { ...llpFixture(), level: "ALERT", errors: [] };
+  assert.equal(context.__test.isLLPMonitorDegraded(alertOnly), true);
+  assert.equal(context.__test.isTargetUnhealthy({ service_status: "active", status: { llp_monitor: alertOnly } }), false);
+  // WARN is attention, not an alert.
+  assert.equal(context.__test.isLLPMonitorDegraded({ ...llpFixture(), level: "WARN" }), false);
+  assert.equal(context.__test.llpMonitorViewModel({ ...llpFixture(), level: "WARN" }).level.tone, "caution");
+  // Missing lists and blocks entirely (an older or partial document).
+  const bare = context.__test.llpMonitorViewModel({ level: "OK" });
+  assert.equal(bare.value, "no position reported");
+  assert.equal(bare.weekly.length, 0);
+  assert.equal(bare.errors, null);
+});
+
+test("llp monitor: hedge drift against the stake and liquidation distance tones", () => {
+  const base = llpFixture();
+  const drifted = context.__test.llpMonitorViewModel({ ...base, position: { ...base.position, short_lit: 230, staked_lit: 260, llp_usdc_deposited: 2500 } });
+  assert.equal(drifted.hedge, "230 LIT short vs 260 staked (−12%)");
+  assert.equal(drifted.value, "2,498.3 USDC of 2,500.0 USDC deposited");
+  const near = context.__test.llpMonitorViewModel({ ...base, lit: { ...base.lit, price: 4.2 } });
+  assert.equal(near.liq.tone, "caution");
+  const close = context.__test.llpMonitorViewModel({ ...base, lit: { ...base.lit, price: 4.8 } });
+  assert.equal(close.liq.tone, "warn");
+  const paid = context.__test.llpMonitorViewModel({ ...base, lit: { ...base.lit, funding_short_7d_ann: -0.25 } });
+  assert.equal(paid.funding.label, "−25.0%/yr paid by the short (168 h)");
+});
+
+test("llp monitor: stays out of the subsidy bucket's cost aggregate", () => {
+  const data = { position_count: 0, positions: null, pnl_total: 0, llp_monitor: llpFixture() };
+  assert.equal(context.__test.subsidyCostFallback(data), null);
+  const stats = context.__test.bucketAggregateStats("subsidy", [{ target: { bucket: "subsidy", status: data } }]);
+  assert.equal(stats[0].label, "Cost paid");
+  assert.equal(stats[0].value, "-");
+});
+
+test("llp monitor: render fills the section, hides empty rows, escapes the weekly table", () => {
+  const fields = new Map();
+  const card = { querySelector(selector) {
+    if (!fields.has(selector)) fields.set(selector, { textContent: "", innerHTML: "", hidden: false, classList: { add() {}, remove() {}, toggle() {} } });
+    return fields.get(selector);
+  } };
+  const m = llpFixture();
+  m.weekly[0].week = "<b>W42</b>";
+  context.__test.renderLLPMonitorStatus(card, m);
+  const field = (name) => fields.get(`[data-field="${name}"]`);
+  assert.equal(field("llp-level").textContent, "OK");
+  assert.equal(field("llp-fired-row").hidden, true);
+  assert.equal(field("llp-errors-row").hidden, true);
+  assert.equal(field("llp-notify-row").hidden, true);
+  assert.equal(field("llp-pnl").textContent, "-1.7 USDC");
+  assert.equal(field("llp-total-pnl").textContent, "-2.2 USDC");
+  assert.equal(field("llp-weekly").hidden, false);
+  assert.match(field("llp-weekly").innerHTML, /&lt;b&gt;W42&lt;\/b&gt;/);
+  assert.doesNotMatch(field("llp-weekly").innerHTML, /<b>W42/);
+
+  context.__test.renderLLPMonitorStatus(card, { ...llpFixture(), level: "ALERT", errors: ["funding: HTTPError 503"], weekly: [] });
+  assert.equal(field("llp-errors-row").hidden, false);
+  assert.equal(field("llp-errors").textContent, "funding: HTTPError 503");
+  assert.equal(field("llp-weekly").hidden, true);
 });

@@ -843,6 +843,25 @@ const createCard = (key) => {
         <div class="row" data-field="arcus-key-row" hidden><span>API key</span><strong data-field="arcus-key"></strong></div>
         <div class="row" data-field="arcus-halt-row" hidden><span>Halt</span><strong class="tone-warn" data-field="arcus-halt"></strong></div>
       </section>
+      <section class="han-bridge-view llp-view" data-field="llp-view" hidden aria-label="Lighter LLP monitor">
+        <div class="han-bridge-header" title="bot-strategy#1179: a read-only hourly check of the LLP deposit, the LIT staked to unlock it and the LIT perp short hedging that stake, against the rules R1–R6 frozen in the monitor's spec. It places no orders; the exit is manual.">LLP monitor</div>
+        <div class="row"><span>Level</span><strong class="tone-neutral" data-field="llp-level"></strong></div>
+        <div class="row" data-field="llp-fired-row" hidden><span>Firing</span><strong class="tone-warn" data-field="llp-fired"></strong></div>
+        <div class="row" title="LLP shares at the venue NAV (the daily share price the app shows) against the USDC deposited."><span>LLP value (NAV)</span><strong data-field="llp-value"></strong></div>
+        <div class="row" title="The monitor's estimate: the LLP at NAV minus the deposit."><span>LLP P&amp;L</span><strong data-field="llp-pnl"></strong></div>
+        <div class="row" title="LIT perp short against the LIT staked to unlock the deposit; R6 warns past a 10 % drift."><span>Hedge</span><strong data-field="llp-hedge"></strong></div>
+        <div class="row" title="Liquidation price of the short and how far LIT has to rise to reach it."><span>LIT / liq. price</span><strong data-field="llp-liq"></strong></div>
+        <div class="row" title="Unrealised PnL of the perp short and the account's collateral (realised funding is already inside it)."><span>Perp uPnL / collateral</span><strong data-field="llp-margin"></strong></div>
+        <div class="row" title="The monitor's estimate: the staked LIT marked against the hedge entry plus the perp's unrealised PnL — about zero while the hedge matches the stake."><span>Hedge P&amp;L</span><strong data-field="llp-hedge-pnl"></strong></div>
+        <div class="row" title="LLP P&amp;L + hedge P&amp;L. LIT staking rewards are not included."><span>Total P&amp;L (est.)</span><strong data-field="llp-total-pnl"></strong></div>
+        <div class="row" title="Funding a LIT short received over the last 7 days, annualised (+ = the short is paid). R1 alerts below −20 %/yr."><span>LIT funding 7d</span><strong data-field="llp-funding"></strong></div>
+        <div class="row" title="From the venue's daily share-price series: 30-day return annualised (R2 alerts below 6 %/yr), last day's return and the distance from the peak (R3)."><span>LLP 30d / 1d / DD</span><strong data-field="llp-returns"></strong></div>
+        <div class="row" title="Pool TVL and its change over the monitor's own history (R4 alerts at −30 % over 7 days); APY is the venue's own figure."><span>TVL / venue APY</span><strong data-field="llp-tvl"></strong></div>
+        <div class="row" title="Date of the newest daily share-price point the returns are computed from."><span>Daily point</span><strong data-field="llp-asof"></strong></div>
+        <div class="row" data-field="llp-errors-row" hidden title="Feeds the monitor could not read on its last run, and how many runs in a row each has failed (R5 alerts at 3)."><span>Feed errors</span><strong class="tone-warn" data-field="llp-errors"></strong></div>
+        <div class="row" data-field="llp-notify-row" hidden title="The SNS notification for the last change in the firing rules failed; the monitor retries on its next run."><span>Notify</span><strong class="tone-warn" data-field="llp-notify"></strong></div>
+        <div class="llp-weekly" data-field="llp-weekly" hidden></div>
+      </section>
       <div class="accumulator-view" data-field="accumulator-view" hidden>
         <div class="equity-headline">
           <div class="equity-headline-label"><span>Total equity</span></div>
@@ -967,6 +986,10 @@ const updateCard = (card, target, pollSecs, index, key) => {
   // A halted presence runtime is a bot that stopped doing its one job; so
   // is one whose status file froze (the process died or hung).
   const arcusDegraded = arcusVol !== null && isArcusVolDegraded(arcusVol);
+  const llpMonitor = isLLPMonitorStatus(data) ? data.llp_monitor : null;
+  // An ALERT is the monitor's exit condition firing; a failing feed means
+  // a rule may be silently not evaluating. Either needs the operator.
+  const llpDegraded = llpMonitor !== null && isLLPMonitorDegraded(llpMonitor);
   // An α candidate's card must not carry a running result anywhere
   // (taxonomy §4.3), including the halt pills' tooltips and the risk
   // panel's drawdown bars, which state it in bps and dollars (Codex,
@@ -974,7 +997,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const blindResult = isBlindedBucket(bucketOf(target));
   const displayStatus = status === "active" && accumulator
     ? accumulatorDegraded ? "degraded" : "healthy"
-    : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded || arcusDegraded) ? "degraded" : status;
+    : status === "active" && (holderDegraded || bookDegraded || hedgeDegraded || arcusDegraded || llpDegraded) ? "degraded" : status;
   // A configured service whose status object does not exist yet (main.go
   // serviceStatusNotStarted, e.g. bot-strategy#1123 before its install):
   // neutral, not stale and not an error.
@@ -1010,7 +1033,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
   card.classList.toggle("stale", stale);
   card.classList.toggle(
     "degraded",
-    accumulatorDegraded || holderDegraded || bookDegraded || hedgeDegraded,
+    accumulatorDegraded || holderDegraded || bookDegraded || hedgeDegraded || llpDegraded,
   );
   card.classList.toggle("bull-holder", bullHolder !== null);
   card.classList.toggle("accumulator", accumulator !== null);
@@ -1229,6 +1252,7 @@ const updateCard = (card, target, pollSecs, index, key) => {
     isHedgeHolderHalted(data) ||
     isHedgeHolderFeedBlind(data) ||
     (arcusVol && (arcusDegraded || status !== "active" || isArcusVolKeyRed(arcusVol))) ||
+    (llpMonitor && (llpDegraded || llpMonitor.level === "WARN")) ||
     (bullHolder && (holderDegraded || status !== "active")) ||
     // A red API wallet (under 7 d, expired, unknown while live) is operator
     // trouble a collapsed card would hide (Codex, PR #61).
@@ -1316,10 +1340,24 @@ const updateCard = (card, target, pollSecs, index, key) => {
   const tradingViewEl = card.querySelector('[data-field="trading-view"]');
   const holderViewEl = card.querySelector('[data-field="bull-holder-view"]');
   const arcusViewEl = card.querySelector('[data-field="arcus-vol-view"]');
+  const llpViewEl = card.querySelector('[data-field="llp-view"]');
   if (holderViewEl) holderViewEl.hidden = bullHolder === null;
   if (accumulatorViewEl) accumulatorViewEl.hidden = accumulator === null;
   if (arcusViewEl) arcusViewEl.hidden = arcusVol === null;
-  if (tradingViewEl) tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcusVol !== null;
+  if (llpViewEl) llpViewEl.hidden = llpMonitor === null;
+  if (tradingViewEl) {
+    // keyed on the service too, so a monitor with no status yet (not started, fetch error) never shows the trading view
+    tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcusVol !== null || llpMonitor !== null
+      || target.service === "llp-monitor";
+  }
+  // The monitor is not a bot: it has no equity, PnL or positions at the
+  // top level, so the trading view would only show zeros (bot-strategy#1179).
+  if (llpMonitor) {
+    renderLLPMonitorStatus(card, llpMonitor);
+    errorEl.hidden = !target.error;
+    errorEl.textContent = target.error || "";
+    return;
+  }
   if (arcusVol) {
     renderArcusVolStatus(card, arcusVol, status);
     errorEl.hidden = !target.error;
@@ -3044,7 +3082,213 @@ const isTargetUnhealthy = (target) => {
     || isBookHalted(target.status)
     || isHedgeHolderHalted(target.status)
     || isHedgeHolderFeedBlind(target.status)
-    || (isArcusVolStatus(target.status) && isArcusVolDegraded(target.status.arcus_vol));
+    || (isArcusVolStatus(target.status) && isArcusVolDegraded(target.status.arcus_vol))
+    // A monitor whose feeds fail is down as a monitor: its rules are not
+    // being evaluated. An ALERT is a market reading, shown on the card.
+    || (isLLPMonitorStatus(target.status) && llpMonitorFeedErrors(target.status.llp_monitor).length > 0);
+};
+
+// ---- Lighter LLP monitor (bot-strategy#1179) ------------------------------
+// The read-only hourly monitor of an LLP deposit hedged by a LIT perp short.
+// Its document rides on status.llp_monitor (main.go decodeLLPMonitorPayload);
+// the card shows the rule level, the position and the pool figures the rules
+// are evaluated on. Nothing here is a trading result to optimise: the deposit
+// is held for carry and the monitor only says when to exit.
+const isLLPMonitorStatus = (data) => Boolean(data && data.llp_monitor);
+const llpMonitorFeedErrors = (m) =>
+  m && Array.isArray(m.errors) ? m.errors.filter((e) => typeof e === "string" && e) : [];
+// a FAILED SNS publish means the owner was not told about a firing-set change (the monitor retries hourly)
+const isLLPMonitorDegraded = (m) => Boolean(m && (m.level === "ALERT" || llpMonitorFeedErrors(m).length > 0
+  || (typeof m.notify === "string" && m.notify.startsWith("FAILED"))));
+// Fractions (returns, funding) as signed percents; the venue APY is already
+// a percent.
+const llpPct = (value, digits = 1) => {
+  const n = holderNumber(value);
+  return n === null ? "—" : `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n * 100).toFixed(digits)}%`;
+};
+const llpUsdShort = (value) => {
+  const n = holderNumber(value);
+  if (n === null) return "—";
+  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+};
+const llpPrice = (value) => {
+  const n = holderNumber(value);
+  return n === null ? "—" : n.toFixed(4);
+};
+const llpLevelTone = (level) => (level === "OK" ? "ok" : level === "ALERT" ? "warn" : "caution");
+const llpMonitorViewModel = (m) => {
+  const level = typeof m.level === "string" && m.level ? m.level.toUpperCase() : "?";
+  const fired = Array.isArray(m.fired) ? m.fired.filter((f) => f && typeof f === "object") : [];
+  const firedText = fired.length
+    ? fired.map((f) => `${f.level || "?"} ${f.rule || "?"}: ${f.msg || ""}`.trim()).join(" · ")
+    : null;
+  const pool = m.llp && typeof m.llp === "object" ? m.llp : null;
+  const pos = m.position && typeof m.position === "object" ? m.position : null;
+  const lit = m.lit && typeof m.lit === "object" ? m.lit : {};
+  const litPx = holderNumber(lit.price);
+
+  // The deposit is the spec's figure; the monitor reports the NAV value and
+  // the P&L against it, so the deposit is their difference until it is
+  // published on its own.
+  const value = pos ? holderNumber(pos.llp_value_usd) : null;
+  const llpPnl = pos ? holderNumber(pos.llp_pnl_usd) : null;
+  const deposit = pos && holderNumber(pos.llp_usdc_deposited) !== null
+    ? holderNumber(pos.llp_usdc_deposited)
+    : value !== null && llpPnl !== null ? value - llpPnl : null;
+  const valueText = !pos
+    ? "no position reported"
+    : value === null
+      ? "—"
+      : `${holderMoney(value)}${deposit === null ? "" : ` of ${holderMoney(deposit)} deposited`}`;
+
+  const short = pos ? holderNumber(pos.short_lit) : null;
+  const staked = pos ? holderNumber(pos.staked_lit) : null;
+  let hedge = "—";
+  if (short !== null) {
+    hedge = `${holderAmount(short)} LIT short`;
+    if (staked !== null && staked > 0) {
+      const drift = (short - staked) / staked;
+      hedge += ` vs ${holderAmount(staked)} staked (${llpPct(drift, 0)})`;
+    }
+  }
+  const liq = pos ? holderNumber(pos.liq_price) : null;
+  let liqText = `${llpPrice(litPx)} / ${llpPrice(liq)}`;
+  let liqTone = "neutral";
+  if (liq !== null && litPx !== null && litPx > 0) {
+    const distance = liq / litPx - 1;
+    liqText += ` (${llpPct(distance, 0)} away)`;
+    // R6 warns under +35 %; below +15 % a normal LIT day can reach it.
+    liqTone = distance < 0.15 ? "warn" : distance < 0.35 ? "caution" : "ok";
+  }
+  const margin = pos
+    ? `${holderSigned(pos.perp_upnl)} / ${holderMoney(pos.collateral)}`
+    : "—";
+  const hedgePnl = pos ? holderNumber(pos.hedge_pnl_usd) : null;
+  const totalPnl = llpPnl !== null && hedgePnl !== null ? llpPnl + hedgePnl : null;
+
+  const funding = holderNumber(lit.funding_short_7d_ann);
+  const hours = holderNumber(lit.funding_hours);
+  const fundingText = funding === null
+    ? "—"
+    : `${llpPct(funding)}/yr${funding >= 0 ? " to the short" : " paid by the short"}${hours === null ? "" : ` (${hours} h)`}`;
+
+  const returns = pool
+    ? `${llpPct(pool.r30_ann)}/yr · ${llpPct(pool.r1d, 2)} · ${llpPct(pool.drawdown, 2)}`
+    : "—";
+  const tvlChange = m.tvl_change && typeof m.tvl_change === "object" ? m.tvl_change : null;
+  const change = tvlChange ? holderNumber(tvlChange.value) : null;
+  const apy = pool ? holderNumber(pool.apy_venue) : null;
+  const tvl = pool
+    ? `${llpUsdShort(pool.tvl)}${change === null ? "" : ` (${llpPct(change)} ${tvlChange.full_7d ? "7d" : "< 7d history"})`}` +
+      ` · ${apy === null ? "—" : `${apy.toFixed(1)}%`}`
+    : "—";
+  const asof = pool && typeof pool.asof === "string" && pool.asof ? pool.asof.slice(0, 10) : "—";
+
+  const errors = llpMonitorFeedErrors(m);
+  const failing = m.fail_runs && typeof m.fail_runs === "object"
+    ? Object.entries(m.fail_runs).filter(([, n]) => holderNumber(n) !== null && Number(n) > 0).map(([k, n]) => `${k} ×${n}`)
+    : [];
+  const errorsText = errors.length || failing.length
+    ? [...errors, ...(failing.length ? [`failing runs: ${failing.join(", ")}`] : [])].join(" · ")
+    : null;
+  const notify = typeof m.notify === "string" && m.notify.startsWith("FAILED") ? m.notify : null;
+
+  const weekly = Array.isArray(m.weekly)
+    ? m.weekly.filter((w) => w && typeof w === "object").map((w) => {
+        const wp = w.position && typeof w.position === "object" ? w.position : null;
+        const wl = wp ? holderNumber(wp.llp_pnl_usd) : null;
+        const wh = wp ? holderNumber(wp.hedge_pnl_usd) : null;
+        return {
+          week: typeof w.week === "string" ? w.week : "?",
+          tavShare: holderNumber(w.share_price),
+          tvl: llpUsdShort(w.tvl),
+          lit: llpPrice(w.lit),
+          funding: llpPct(w.funding_short_7d_ann),
+          llpPnl: wl,
+          hedgePnl: wh,
+        };
+      })
+    : [];
+
+  return {
+    level: { label: level, tone: llpLevelTone(level) },
+    fired: firedText,
+    value: valueText,
+    llpPnl,
+    hedge,
+    liq: { label: liqText, tone: liqTone },
+    margin,
+    hedgePnl,
+    totalPnl,
+    funding: { label: fundingText, value: funding },
+    returns,
+    tvl,
+    asof,
+    errors: errorsText,
+    notify,
+    weekly,
+  };
+};
+const llpWeeklyHtml = (rows) => {
+  if (!rows.length) return "";
+  const signed = (n) =>
+    n === null ? "—" : `<span class="${n > 0 ? "positive" : n < 0 ? "negative" : ""}">${escapeHtml(holderSigned(n))}</span>`;
+  const body = rows
+    .map((r) => `<tr><td>${escapeHtml(r.week)}</td><td>${r.tavShare === null ? "—" : escapeHtml(r.tavShare.toFixed(6))}</td>` +
+      `<td>${escapeHtml(r.tvl)}</td><td>${escapeHtml(r.lit)}</td><td>${escapeHtml(r.funding)}</td>` +
+      `<td>${signed(r.llpPnl)}</td><td>${signed(r.hedgePnl)}</td></tr>`)
+    .join("");
+  return `<div class="llp-weekly-title">Weekly (first reading of each ISO week)</div>
+    <div class="llp-weekly-scroll"><table class="llp-weekly-table">
+      <thead><tr><th>Week</th><th title="TAV / shares: about 3 % below the venue NAV, comparable only with itself.">TAV/share</th><th>TVL</th><th>LIT</th><th title="LIT funding to the short, 7 days, annualised">Funding 7d</th><th>LLP P&amp;L</th><th>Hedge P&amp;L</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
+};
+const renderLLPMonitorStatus = (card, m) => {
+  const view = llpMonitorViewModel(m);
+  const setTone = (el, tone) => {
+    el.classList.remove("tone-ok", "tone-warn", "tone-caution", "tone-neutral");
+    el.classList.add(`tone-${tone}`);
+  };
+  const set = (name, text) => {
+    const el = card.querySelector(`[data-field="${name}"]`);
+    if (el) el.textContent = text;
+    return el;
+  };
+  const setOptional = (name, text) => {
+    const rowEl = card.querySelector(`[data-field="${name}-row"]`);
+    if (rowEl) rowEl.hidden = text === null;
+    set(name, text === null ? "" : text);
+  };
+  const levelEl = set("llp-level", view.level.label);
+  if (levelEl) setTone(levelEl, view.level.tone);
+  setOptional("llp-fired", view.fired);
+  const firedEl = card.querySelector('[data-field="llp-fired"]');
+  if (firedEl && view.fired !== null) setTone(firedEl, view.level.tone);
+  set("llp-value", view.value);
+  const pnlEl = set("llp-pnl", view.llpPnl === null ? "—" : holderSigned(view.llpPnl));
+  if (pnlEl) applySignedClass(pnlEl, view.llpPnl);
+  set("llp-hedge", view.hedge);
+  const liqEl = set("llp-liq", view.liq.label);
+  if (liqEl) setTone(liqEl, view.liq.tone);
+  set("llp-margin", view.margin);
+  const hedgePnlEl = set("llp-hedge-pnl", view.hedgePnl === null ? "—" : holderSigned(view.hedgePnl));
+  if (hedgePnlEl) applySignedClass(hedgePnlEl, view.hedgePnl);
+  const totalEl = set("llp-total-pnl", view.totalPnl === null ? "—" : holderSigned(view.totalPnl));
+  if (totalEl) applySignedClass(totalEl, view.totalPnl);
+  const fundingEl = set("llp-funding", view.funding.label);
+  if (fundingEl) applySignedClass(fundingEl, view.funding.value);
+  set("llp-returns", view.returns);
+  set("llp-tvl", view.tvl);
+  set("llp-asof", view.asof);
+  setOptional("llp-errors", view.errors);
+  setOptional("llp-notify", view.notify);
+  const weeklyEl = card.querySelector('[data-field="llp-weekly"]');
+  if (weeklyEl) {
+    weeklyEl.hidden = view.weekly.length === 0;
+    weeklyEl.innerHTML = llpWeeklyHtml(view.weekly);
+  }
 };
 
 // ---- Arcus presence runtime (bot-strategy#1093) ----------------------------

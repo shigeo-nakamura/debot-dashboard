@@ -1173,3 +1173,52 @@ body::after {
 
 .arcus-panel .positive { color: var(--success); }
 .arcus-panel .negative { color: var(--danger); }
+
+/* LLP monitor weekly rows (bot-strategy#1179): a small table inside the
+   card; it scrolls sideways on a narrow screen instead of the page. */
+.llp-weekly {
+  margin-top: 8px;
+}
+
+.llp-weekly-title {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.llp-weekly-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+.llp-weekly-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.llp-weekly-table th,
+.llp-weekly-table td {
+  text-align: right;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.llp-weekly-table th:first-child,
+.llp-weekly-table td:first-child {
+  text-align: left;
+}
+
+.llp-weekly-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.llp-view .positive { color: var(--success); }
+.llp-view .negative { color: var(--danger); }

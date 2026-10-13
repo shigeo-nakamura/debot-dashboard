@@ -214,3 +214,24 @@ targets:
 #      required_samples: 91
 #      readout_on: "2026-10-02"
 #      sample_source: "daily marks in the shadow-paper ledger (bot-strategy#695)"
+
+# Lighter LLP monitor (bot-strategy#1179): a read-only hourly job (at :07
+# UTC on Tokyo), not a bot. It watches an LLP deposit, the LIT staked to
+# unlock it and the LIT perp short hedging that stake, evaluates the rules
+# frozen in its spec.json and mirrors one status.json. The service name
+# `llp-monitor` selects its decoder (its document has `t`, not `ts`, and no
+# trading fields) and its "LLP monitor" section in place of the trading
+# view. `bucket: subsidy` (subsidy / carry: LLP yield, LIT staking and the
+# short's funding) is declared until the return-source taxonomy lists the
+# service; no `subsidy:` KPI block — there is no unit to price.
+#  - name: LLP monitor
+#    instance_id: i-xxxxxxxxxxxxxxxxx
+#    service: llp-monitor
+#    region: ap-northeast-1
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: debot/status/llp-monitor/status.json
+#    # Hourly writer: two hours tolerates one missed run.
+#    stale_after_secs: 7200
+#    dex: "Lighter (LLP + LIT perp hedge)"
+#    bucket: subsidy
