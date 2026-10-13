@@ -455,6 +455,10 @@ type StatusData struct {
 	ArcusVol            *ArcusVolStatus        `json:"arcus_vol,omitempty"`
 	HanBridge           *HanBridgeStatus       `json:"han_bridge,omitempty"`
 	HedgeHolder         *HedgeHolderStatus     `json:"hedge_holder,omitempty"`
+	// LLPMonitor is the read-only Lighter LLP monitor's own document
+	// (bot-strategy#1179), set only for a target whose service is
+	// llp-monitor; see decodeLLPMonitorPayload.
+	LLPMonitor *LLPMonitorStatus `json:"llp_monitor,omitempty"`
 	// Engine B's frozen session boundaries for the current date --
 	// (t0, t1, t2) in microseconds: the KRX-open reference snapshot, the
 	// entry decision, and the scheduled exit. A fixed schedule from the
@@ -1085,11 +1089,15 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 		return result
 	}
 
-	status, err := decodeStatusPayload(body)
+	status, err := decodeTargetPayload(target, body)
 	if err != nil {
 		result.Error = fmt.Sprintf("s3 parse error: %v", err)
 		return result
 	}
+	// The LLP monitor is an hourly read-only job, not a bot: it has no
+	// websocket, no kill switch and no equity history, and a "WS: 0/24h"
+	// pill on its card would claim a measurement nobody takes.
+	monitor := status.LLPMonitor != nil
 
 	// Derive service_status from object freshness — there is no
 	// systemctl probe in this code path.
@@ -1106,16 +1114,18 @@ func fetchTargetS3(ctx context.Context, target TargetConfig, s3pool *S3ClientPoo
 		started := time.Unix(status.ProcessStartedAt, 0).UTC()
 		result.ServiceStartedAt = &started
 	}
-	if status.WsReset24hCount != 0 || status.TS != 0 {
+	if !monitor && (status.WsReset24hCount != 0 || status.TS != 0) {
 		// Always surface zero when the bot is alive — distinguishes
 		// "0 resets in 24h" from "no data" (nil).
 		ws := int(status.WsReset24hCount)
 		result.WsReset24h = &ws
 	}
-	ks := status.KillSwitchActive
-	result.KillSwitchActive = &ks
+	if !monitor {
+		ks := status.KillSwitchActive
+		result.KillSwitchActive = &ks
+	}
 
-	if includeHistory {
+	if includeHistory && !monitor {
 		historyKey := strings.TrimSuffix(target.S3Key, ".json") + ".equity_history.jsonl"
 		histCtx, histCancel := context.WithTimeout(ctx, commandTimeout)
 		defer histCancel()
