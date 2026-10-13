@@ -3188,6 +3188,11 @@ const llpCents = (value) => {
   const r = Math.round(n * 100) / 100;
   return r === 0 ? "0.00 USDC" : `${r > 0 ? "+" : "-"}${groupedFixed(Math.abs(r), 2)} USDC`;
 };
+// the sign the cent display shows: a value that rounds to 0.00 is painted neutral, not red/green
+const llpCentsSigned = (value) => {
+  const n = holderNumber(value);
+  return n === null ? null : Math.round(n * 100) / 100;
+};
 const llpLevelTone = (level) => (level === "OK" ? "ok" : level === "ALERT" ? "warn" : "caution");
 const llpMonitorViewModel = (m) => {
   const level = typeof m.level === "string" && m.level ? m.level.toUpperCase() : "?";
@@ -3374,10 +3379,10 @@ const renderLLPMonitorStatus = (card, m) => {
   if (totalRowEl) totalRowEl.title = view.totalTitle;
   setOptional("llp-funding-received", view.fundingReceived === null ? null : llpCents(view.fundingReceived));
   const fundingReceivedEl = card.querySelector('[data-field="llp-funding-received"]');
-  if (fundingReceivedEl) applySignedClass(fundingReceivedEl, view.fundingReceived);
+  if (fundingReceivedEl) applySignedClass(fundingReceivedEl, llpCentsSigned(view.fundingReceived));
   setOptional("llp-staking", view.staking === null ? null : llpCents(view.staking.value));
   const stakingEl = card.querySelector('[data-field="llp-staking"]');
-  if (stakingEl) applySignedClass(stakingEl, view.staking === null ? null : view.staking.value);
+  if (stakingEl) applySignedClass(stakingEl, view.staking === null ? null : llpCentsSigned(view.staking.value));
   const stakingRowEl = card.querySelector('[data-field="llp-staking-row"]');
   if (stakingRowEl) stakingRowEl.title = view.staking === null ? "" : view.staking.title;
   const chartWrapEl = card.querySelector('[data-field="llp-pnl-chart-wrap"]');
