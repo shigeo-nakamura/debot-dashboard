@@ -1222,3 +1222,24 @@ body::after {
 
 .llp-view .positive { color: var(--success); }
 .llp-view .negative { color: var(--danger); }
+
+/* LLP P&L since entry: the total on the sparkline's usual stroke, its parts
+   thin and muted, and the zero line dashed for reference. */
+.llp-pnl-chart polyline.llp-pnl-part {
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.llp-pnl-chart polyline.llp-pnl-llp {
+  stroke: var(--muted);
+}
+
+.llp-pnl-chart polyline.llp-pnl-hedge {
+  stroke: var(--warning);
+}
+
+.llp-pnl-chart .llp-pnl-zero {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}

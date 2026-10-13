@@ -79,6 +79,17 @@ type LLPMonitorPosition struct {
 	Collateral         *float64 `json:"collateral"`
 	LLPPnlUsd          *float64 `json:"llp_pnl_usd"`
 	HedgePnlUsd        *float64 `json:"hedge_pnl_usd"`
+	// Carry since entry (bot-strategy PR #1182): the funding the short
+	// received (+ = received), the LIT staked now and the staking reward
+	// accrued on it, and the monitor's total — LLP + hedge + funding +
+	// staking, entry fees and slippage excluded. Absent from an older
+	// monitor; the card then falls back to LLP + hedge.
+	FundingReceived  *float64 `json:"funding_received"`
+	StakedLITNow     *float64 `json:"staked_lit_now"`
+	StakingShares    *float64 `json:"staking_shares"`
+	StakingRewardLIT *float64 `json:"staking_reward_lit"`
+	StakingRewardUsd *float64 `json:"staking_reward_usd"`
+	TotalPnlUsd      *float64 `json:"total_pnl_usd"`
 }
 
 // LLPMonitorWeekly is the first reading of each ISO week, kept for the
@@ -111,6 +122,11 @@ type LLPMonitorStatus struct {
 	Position  *LLPMonitorPosition  `json:"position"`
 	FailRuns  map[string]int64     `json:"fail_runs"`
 	Weekly    []LLPMonitorWeekly   `json:"weekly"`
+	// PnlHistory is the monitor's hourly P&L series since entry,
+	// {fields: [t, total, llp, hedge, funding, staking], rows: [[...]]}.
+	// Passed through as-is: the card draws it and reads the column
+	// order from `fields`.
+	PnlHistory json.RawMessage `json:"pnl_history,omitempty"`
 }
 
 // decodeLLPMonitorPayload maps the monitor's status.json onto the generic
@@ -142,6 +158,9 @@ func decodeLLPMonitorPayload(payload []byte) (StatusData, error) {
 	}
 	if string(m.LiveProxy) == "null" {
 		m.LiveProxy = nil
+	}
+	if string(m.PnlHistory) == "null" {
+		m.PnlHistory = nil
 	}
 	return StatusData{
 		TS:         at.Unix(),
