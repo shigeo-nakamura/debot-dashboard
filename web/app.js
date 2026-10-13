@@ -1346,7 +1346,9 @@ const updateCard = (card, target, pollSecs, index, key) => {
   if (arcusViewEl) arcusViewEl.hidden = arcusVol === null;
   if (llpViewEl) llpViewEl.hidden = llpMonitor === null;
   if (tradingViewEl) {
-    tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcusVol !== null || llpMonitor !== null;
+    // keyed on the service too, so a monitor with no status yet (not started, fetch error) never shows the trading view
+    tradingViewEl.hidden = accumulator !== null || bullHolder !== null || arcusVol !== null || llpMonitor !== null
+      || target.service === "llp-monitor";
   }
   // The monitor is not a bot: it has no equity, PnL or positions at the
   // top level, so the trading view would only show zeros (bot-strategy#1179).
