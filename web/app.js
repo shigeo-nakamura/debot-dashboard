@@ -853,7 +853,13 @@ const createCard = (key) => {
         <div class="row" title="Liquidation price of the short and how far LIT has to rise to reach it."><span>LIT / liq. price</span><strong data-field="llp-liq"></strong></div>
         <div class="row" title="Unrealised PnL of the perp short and the account's collateral (realised funding is already inside it)."><span>Perp uPnL / collateral</span><strong data-field="llp-margin"></strong></div>
         <div class="row" title="The monitor's estimate: the staked LIT marked against the hedge entry plus the perp's unrealised PnL — about zero while the hedge matches the stake."><span>Hedge P&amp;L</span><strong data-field="llp-hedge-pnl"></strong></div>
-        <div class="row" title="LLP P&amp;L + hedge P&amp;L. LIT staking rewards are not included."><span>Total P&amp;L (est.)</span><strong data-field="llp-total-pnl"></strong></div>
+        <div class="row" data-field="llp-funding-received-row" hidden title="Funding the LIT short has received since entry (+ = received)."><span>Funding received</span><strong data-field="llp-funding-received"></strong></div>
+        <div class="row" data-field="llp-staking-row" hidden><span>Staking rewards</span><strong data-field="llp-staking"></strong></div>
+        <div class="row" data-field="llp-total-pnl-row"><span>Total P&amp;L since entry</span><strong data-field="llp-total-pnl"></strong></div>
+        <div class="chart" data-field="llp-pnl-chart-wrap" hidden>
+          <div class="chart-title" title="The monitor's hourly total P&amp;L since entry (thick), with the LLP and hedge + funding parts (thin). Entry fees and slippage excluded.">P&amp;L since entry</div>
+          <svg class="sparkline llp-pnl-chart" data-field="llp-pnl-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
+        </div>
         <div class="row" title="Funding a LIT short received over the last 7 days, annualised (+ = the short is paid). R1 alerts below −20 %/yr."><span>LIT funding 7d</span><strong data-field="llp-funding"></strong></div>
         <div class="row" title="From the venue's daily share-price series: 30-day return annualised (R2 alerts below 6 %/yr), last day's return and the distance from the peak (R3)."><span>LLP 30d / 1d / DD</span><strong data-field="llp-returns"></strong></div>
         <div class="row" title="Pool TVL and its change over the monitor's own history (R4 alerts at −30 % over 7 days); APY is the venue's own figure."><span>TVL / venue APY</span><strong data-field="llp-tvl"></strong></div>
@@ -3116,6 +3122,72 @@ const llpPrice = (value) => {
   const n = holderNumber(value);
   return n === null ? "—" : n.toFixed(4);
 };
+// The monitor's hourly P&L since entry (bot-strategy PR #1182):
+// {fields: [t, total, llp, hedge, funding, staking], rows: [[unix_s, ...]]}.
+// Columns are looked up by name, so a reordered or extended `fields` still
+// reads right; a row whose time or total is not a number is dropped.
+const llpPnlSeries = (history) => {
+  if (!history || typeof history !== "object" || !Array.isArray(history.fields) || !Array.isArray(history.rows)) {
+    return [];
+  }
+  const col = (name) => history.fields.indexOf(name);
+  const [iT, iTotal, iLLP, iHedge, iFunding] = ["t", "total", "llp", "hedge", "funding"].map(col);
+  if (iT < 0 || iTotal < 0) return [];
+  const at = (row, i) => (i < 0 ? null : holderNumber(row[i]));
+  return history.rows
+    .filter((row) => Array.isArray(row))
+    .map((row) => {
+      const hedge = at(row, iHedge);
+      const funding = at(row, iFunding);
+      return {
+        ts: at(row, iT),
+        total: at(row, iTotal),
+        llp: at(row, iLLP),
+        // The hedge is meant to earn its funding; drawn together they
+        // show what the short leg nets.
+        hedgeFunding: hedge === null ? null : hedge + (funding === null ? 0 : funding),
+      };
+    })
+    .filter((p) => p.ts !== null && p.total !== null)
+    .sort((a, b) => a.ts - b.ts);
+};
+// Same geometry as renderEquityChart, one shared y-scale for every line:
+// the total thick, the LLP and hedge + funding parts thin. Empty below
+// two points, where there is no line to draw.
+const llpPnlChartSvg = (series) => {
+  if (!Array.isArray(series) || series.length < 2) return "";
+  const keys = ["llp", "hedgeFunding", "total"];
+  const values = [];
+  series.forEach((p) => keys.forEach((k) => { if (p[k] !== null) values.push(p[k]); }));
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const height = 40;
+  const width = 100;
+  const range = max - min;
+  const pad = range === 0 ? Math.max(Math.abs(max) * 0.02, 0.0001) : Math.max(range * 0.08, 0.0001);
+  const minPad = min - pad;
+  const paddedRange = max + pad - minPad || 1;
+  const start = series[0].ts;
+  const span = Math.max(1, series[series.length - 1].ts - start);
+  const xPad = 2.5;
+  const x = (ts) => (xPad + ((ts - start) / span) * (width - xPad * 2)).toFixed(2);
+  const y = (v) => (height - ((v - minPad) / paddedRange) * height).toFixed(2);
+  const line = (key, cls) => {
+    const pts = series.filter((p) => p[key] !== null).map((p) => `${x(p.ts)},${y(p[key])}`);
+    return pts.length < 2 ? "" : `<polyline class="${cls}" points="${pts.join(" ")}"></polyline>`;
+  };
+  const zero = `<line class="llp-pnl-zero" x1="0" x2="${width}" y1="${y(0)}" y2="${y(0)}"></line>`;
+  return zero + line("llp", "llp-pnl-part llp-pnl-llp") + line("hedgeFunding", "llp-pnl-part llp-pnl-hedge") + line("total", "llp-pnl-total");
+};
+// Carry accrues in cents per day, which the card's one-decimal money
+// rounding would show as a flat "+0.0" for the first weeks; these rows get
+// two decimals, and a value that rounds to zero carries no sign.
+const llpCents = (value) => {
+  const n = holderNumber(value);
+  if (n === null) return "—";
+  const r = Math.round(n * 100) / 100;
+  return r === 0 ? "0.00 USDC" : `${r > 0 ? "+" : "-"}${groupedFixed(Math.abs(r), 2)} USDC`;
+};
 const llpLevelTone = (level) => (level === "OK" ? "ok" : level === "ALERT" ? "warn" : "caution");
 const llpMonitorViewModel = (m) => {
   const level = typeof m.level === "string" && m.level ? m.level.toUpperCase() : "?";
@@ -3165,7 +3237,24 @@ const llpMonitorViewModel = (m) => {
     ? `${holderSigned(pos.perp_upnl)} / ${holderMoney(pos.collateral)}`
     : "—";
   const hedgePnl = pos ? holderNumber(pos.hedge_pnl_usd) : null;
-  const totalPnl = llpPnl !== null && hedgePnl !== null ? llpPnl + hedgePnl : null;
+  // The monitor's own total (bot-strategy PR #1182) also counts funding
+  // and staking rewards; an older monitor only has the LLP and hedge
+  // estimates, so their sum stands in and the tooltip says what it lacks.
+  const reportedTotal = pos ? holderNumber(pos.total_pnl_usd) : null;
+  const totalPnl = reportedTotal !== null
+    ? reportedTotal
+    : llpPnl !== null && hedgePnl !== null ? llpPnl + hedgePnl : null;
+  const totalTitle = reportedTotal !== null
+    ? "LLP + hedge + funding received + staking rewards, as the monitor computes it. Entry fees and slippage are excluded."
+    : "LLP P&L + hedge P&L only: this monitor does not report funding or staking rewards. Entry fees and slippage are excluded.";
+  const fundingReceived = pos ? holderNumber(pos.funding_received) : null;
+  const stakingUsd = pos ? holderNumber(pos.staking_reward_usd) : null;
+  const stakingLit = pos ? holderNumber(pos.staking_reward_lit) : null;
+  const stakedNow = pos ? holderNumber(pos.staked_lit_now) : null;
+  const stakingTitle = stakingUsd === null
+    ? null
+    : `${stakingLit === null ? "?" : stakingLit.toLocaleString("en-US", { maximumFractionDigits: 6 })} LIT accrued` +
+      `${stakedNow === null ? "" : ` (${holderAmount(stakedNow)} LIT staked now)`}, valued at the LIT price.`;
 
   const funding = holderNumber(lit.funding_short_7d_ann);
   const hours = holderNumber(lit.funding_hours);
@@ -3221,6 +3310,10 @@ const llpMonitorViewModel = (m) => {
     margin,
     hedgePnl,
     totalPnl,
+    totalTitle,
+    fundingReceived,
+    staking: stakingUsd === null ? null : { value: stakingUsd, title: stakingTitle },
+    pnlSeries: llpPnlSeries(m.pnl_history),
     funding: { label: fundingText, value: funding },
     returns,
     tvl,
@@ -3277,6 +3370,21 @@ const renderLLPMonitorStatus = (card, m) => {
   if (hedgePnlEl) applySignedClass(hedgePnlEl, view.hedgePnl);
   const totalEl = set("llp-total-pnl", view.totalPnl === null ? "—" : holderSigned(view.totalPnl));
   if (totalEl) applySignedClass(totalEl, view.totalPnl);
+  const totalRowEl = card.querySelector('[data-field="llp-total-pnl-row"]');
+  if (totalRowEl) totalRowEl.title = view.totalTitle;
+  setOptional("llp-funding-received", view.fundingReceived === null ? null : llpCents(view.fundingReceived));
+  const fundingReceivedEl = card.querySelector('[data-field="llp-funding-received"]');
+  if (fundingReceivedEl) applySignedClass(fundingReceivedEl, view.fundingReceived);
+  setOptional("llp-staking", view.staking === null ? null : llpCents(view.staking.value));
+  const stakingEl = card.querySelector('[data-field="llp-staking"]');
+  if (stakingEl) applySignedClass(stakingEl, view.staking === null ? null : view.staking.value);
+  const stakingRowEl = card.querySelector('[data-field="llp-staking-row"]');
+  if (stakingRowEl) stakingRowEl.title = view.staking === null ? "" : view.staking.title;
+  const chartWrapEl = card.querySelector('[data-field="llp-pnl-chart-wrap"]');
+  const chartEl = card.querySelector('[data-field="llp-pnl-chart"]');
+  const chartSvg = llpPnlChartSvg(view.pnlSeries);
+  if (chartWrapEl) chartWrapEl.hidden = chartSvg === "";
+  if (chartEl) chartEl.innerHTML = chartSvg;
   const fundingEl = set("llp-funding", view.funding.label);
   if (fundingEl) applySignedClass(fundingEl, view.funding.value);
   set("llp-returns", view.returns);

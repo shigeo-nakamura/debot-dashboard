@@ -216,3 +216,70 @@ func TestLLPMonitorConfigExampleValidates(t *testing.T) {
 		t.Fatalf("without bucket: %v / %q", err, cfg.Targets[0].Bucket)
 	}
 }
+
+const llpMonitorV2FixturePath = "tests/fixtures/llp-monitor-status-v2.json"
+
+// v2 (bot-strategy PR #1182) adds the carry since entry — funding
+// received, staking rewards, the monitor's own total — and the hourly
+// pnl_history series. They pass through; v1 must decode exactly as before.
+func TestLLPMonitorV2CarryAndHistoryPassThrough(t *testing.T) {
+	payload, err := os.ReadFile(llpMonitorV2FixturePath)
+	if err != nil {
+		t.Fatalf("read v2 fixture: %v", err)
+	}
+	status, err := decodeLLPMonitorPayload(payload)
+	if err != nil {
+		t.Fatalf("decode v2: %v", err)
+	}
+	p := status.LLPMonitor.Position
+	if p == nil || p.FundingReceived == nil || *p.FundingReceived != 0.010596 ||
+		p.TotalPnlUsd == nil || p.StakingRewardUsd == nil || p.StakingRewardLIT == nil || p.StakedLITNow == nil {
+		t.Fatalf("v2 position = %+v", p)
+	}
+	out, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var raw struct {
+		LLPMonitor struct {
+			PnlHistory struct {
+				Fields []string    `json:"fields"`
+				Rows   [][]float64 `json:"rows"`
+			} `json:"pnl_history"`
+			Position map[string]any `json:"position"`
+		} `json:"llp_monitor"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	h := raw.LLPMonitor.PnlHistory
+	if strings.Join(h.Fields, ",") != "t,total,llp,hedge,funding,staking" || len(h.Rows) != 1 || h.Rows[0][0] != 1791920564 || h.Rows[0][1] != -1.5061 {
+		t.Fatalf("pnl_history = %+v", h)
+	}
+	if raw.LLPMonitor.Position["total_pnl_usd"] != -1.506070096988528 {
+		t.Fatalf("total_pnl_usd = %v", raw.LLPMonitor.Position["total_pnl_usd"])
+	}
+
+	// v1: the new figures are null, pnl_history is absent from the API.
+	v1, err := os.ReadFile(llpMonitorFixturePath)
+	if err != nil {
+		t.Fatalf("read v1 fixture: %v", err)
+	}
+	old, err := decodeLLPMonitorPayload(v1)
+	if err != nil {
+		t.Fatalf("decode v1: %v", err)
+	}
+	op := old.LLPMonitor.Position
+	if op.FundingReceived != nil || op.TotalPnlUsd != nil || op.StakingRewardUsd != nil || old.LLPMonitor.PnlHistory != nil {
+		t.Fatalf("v1 grew v2 fields: %+v", op)
+	}
+	oldOut, _ := json.Marshal(old)
+	if strings.Contains(string(oldOut), "pnl_history") {
+		t.Fatalf("v1 re-encoded with pnl_history: %s", oldOut)
+	}
+	// An explicit null history is the same as none.
+	nullHist, err := decodeLLPMonitorPayload([]byte(`{"t":"2026-10-13T20:07:00Z","level":"OK","pnl_history":null}`))
+	if err != nil || nullHist.LLPMonitor.PnlHistory != nil {
+		t.Fatalf("null pnl_history = %s / %v", nullHist.LLPMonitor.PnlHistory, err)
+	}
+}

@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus, llpPnlSeries, llpPnlChartSvg };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -3110,4 +3110,87 @@ test("llp monitor: render fills the section, hides empty rows, escapes the weekl
   assert.equal(field("llp-errors-row").hidden, false);
   assert.equal(field("llp-errors").textContent, "funding: HTTPError 503");
   assert.equal(field("llp-weekly").hidden, true);
+});
+
+const llpFixtureV2 = () => JSON.parse(fs.readFileSync(`${__dirname}/fixtures/llp-monitor-status-v2.json`, "utf8"));
+const llpFakeCard = () => {
+  const fields = new Map();
+  return {
+    fields,
+    field: (name) => fields.get(`[data-field="${name}"]`),
+    querySelector(selector) {
+      if (!fields.has(selector)) fields.set(selector, { textContent: "", innerHTML: "", title: "", hidden: false, classList: { add() {}, remove() {}, toggle() {} } });
+      return fields.get(selector);
+    },
+  };
+};
+
+test("llp monitor v2: total since entry, funding received and staking rewards", () => {
+  const view = context.__test.llpMonitorViewModel(llpFixtureV2());
+  // The monitor's own total wins over LLP + hedge.
+  assert.equal(view.totalPnl, -1.506070096988528);
+  assert.match(view.totalTitle, /funding received \+ staking rewards/);
+  assert.match(view.totalTitle, /Entry fees and slippage are excluded/);
+  assert.equal(view.fundingReceived, 0.010596);
+  assert.equal(view.staking.value, -1.725598586045294e-05);
+  assert.match(view.staking.title, /LIT accrued \(260 LIT staked now\)/);
+  assert.equal(view.pnlSeries.length, 1);
+  const card = llpFakeCard();
+  context.__test.renderLLPMonitorStatus(card, llpFixtureV2());
+  assert.equal(card.field("llp-total-pnl").textContent, "-1.5 USDC");
+  assert.equal(card.field("llp-funding-received-row").hidden, false);
+  assert.equal(card.field("llp-funding-received").textContent, "+0.01 USDC");
+  assert.equal(card.field("llp-staking-row").hidden, false);
+  // A reward that rounds to zero has no sign.
+  assert.equal(card.field("llp-staking").textContent, "0.00 USDC");
+  // One row is not a line.
+  assert.equal(card.field("llp-pnl-chart-wrap").hidden, true);
+});
+
+test("llp monitor v1 status renders as before: fallback total, no carry rows, no chart", () => {
+  const view = context.__test.llpMonitorViewModel(llpFixture());
+  assert.equal(Math.round(view.totalPnl * 1e6) / 1e6, Math.round((-1.7170358410025983 - 0.5016130000000139) * 1e6) / 1e6);
+  assert.match(view.totalTitle, /does not report funding or staking/);
+  assert.equal(view.fundingReceived, null);
+  assert.equal(view.staking, null);
+  assert.equal(view.pnlSeries.length, 0);
+  const card = llpFakeCard();
+  context.__test.renderLLPMonitorStatus(card, llpFixture());
+  assert.equal(card.field("llp-total-pnl").textContent, "-2.2 USDC");
+  assert.equal(card.field("llp-funding-received-row").hidden, true);
+  assert.equal(card.field("llp-staking-row").hidden, true);
+  assert.equal(card.field("llp-pnl-chart-wrap").hidden, true);
+  assert.equal(card.field("llp-pnl-chart").innerHTML, "");
+});
+
+test("llp monitor: P&L chart from pnl_history, columns by name, bad rows dropped", () => {
+  const history = {
+    fields: ["t", "total", "llp", "hedge", "funding", "staking"],
+    rows: [
+      [1791924000, -1.0, -1.5, 0.4, 0.1, 0],
+      [1791920400, -1.5, -1.7, 0.2, 0.0, 0],
+      [null, 1, 1, 1, 1, 1],
+      "garbage",
+      [1791927600, 0.5, -0.5, 0.8, 0.2, 0],
+    ],
+  };
+  const series = context.__test.llpPnlSeries(history);
+  assert.deepEqual(series.map((p) => p.ts), [1791920400, 1791924000, 1791927600]);
+  assert.equal(Math.round(series[2].hedgeFunding * 10) / 10, 1.0);
+  const svg = context.__test.llpPnlChartSvg(series);
+  assert.equal((svg.match(/<polyline/g) || []).length, 3);
+  assert.match(svg, /class="llp-pnl-total"/);
+  assert.match(svg, /llp-pnl-zero/);
+  // Reordered fields read the same; missing t/total means no series.
+  const reordered = context.__test.llpPnlSeries({ fields: ["total", "t"], rows: [[2, 10], [3, 20]] });
+  assert.deepEqual(reordered.map((p) => [p.ts, p.total, p.llp]), [[10, 2, null], [20, 3, null]]);
+  assert.equal((context.__test.llpPnlChartSvg(reordered).match(/<polyline/g) || []).length, 1);
+  assert.equal(context.__test.llpPnlSeries({ fields: ["llp"], rows: [[1]] }).length, 0);
+  assert.equal(context.__test.llpPnlSeries(null).length, 0);
+  assert.equal(context.__test.llpPnlChartSvg([]), "");
+
+  const card = llpFakeCard();
+  context.__test.renderLLPMonitorStatus(card, { ...llpFixtureV2(), pnl_history: history });
+  assert.equal(card.field("llp-pnl-chart-wrap").hidden, false);
+  assert.match(card.field("llp-pnl-chart").innerHTML, /llp-pnl-total/);
 });

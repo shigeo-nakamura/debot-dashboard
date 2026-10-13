@@ -1,0 +1,110 @@
+{
+ "errors": [],
+ "fail_runs": {
+  "funding": 0,
+  "lit_price": 0,
+  "owner": 0,
+  "pool": 0
+ },
+ "fired": [],
+ "issue": 1179,
+ "level": "OK",
+ "lit": {
+  "funding_hours": 168,
+  "funding_short_7d_ann": 0.09516071428571427,
+  "price": 3.3413
+ },
+ "live_proxy": {
+  "drawdown": 0.0,
+  "full_24h": false,
+  "r24": 8.686497681154037e-07
+ },
+ "llp": {
+  "apy_venue": 14.88207553458244,
+  "asof": "2026-10-12T20:00:00Z",
+  "drawdown": 0.0,
+  "operator_fee": 0.0,
+  "r1d": 0.000782,
+  "r30": 0.015605,
+  "r30_ann": 0.207303,
+  "share_price": 0.00352154005927295,
+  "status": 0,
+  "tvl": 87448088.64
+ },
+ "notify": null,
+ "pnl_history": {
+  "fields": [
+   "t",
+   "total",
+   "llp",
+   "hedge",
+   "funding",
+   "staking"
+  ],
+  "rows": [
+   [
+    1791920564,
+    -1.5061,
+    -1.717,
+    0.2004,
+    0.0106,
+    -0.0
+   ]
+  ]
+ },
+ "position": {
+  "collateral": 623.171801,
+  "funding_received": 0.010596,
+  "hedge_entry_lit_price": 3.3671,
+  "hedge_pnl_usd": 0.20038699999993081,
+  "liq_price": 5.146326191620879,
+  "llp_pnl_usd": -1.7170358410025983,
+  "llp_shares": 689141.0,
+  "llp_usdc_deposited": 2500,
+  "llp_value_tav_usd": 2426.83763798742,
+  "llp_value_usd": 2498.2829641589974,
+  "perp_upnl": 6.908387,
+  "short_lit": 260.0,
+  "staked_lit": 260,
+  "staked_lit_now": 259.9999948355473,
+  "staking_reward_lit": -5.1644527161442966e-06,
+  "staking_reward_usd": -1.725598586045294e-05,
+  "staking_shares": 24749948.0,
+  "total_pnl_usd": -1.506070096988528
+ },
+ "t": "2026-10-13T19:42:44Z",
+ "tvl_change": {
+  "full_7d": false,
+  "value": 3.1364758235064016e-07
+ },
+ "weekly": [
+  {
+   "funding_short_7d_ann": 0.09516071428571427,
+   "lit": 3.3373,
+   "position": {
+    "collateral": 623.171801,
+    "funding_received": 0.010596,
+    "hedge_entry_lit_price": 3.3671,
+    "hedge_pnl_usd": -0.11161300000007035,
+    "liq_price": 5.1463261916208785,
+    "llp_pnl_usd": -1.7170358410025983,
+    "llp_shares": 689141.0,
+    "llp_usdc_deposited": 2500,
+    "llp_value_tav_usd": 2426.8355299173,
+    "llp_value_usd": 2498.2829641589974,
+    "perp_upnl": 7.636387,
+    "short_lit": 260.0,
+    "staked_lit": 260,
+    "staked_lit_now": 259.9999948355473,
+    "staking_reward_lit": -5.1644527161442966e-06,
+    "staking_reward_usd": -1.7235328049588362e-05,
+    "staking_shares": 24749948.0,
+    "total_pnl_usd": -1.8180700763307183
+   },
+   "share_price": 0.0035215370002906515,
+   "t": "2026-10-13T19:42:25Z",
+   "tvl": 87448061.20847695,
+   "week": "2026-W42"
+  }
+ ]
+}
