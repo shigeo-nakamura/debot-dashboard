@@ -3097,7 +3097,9 @@ const isTargetUnhealthy = (target) => {
 const isLLPMonitorStatus = (data) => Boolean(data && data.llp_monitor);
 const llpMonitorFeedErrors = (m) =>
   m && Array.isArray(m.errors) ? m.errors.filter((e) => typeof e === "string" && e) : [];
-const isLLPMonitorDegraded = (m) => Boolean(m && (m.level === "ALERT" || llpMonitorFeedErrors(m).length > 0));
+// a FAILED SNS publish means the owner was not told about a firing-set change (the monitor retries hourly)
+const isLLPMonitorDegraded = (m) => Boolean(m && (m.level === "ALERT" || llpMonitorFeedErrors(m).length > 0
+  || (typeof m.notify === "string" && m.notify.startsWith("FAILED"))));
 // Fractions (returns, funding) as signed percents; the venue APY is already
 // a percent.
 const llpPct = (value, digits = 1) => {

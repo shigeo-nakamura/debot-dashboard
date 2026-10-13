@@ -3017,6 +3017,7 @@ test("llp monitor: position, hedge, funding and pool figures from the monitor's 
   assert.equal(view.weekly[0].lit, "3.3696");
   assert.equal(context.__test.isLLPMonitorStatus({ llp_monitor: llpFixture() }), true);
   assert.equal(context.__test.isLLPMonitorDegraded(llpFixture()), false);
+  assert.equal(context.__test.isLLPMonitorDegraded({ ...llpFixture(), notify: "FAILED rc=255: throttled" }), true);
 });
 
 test("llp monitor: null position and pool, failing feeds and a failed notify", () => {
