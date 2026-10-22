@@ -3125,6 +3125,31 @@ const llpFakeCard = () => {
   };
 };
 
+const llpFixtureV3 = () => JSON.parse(fs.readFileSync(`${__dirname}/fixtures/llp-monitor-status-v3.json`, "utf8"));
+
+test("llp monitor v3: the package's own annualised return on its time-weighted capital", () => {
+  const view = context.__test.llpMonitorViewModel(llpFixtureV3());
+  assert.equal(view.packageReturn.label, "−1.5%/yr (−0.04% over 8.9 d on $4,084)");
+  assert.equal(view.packageReturn.value, -0.015073);
+  assert.match(view.packageReturn.title, /time-weighted/);
+  // 10+ days are whole days; without the parts only the rate shows
+  const m = llpFixtureV3();
+  m.position.days_since_entry = 34.4;
+  assert.equal(context.__test.llpMonitorViewModel(m).packageReturn.label, "−1.5%/yr (−0.04% over 34 d on $4,084)");
+  m.position.return_since_entry = null;
+  assert.equal(context.__test.llpMonitorViewModel(m).packageReturn.label, "−1.5%/yr");
+  // an older monitor has no return: the row hides, nothing is derived from the total
+  assert.equal(context.__test.llpMonitorViewModel(llpFixtureV2()).packageReturn, null);
+  const card = llpFakeCard();
+  context.__test.renderLLPMonitorStatus(card, llpFixtureV3());
+  assert.equal(card.field("llp-return-row").hidden, false);
+  assert.equal(card.field("llp-return").textContent, "−1.5%/yr (−0.04% over 8.9 d on $4,084)");
+  assert.match(card.field("llp-return-row").title, /annualised/);
+  context.__test.renderLLPMonitorStatus(card, llpFixtureV2());
+  assert.equal(card.field("llp-return-row").hidden, true);
+  assert.equal(card.field("llp-return").textContent, "");
+});
+
 test("llp monitor v2: total since entry, funding received and staking rewards", () => {
   const view = context.__test.llpMonitorViewModel(llpFixtureV2());
   // The monitor's own total wins over LLP + hedge.

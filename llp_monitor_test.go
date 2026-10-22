@@ -222,6 +222,46 @@ const llpMonitorV2FixturePath = "tests/fixtures/llp-monitor-status-v2.json"
 // v2 (bot-strategy PR #1182) adds the carry since entry — funding
 // received, staking rewards, the monitor's own total — and the hourly
 // pnl_history series. They pass through; v1 must decode exactly as before.
+const llpMonitorV3FixturePath = "tests/fixtures/llp-monitor-status-v3.json"
+
+// v3 (bot-strategy#1179, 2026-10-22) adds the package's own return; v2 and
+// v1 documents decode without it, and leave it null for the card.
+func TestLLPMonitorV3PackageReturnPassThrough(t *testing.T) {
+	payload, err := os.ReadFile(llpMonitorV3FixturePath)
+	if err != nil {
+		t.Fatalf("read v3 fixture: %v", err)
+	}
+	status, err := decodeLLPMonitorPayload(payload)
+	if err != nil {
+		t.Fatalf("decode v3: %v", err)
+	}
+	p := status.LLPMonitor.Position
+	if p == nil || p.ReturnAnn == nil || *p.ReturnAnn != -0.015073 || p.ReturnSinceEntry == nil || p.DaysSinceEntry == nil || *p.DaysSinceEntry != 8.93 ||
+		p.CapitalUsd == nil || *p.CapitalUsd != 4083.9 || p.CapitalTwaUsd == nil || p.SpotUsdc == nil || p.OpenedAt == nil || *p.OpenedAt != "2026-10-13T18:30Z" {
+		t.Fatalf("v3 position = %+v", p)
+	}
+	out, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	for _, want := range []string{`"return_ann":-0.015073`, `"capital_twa_usd":4083.9`, `"opened_at":"2026-10-13T18:30Z"`, `"days_since_entry":8.93`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("re-encoded v3 lacks %s: %s", want, out)
+		}
+	}
+	v2, err := os.ReadFile(llpMonitorV2FixturePath)
+	if err != nil {
+		t.Fatalf("read v2 fixture: %v", err)
+	}
+	old, err := decodeLLPMonitorPayload(v2)
+	if err != nil {
+		t.Fatalf("decode v2: %v", err)
+	}
+	if op := old.LLPMonitor.Position; op.ReturnAnn != nil || op.CapitalUsd != nil || op.OpenedAt != nil {
+		t.Fatalf("v2 grew v3 fields: %+v", op)
+	}
+}
+
 func TestLLPMonitorV2CarryAndHistoryPassThrough(t *testing.T) {
 	payload, err := os.ReadFile(llpMonitorV2FixturePath)
 	if err != nil {

@@ -90,6 +90,18 @@ type LLPMonitorPosition struct {
 	StakingRewardLIT *float64 `json:"staking_reward_lit"`
 	StakingRewardUsd *float64 `json:"staking_reward_usd"`
 	TotalPnlUsd      *float64 `json:"total_pnl_usd"`
+	// The package's own return (bot-strategy#1179, 2026-10-22): the capital
+	// it ties up now (LLP deposit + LIT at cost + perp collateral + spot
+	// USDC) and time-weighted since position.opened_at, and the total P&L
+	// over that capital, as is and annualised. Absent from an older
+	// monitor; the card then hides the row.
+	SpotUsdc         *float64 `json:"spot_usdc"`
+	CapitalUsd       *float64 `json:"capital_usd"`
+	CapitalTwaUsd    *float64 `json:"capital_twa_usd"`
+	OpenedAt         *string  `json:"opened_at"`
+	DaysSinceEntry   *float64 `json:"days_since_entry"`
+	ReturnSinceEntry *float64 `json:"return_since_entry"`
+	ReturnAnn        *float64 `json:"return_ann"`
 }
 
 // LLPMonitorWeekly is the first reading of each ISO week, kept for the

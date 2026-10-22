@@ -856,6 +856,7 @@ const createCard = (key) => {
         <div class="row" data-field="llp-funding-received-row" hidden title="Funding the LIT short has received since entry (+ = received)."><span>Funding received</span><strong data-field="llp-funding-received"></strong></div>
         <div class="row" data-field="llp-staking-row" hidden><span>Staking rewards</span><strong data-field="llp-staking"></strong></div>
         <div class="row" data-field="llp-total-pnl-row"><span>Total P&amp;L since entry</span><strong data-field="llp-total-pnl"></strong></div>
+        <div class="row" data-field="llp-return-row" hidden><span>Package return</span><strong data-field="llp-return"></strong></div>
         <div class="chart" data-field="llp-pnl-chart-wrap" hidden>
           <div class="chart-title" title="The monitor's hourly total P&amp;L since entry (thick), with the LLP and hedge + funding parts (thin). Entry fees and slippage excluded.">P&amp;L since entry</div>
           <svg class="sparkline llp-pnl-chart" data-field="llp-pnl-chart" viewBox="0 0 100 40" preserveAspectRatio="none"></svg>
@@ -3261,6 +3262,24 @@ const llpMonitorViewModel = (m) => {
     : `${stakingLit === null ? "?" : stakingLit.toLocaleString("en-US", { maximumFractionDigits: 6 })} LIT accrued` +
       `${stakedNow === null ? "" : ` (${holderAmount(stakedNow)} LIT staked now)`}, valued at the LIT price.`;
 
+  // The package's own return (bot-strategy#1179, owner request 2026-10-22):
+  // the monitor's total P&L over the time-weighted capital it ties up since
+  // position.opened_at, annualised. An older monitor has none: the row hides
+  // rather than derive a rate from the total here.
+  const returnAnn = pos ? holderNumber(pos.return_ann) : null;
+  const returnSince = pos ? holderNumber(pos.return_since_entry) : null;
+  const days = pos ? holderNumber(pos.days_since_entry) : null;
+  const capitalTwa = pos ? holderNumber(pos.capital_twa_usd) : null;
+  const packageReturn = returnAnn === null
+    ? null
+    : {
+        value: returnAnn,
+        label: `${llpPct(returnAnn)}/yr` + (returnSince === null || days === null
+          ? ""
+          : ` (${llpPct(returnSince, 2)} over ${days < 10 ? days.toFixed(1) : String(Math.round(days))} d${capitalTwa === null ? "" : ` on ${llpUsdShort(capitalTwa)}`})`),
+        title: "Total P&L since entry over the capital the package ties up (LLP deposit + LIT at cost + perp collateral + spot USDC, time-weighted over deposits), annualised. Over a few weeks this swings with every daily NAV point. Entry fees and slippage excluded.",
+      };
+
   const funding = holderNumber(lit.funding_short_7d_ann);
   const hours = holderNumber(lit.funding_hours);
   const fundingText = funding === null
@@ -3316,6 +3335,7 @@ const llpMonitorViewModel = (m) => {
     hedgePnl,
     totalPnl,
     totalTitle,
+    packageReturn,
     fundingReceived,
     staking: stakingUsd === null ? null : { value: stakingUsd, title: stakingTitle },
     pnlSeries: llpPnlSeries(m.pnl_history),
@@ -3377,6 +3397,11 @@ const renderLLPMonitorStatus = (card, m) => {
   if (totalEl) applySignedClass(totalEl, view.totalPnl);
   const totalRowEl = card.querySelector('[data-field="llp-total-pnl-row"]');
   if (totalRowEl) totalRowEl.title = view.totalTitle;
+  setOptional("llp-return", view.packageReturn === null ? null : view.packageReturn.label);
+  const returnEl = card.querySelector('[data-field="llp-return"]');
+  if (returnEl) applySignedClass(returnEl, view.packageReturn === null ? null : view.packageReturn.value);
+  const returnRowEl = card.querySelector('[data-field="llp-return-row"]');
+  if (returnRowEl) returnRowEl.title = view.packageReturn === null ? "" : view.packageReturn.title;
   setOptional("llp-funding-received", view.fundingReceived === null ? null : llpCents(view.fundingReceived));
   const fundingReceivedEl = card.querySelector('[data-field="llp-funding-received"]');
   if (fundingReceivedEl) applySignedClass(fundingReceivedEl, llpCentsSigned(view.fundingReceived));
