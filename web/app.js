@@ -39,6 +39,7 @@ const BUCKET_LABELS = {
   alpha_candidate: "α candidate",
   beta: "β — risk premium",
   subsidy: "Subsidy capture",
+  experimental: "Experimental point earning",
   unclassified: "Unclassified",
 };
 
@@ -53,15 +54,18 @@ const BUCKET_BENCHMARKS = {
   beta: "Benchmark: buying the same exposure as spot and holding it.",
   subsidy:
     "Benchmark: cost per unit of subsidy earned. A negative PnL is the price paid, not a loss to fix.",
+  experimental:
+    "Benchmark: the experiment's pre-registered gate (e.g. points per $ held, bot-strategy#1228) — a test, not a capital allocation. Excluded from the subsidy aggregate.",
   unclassified:
     "Not in the return-source taxonomy — add a row to docs/buckets.md. Excluded from every aggregate.",
 };
 
 // Stable display order: passed α first (real capital on a proven
 // signal), then α candidates (a pending decision), then β, then subsidy,
-// and anything unclassified last so a missing taxonomy row is visible at
-// the bottom.
-const BUCKET_ORDER = ["alpha", "alpha_candidate", "beta", "subsidy", "unclassified"];
+// then experiments on how a subsidy is earned (bot-strategy#1228), and
+// anything unclassified last so a missing taxonomy row is visible at the
+// bottom.
+const BUCKET_ORDER = ["alpha", "alpha_candidate", "beta", "subsidy", "experimental", "unclassified"];
 
 const RANGE_OPTIONS = [
   { id: "1d", label: "1D", ms: 24 * 60 * 60 * 1000 },

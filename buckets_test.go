@@ -112,6 +112,16 @@ func TestResolveBucket(t *testing.T) {
 			want:   BucketAlphaCandidate,
 		},
 		{
+			name:   "the #1228 hold test inherits the experimental bucket",
+			target: TargetConfig{Service: "debot-xvenue-hedge-arcus"},
+			want:   BucketExperimental,
+		},
+		{
+			name:    "a subsidy label on the experiment contradicts the taxonomy",
+			target:  TargetConfig{Service: "debot-xvenue-hedge-arcus", Bucket: BucketSubsidy},
+			wantErr: "contradicts the return-source taxonomy",
+		},
+		{
 			name:    "typo is rejected instead of silently unclassified",
 			target:  TargetConfig{Service: "debot-bull-holder", Bucket: "Beta"},
 			wantErr: "unknown bucket",
