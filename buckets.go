@@ -19,6 +19,11 @@ const (
 	BucketAlpha   = "alpha"
 	BucketBeta    = "beta"
 	BucketSubsidy = "subsidy"
+	// BucketExperimental holds a short, pre-registered experiment on how a
+	// subsidy is earned (bot-strategy#1228: does held OI earn Arcus points?).
+	// It is not a capital allocation and has no cost-per-unit KPI yet, so it
+	// is kept out of the subsidy aggregate and judged by its issue's gate.
+	BucketExperimental = "experimental"
 	// BucketUnclassified is assigned to a target whose service is not in
 	// the taxonomy and that does not declare `bucket:` in config. Such a
 	// target still renders a card (with its health) but is excluded from
@@ -36,7 +41,7 @@ var taxonomyBuckets = map[string]string{
 	"hype-accumulator":             BucketBeta,
 	"debot-pair-robinhood-lighter": BucketSubsidy,
 	"debot-xvenue-hedge-holder":    BucketSubsidy,
-	"debot-xvenue-hedge-arcus":     BucketSubsidy,
+	"debot-xvenue-hedge-arcus":     BucketExperimental,
 	"debot-arcus-vol":              BucketSubsidy,
 	"debot-arcus-vol-gld":          BucketSubsidy,
 	"debot-arcus-vol-qqq":          BucketSubsidy,
@@ -48,7 +53,7 @@ var taxonomyBuckets = map[string]string{
 
 func validBucket(bucket string) bool {
 	switch bucket {
-	case BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy:
+	case BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy, BucketExperimental:
 		return true
 	}
 	return false
@@ -74,8 +79,8 @@ func resolveBucket(target *TargetConfig) error {
 	}
 	if !validBucket(declared) {
 		return fmt.Errorf(
-			"unknown bucket %q (want %s, %s, %s or %s)",
-			declared, BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy,
+			"unknown bucket %q (want %s, %s, %s, %s or %s)",
+			declared, BucketAlphaCandidate, BucketAlpha, BucketBeta, BucketSubsidy, BucketExperimental,
 		)
 	}
 	if known && registered != declared {

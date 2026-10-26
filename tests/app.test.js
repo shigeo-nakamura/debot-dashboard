@@ -811,6 +811,12 @@ test("money and quantity formatters share one precision across panels", () => {
 test("bucket classification falls back to unclassified instead of inventing a group", () => {
   assert.equal(context.__test.bucketOf({ bucket: "beta" }), "beta");
   assert.equal(context.__test.bucketOf({ bucket: " subsidy " }), "subsidy");
+  assert.equal(context.__test.bucketOf({ bucket: "experimental" }), "experimental");
+  assert.equal(context.__test.BUCKET_LABELS.experimental, "Experimental point earning");
+  const order = context.__test.BUCKET_ORDER;
+  assert.equal(order.indexOf("experimental"), order.indexOf("subsidy") + 1, "experimental sits right after subsidy");
+  // No aggregate row: the experiment is judged by its issue's gate, not by a summed KPI.
+  assert.equal(context.__test.bucketAggregateStats("experimental", [{ target: { status: { pnl_total: 1 } }, index: 0 }]).length, 0);
   // Older server (no field), a value this frontend doesn't know, and a
   // target object with nothing at all all land in the same visible group
   // rather than silently disappearing.

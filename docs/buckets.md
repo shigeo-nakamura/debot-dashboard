@@ -20,7 +20,7 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 | HYPE Accumulator | `hype-accumulator` | `beta` | #849。β + carry — staking 利回りは価格 β と分けて計上する (#956) |
 | Robinhood Freq / B | `debot-pair-robinhood-lighter` | `subsidy` | #798 / #938。points 捕獲。signal の α はゼロ判定 (#935)。2026-09-19 停止 (#1046、bleed) |
 | Robinhood Hedge | `debot-xvenue-hedge-holder` | `subsidy` | #1046。RH long / Core short の hedged hold で points 捕獲。cost = ARM 以降の equity 変化 |
-| Arcus×Core QQQ hedge | `debot-xvenue-hedge-arcus` | `subsidy` | #1123。Arcus long / Core short (QQQ) の hedged hold が Arcus points を生むかの G0。**2026-10-07 停止** (DISARM・両脚 close、wallet は #1093 に転用)。Arcus points は未収集のため KPI (cost / point) は未設定 |
+| Arcus Hold Test (AAPL) | `debot-xvenue-hedge-arcus` | `experimental` | #1228 (旧 #1123)。Arcus long / Core short の hedged hold が Arcus points を生むかの 1 週間テスト (AAPL、約 $20k/leg、2026-10-25 → 11-04 の drop 後に DISARM)。判定は #1228 の gate (11-04 drop で 0x812B ≥ 10 pt)。KPI (cost / point) は未設定 |
 | Arcus presence (SPY) | `debot-arcus-vol` | `subsidy` | #1093。Arcus points。cost = 純損失、KPI = cost / point |
 | Arcus presence (GLD) | `debot-arcus-vol-gld` | `subsidy` | #1093 |
 | Arcus presence (QQQ) | `debot-arcus-vol-qqq` | `subsidy` | #1093 |
@@ -30,6 +30,8 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 | XSMOM shadow track | `xsmom-695-shadow` | `alpha_candidate` | #695 の shadow-paper ledger。**2026-10-02 の gate を判定するのはこちら** (#964)。gate 進捗のみ、PnL は出さない |
 
 `alpha` は事前登録した readout に合格した α 候補の行き先 (taxonomy §4.4)。benchmark は α 候補と同じだが、gate が閉じているので成績を伏せない。ブラインドは bucket が `alpha_candidate` のときだけ。paper / live の区別は bucket ではなく `status.dry_run` / `pnl_source` で表示する。
+
+`experimental` は補助金の**取り方そのもの**を確かめる事前登録済みの短期テスト (例: #1228 — 建玉の保有で Arcus points が付くか)。資金配分ではないので subsidy の集計 (cost / unit) から外し、判定はその issue の gate で行う。結果が出たら subsidy に移すか停止する。
 
 表に無い service は `unclassified` として描画され、集計から外れる。
 新しい bot を足すときは bot-strategy の台帳 → この表 → `taxonomyBuckets` の順に更新する。

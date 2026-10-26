@@ -571,8 +571,8 @@ func TestHedgeHolderArcusInstanceDecodes(t *testing.T) {
 		}
 	}
 	target := TargetConfig{Service: "debot-xvenue-hedge-arcus"}
-	if err := resolveBucket(&target); err != nil || target.Bucket != BucketSubsidy {
-		t.Fatalf("resolveBucket = %v / %q, want nil / %q", err, target.Bucket, BucketSubsidy)
+	if err := resolveBucket(&target); err != nil || target.Bucket != BucketExperimental {
+		t.Fatalf("resolveBucket = %v / %q, want nil / %q", err, target.Bucket, BucketExperimental)
 	}
 }
 
