@@ -481,6 +481,22 @@ func TestHedgeHolderDecodes(t *testing.T) {
 	if !strings.Contains(string(out), `"liq_headroom_pct":null`) {
 		t.Fatalf("null headroom did not survive re-encode: %s", out)
 	}
+	// A failed account read: null equity must stay null through the API,
+	// not become 0 (the summary's Total equity marks it missing).
+	nullEq, err := decodeStatusPayload([]byte(`{"id":"xvenue_hedge_holder","hedge_holder":{"mode":"On","legs":{"long":{"instance":"rh","side":"long","qty":1,"equity_usd":null},"short":{"instance":"core","side":"short","qty":1}}}}`))
+	if err != nil {
+		t.Fatalf("decode null-equity payload: %v", err)
+	}
+	nullOut, err := json.Marshal(nullEq.HedgeHolder)
+	if err != nil {
+		t.Fatalf("re-encode null equity: %v", err)
+	}
+	if strings.Count(string(nullOut), `"equity_usd":null`) != 2 {
+		t.Fatalf("missing / null leg equity did not re-encode as null: %s", nullOut)
+	}
+	if !strings.Contains(string(out), `"equity_usd":4000`) {
+		t.Fatalf("leg equity lost on re-encode: %s", out)
+	}
 	var back HedgeHolderStatus
 	if err := json.Unmarshal(out, &back); err != nil {
 		t.Fatalf("decode re-encoded block: %v", err)

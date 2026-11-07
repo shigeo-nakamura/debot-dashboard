@@ -725,15 +725,19 @@ const equityVenueLabel = (exchange, instance) => {
 
 // Pure: the account value of one target as venue parts, or why it has none.
 // Returns { parts: [{ venue, usd }], incomplete, reason }.
-const targetEquityParts = (target, data) => {
+const targetEquityParts = (target, data, nowMs = Date.now()) => {
   const bucket = bucketOf(target);
   const dexVenue = equityVenueLabel(data.dex);
   if (isArcusVolStatus(data)) return { parts: [], reason: "no account value in its status" };
   if (isBlindedBucket(bucket)) {
     const v = isHanBridgeStatus(data) ? holderNumber(data.han_bridge.venue_equity_usd) : null;
-    return v === null
-      ? { parts: [], reason: "α candidate: no venue equity reported (PnL stays blinded)" }
-      : { parts: [{ venue: dexVenue, usd: v }] };
+    if (v === null) return { parts: [], reason: "α candidate: no venue equity reported (PnL stays blinded)" };
+    // The card's own staleness rule for this reading (producer flag, or the
+    // sample's age plus the time since the status was written), so the
+    // summary never calls current what the card shows as stale.
+    const view = hanBridgeViewModel(data.han_bridge, { statusTsSecs: holderNumber(data.ts), nowSecs: Math.floor(nowMs / 1000) });
+    const readingStale = Boolean(view && view.venueEquity && view.venueEquity.tone === "warn");
+    return { parts: [{ venue: dexVenue, usd: v }], readingStale };
   }
   if (isBullHolderStatus(data)) {
     const b = data.bull_holder;
@@ -801,7 +805,7 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
       notCounted.push({ name, reason: "paper / dry run" });
       return;
     }
-    const res = targetEquityParts(target, data);
+    const res = targetEquityParts(target, data, nowMs);
     if (res.reason) {
       notCounted.push({ name, reason: res.reason });
       return;
@@ -813,9 +817,10 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
     }
     const updated = data.updated_at ? new Date(data.updated_at) : null;
     const updatedMs = updated && Number.isFinite(updated.getTime()) ? updated.getTime() : -Infinity;
+    const limitSecs = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
     const stale = target.service_status === "stale" ||
-      isStale(updated, target.stale_after_secs) ||
-      Boolean(isHanBridgeStatus(data) && data.han_bridge.venue_equity_stale === true);
+      !Number.isFinite(updatedMs) || (nowMs - updatedMs) / 1000 > limitSecs ||
+      res.readingStale === true;
     const label = typeof target.equity_account === "string" ? target.equity_account.trim() : "";
     const key = label ? `account:${label}` : `target:${keyForTarget(target, index)}`;
     const entry = { name, bucket: bucketOf(target), parts: res.parts, stale, updatedMs };

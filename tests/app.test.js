@@ -3279,6 +3279,15 @@ test("total equity takes only the venue equity of an alpha candidate, never its 
   assert.match(blind.notCounted[0].reason, /α candidate/);
   // A stale venue read keeps the last value but marks the total partial.
   assert.equal(context.__test.fleetEquityModel([han({ venue_equity_usd: 50, venue_equity_stale: true })], eqNow).stale, 1);
+  // An old sample with the producer flag still false is stale too (same rule
+  // as the card: published age + time since the status was written).
+  const tsNow = Math.floor(eqNow / 1000);
+  const oldSample = han({ venue_equity_usd: 50, venue_equity_stale: false, venue_equity_age_secs: 1000 });
+  oldSample.status.ts = tsNow;
+  assert.equal(context.__test.fleetEquityModel([oldSample], eqNow).stale, 1);
+  const freshSample = han({ venue_equity_usd: 50, venue_equity_stale: false, venue_equity_age_secs: 10 });
+  freshSample.status.ts = tsNow;
+  assert.equal(context.__test.fleetEquityModel([freshSample], eqNow).stale, 0);
 });
 
 test("total equity treats a null leg as missing, not zero, and lists bots without an account value", () => {

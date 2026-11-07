@@ -284,7 +284,9 @@ type HedgeHolderLeg struct {
 	Qty         float64 `json:"qty"`
 	NotionalUsd float64 `json:"notional_usd"`
 	Mark        float64 `json:"mark"`
-	EquityUsd   float64 `json:"equity_usd"`
+	// Nil when the venue read failed: re-encoded as null so the summary's
+	// Total equity can tell "not read" from a real $0 account.
+	EquityUsd *float64 `json:"equity_usd"`
 	// Percentage points of notional between the venue's equity and its
 	// maintenance requirement; nil while the leg is empty. Pointer without
 	// omitempty so the producer's null re-encodes as null (the han_bridge
