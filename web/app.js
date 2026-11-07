@@ -818,8 +818,8 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
       notCounted.push({ name, reason: res.reason });
       return;
     }
-    if (res.incomplete) missing += 1;
     if (res.parts.length === 0) {
+      missing += 1;
       notCounted.push({ name, reason: "equity not reported" });
       return;
     }
@@ -831,7 +831,7 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
       res.readingStale === true;
     const label = typeof target.equity_account === "string" ? target.equity_account.trim() : "";
     const key = label ? `account:${label}` : `target:${keyForTarget(target, index)}`;
-    const entry = { name, bucket: bucketOf(target), parts: res.parts, stale, updatedMs };
+    const entry = { name, bucket: bucketOf(target), parts: res.parts, stale, incomplete: res.incomplete === true, updatedMs };
     const prev = accounts.get(key);
     if (!prev) accounts.set(key, { ...entry, shared: [] });
     else if (entry.updatedMs > prev.updatedMs) accounts.set(key, { ...entry, shared: [...prev.shared, prev.name] });
@@ -843,6 +843,9 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
   const byBucket = new Map();
   accounts.forEach((a) => {
     if (a.stale) stale += 1;
+    // Judged on the snapshot that won the dedupe: a redundant older,
+    // incomplete snapshot of a shared account is not a missing account.
+    if (a.incomplete) missing += 1;
     a.parts.forEach((p) => {
       total += p.usd;
       byVenue.set(p.venue, (byVenue.get(p.venue) || 0) + p.usd);

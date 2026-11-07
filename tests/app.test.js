@@ -3256,6 +3256,14 @@ test("total equity counts one account once when targets share an equity_account 
   const newer = eqHedge("New", 5, 5, { equity_account: "x" });
   assert.equal(context.__test.fleetEquityModel([older, newer], eqNow).total, 10);
   assert.equal(context.__test.fleetEquityModel([newer, older], eqNow).total, 10);
+  // An older, incomplete snapshot of the same account does not mark the total partial.
+  const olderHalf = eqHedge("OldHalf", 1, 1, { equity_account: "y" });
+  olderHalf.status.updated_at = "2026-11-07T20:50:00Z";
+  olderHalf.status.hedge_holder.legs.short.equity_usd = null;
+  const newerFull = eqHedge("NewFull", 100, 200, { equity_account: "y" });
+  const dm = context.__test.fleetEquityModel([olderHalf, newerFull], eqNow);
+  assert.equal(dm.total, 300);
+  assert.equal(dm.missing, 0);
 });
 
 test("total equity leaves paper, dry-run and shadow books out", () => {
