@@ -3274,9 +3274,13 @@ test("total equity takes only the venue equity of an alpha candidate, never its 
     status: { ...fixture, updated_at: eqFresh, dry_run: false, pnl_total: 12.9, han_bridge: { ...fixture.han_bridge, ...hb } } });
   const m = context.__test.fleetEquityModel([han({ venue_equity_usd: 1011.69, venue_equity_stale: false })], eqNow);
   assert.equal(m.total, 1011.69);
-  const blind = context.__test.fleetEquityModel([han({ venue_equity_usd: null })], eqNow);
+  const blind = context.__test.fleetEquityModel([han({ venue_equity_usd: null, venue_solvency_reported: false })], eqNow);
   assert.equal(blind.total, null);
+  assert.equal(blind.missing, 0);
   assert.match(blind.notCounted[0].reason, /α candidate/);
+  // Solvency reported but the read failed: missing capital, total partial.
+  const failedRead = context.__test.fleetEquityModel([han({ venue_equity_usd: null, venue_solvency_reported: true })], eqNow);
+  assert.equal(failedRead.missing, 1);
   // A stale venue read keeps the last value but marks the total partial.
   assert.equal(context.__test.fleetEquityModel([han({ venue_equity_usd: 50, venue_equity_stale: true })], eqNow).stale, 1);
   // An old sample with the producer flag still false is stale too (same rule
@@ -3295,6 +3299,13 @@ test("total equity treats a null leg as missing, not zero, and lists bots withou
   halfBlind.status.hedge_holder.legs.short.equity_usd = null;
   const arcus = { name: "Arcus presence (SPY)", service: "debot-arcus-vol", bucket: "subsidy", service_status: "active",
     status: { updated_at: eqFresh, arcus_vol: { wallet_label: "W" } } };
+  // A venue outage keeps the last snapshot: counted, but stale.
+  const outage = eqHedge("Outage", 7, 8);
+  outage.status.hedge_holder.feed_problem = "venue unreachable";
+  const om = context.__test.fleetEquityModel([outage], eqNow);
+  assert.equal(om.total, 15);
+  assert.equal(om.stale, 1);
+  assert.equal(context.__test.fleetEquityModel([eqHedge("Ok", 7, 8)], eqNow).stale, 0);
   const m = context.__test.fleetEquityModel([halfBlind, arcus], eqNow);
   assert.equal(m.total, 100);
   assert.equal(m.missing, 1);

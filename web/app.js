@@ -731,7 +731,13 @@ const targetEquityParts = (target, data, nowMs = Date.now()) => {
   if (isArcusVolStatus(data)) return { parts: [], reason: "no account value in its status" };
   if (isBlindedBucket(bucket)) {
     const v = isHanBridgeStatus(data) ? holderNumber(data.han_bridge.venue_equity_usd) : null;
-    if (v === null) return { parts: [], reason: "α candidate: no venue equity reported (PnL stays blinded)" };
+    if (v === null) {
+      // A producer that reports solvency but has no reading (a failed
+      // account read) is missing capital, not an unsupported source.
+      return isHanBridgeStatus(data) && data.han_bridge.venue_solvency_reported === true
+        ? { parts: [], incomplete: true }
+        : { parts: [], reason: "α candidate: no venue equity reported (PnL stays blinded)" };
+    }
     // The card's own staleness rule for this reading (producer flag, or the
     // sample's age plus the time since the status was written), so the
     // summary never calls current what the card shows as stale.
@@ -760,7 +766,9 @@ const targetEquityParts = (target, data, nowMs = Date.now()) => {
       if (v === null) incomplete = true;
       else parts.push({ venue: equityVenueLabel(leg.exchange, leg.instance), usd: v });
     });
-    return { parts, incomplete };
+    // During a venue outage the producer keeps publishing its last good
+    // snapshot (feed_problem set): keep the values, call them stale.
+    return { parts, incomplete, readingStale: isHedgeHolderFeedBlind(data) };
   }
   if (isLLPMonitorStatus(data)) {
     // Package NAV, the #1255 readout's definition: LLP shares at the pool
