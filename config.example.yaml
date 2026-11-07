@@ -169,6 +169,15 @@ targets:
 #      # Optional short tag for the venue account; the consolidated Arcus
 #      # panel groups and subtotals its rows by it. Never a full address.
 #      wallet_label: "0xA2C7"
+#      # Optional, for the top-panel Total equity: the funded account the
+#      # runtime trades (full address + subaccount, default 0). The server
+#      # reads its value from the public Arcus account endpoint; the address
+#      # is never served. Targets on one wallet are counted once.
+#      account_address: "0x0000000000000000000000000000000000000000"
+#      account_index: 0
+#      # Or, when another target already counts this wallet (e.g. a hedge
+#      # holder's Arcus leg), name it instead of account_address:
+#      # equity_counted_by: "Arcus Hold Test (AAPL)"
 # auth:
 #   username: admin
 #   password: change-me

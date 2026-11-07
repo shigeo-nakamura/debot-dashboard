@@ -41,6 +41,17 @@ type ArcusVolConfig struct {
 	// trades (e.g. "0xA2C7"): the consolidated Arcus panel groups its rows
 	// and subtotals by it. A label, never a full address.
 	WalletLabel string `yaml:"wallet_label"`
+	// Optional, for the top-panel Total equity: the funded venue account the
+	// runtime trades (full address + subaccount index, default 0). The
+	// dashboard reads its value from the public account endpoint; the
+	// address never leaves the server. Targets on the same wallet are
+	// counted once.
+	AccountAddress string `yaml:"account_address"`
+	AccountIndex   *int   `yaml:"account_index"`
+	// Optional: the name of another target whose status already counts
+	// this wallet (e.g. a hedge holder trading the same Arcus account), so
+	// the total does not count it twice. Exclusive with account_address.
+	EquityCountedBy string `yaml:"equity_counted_by"`
 }
 
 const (
@@ -72,7 +83,7 @@ func (c ArcusVolConfig) validate() error {
 	if !arcusVolWalletLabelRe.MatchString(c.WalletLabel) || arcusVolAddressRe.MatchString(c.WalletLabel) {
 		return errors.New("arcus_vol.wallet_label must be a short label (up to 16 of A-Z a-z 0-9 . _ -), not an address")
 	}
-	return nil
+	return c.validateAccount()
 }
 
 var (
@@ -123,6 +134,14 @@ type ArcusVolStatus struct {
 	APIKey                *ArcusVolAPIKey `json:"api_key"`
 	// WalletLabel is the target's configured display label (empty = none).
 	WalletLabel string `json:"wallet_label,omitempty"`
+	// Wallet value for the Total equity (arcus_account.go). AccountKey is a
+	// one-way id for the dedupe, never the address.
+	AccountConfigured  bool     `json:"account_configured"`
+	AccountKey         string   `json:"account_key,omitempty"`
+	AccountEquityUSD   *float64 `json:"account_equity_usd,omitempty"`
+	AccountEquityAtMs  int64    `json:"account_equity_at_ms,omitempty"`
+	AccountEquityError string   `json:"account_equity_error,omitempty"`
+	EquityCountedBy    string   `json:"equity_counted_by,omitempty"`
 	// Session is the runtime's venue-session flag ("in" / "off"); empty
 	// when the runtime does not report one.
 	Session string `json:"session,omitempty"`

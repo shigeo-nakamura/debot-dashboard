@@ -911,6 +911,21 @@ func normalizeConfig(cfg *Config) error {
 			return fmt.Errorf("targets[%d] missing s3_key", i)
 		}
 	}
+	// equity_counted_by must name another configured target: a typo would
+	// silently drop a wallet from the Total equity.
+	names := map[string]bool{}
+	for _, t := range cfg.Targets {
+		names[t.Name] = true
+	}
+	for i, t := range cfg.Targets {
+		if t.ArcusVol == nil || strings.TrimSpace(t.ArcusVol.EquityCountedBy) == "" {
+			continue
+		}
+		by := strings.TrimSpace(t.ArcusVol.EquityCountedBy)
+		if by == t.Name || !names[by] {
+			return fmt.Errorf("targets[%d]: arcus_vol.equity_counted_by %q must name another target", i, by)
+		}
+	}
 	return nil
 }
 
@@ -1001,6 +1016,7 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 				// Only the scheduled poll samples presence; a history/range
 				// request (every page load) must not add observations.
 				results[i] = fetchArcusVol(target, time.Now(), !includeHistory)
+				applyArcusAccountEquity(ctx, http.DefaultClient, target, results[i].Status, time.Now())
 			} else {
 				results[i] = fetchTargetS3(ctx, target, s3pool, includeHistory, cutoffMs)
 			}
