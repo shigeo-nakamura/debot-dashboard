@@ -95,7 +95,10 @@ type LLPMonitorPosition struct {
 	// USDC) and time-weighted since position.opened_at, and the total P&L
 	// over that capital, as is and annualised. Absent from an older
 	// monitor; the card then hides the row.
-	SpotUsdc         *float64 `json:"spot_usdc"`
+	SpotUsdc *float64 `json:"spot_usdc"`
+	// UnstakedLIT is owned LIT outside the staking pool (spot + pending
+	// unlocks); part of the package NAV the summary's Total equity uses.
+	UnstakedLIT      *float64 `json:"unstaked_lit"`
 	CapitalUsd       *float64 `json:"capital_usd"`
 	CapitalTwaUsd    *float64 `json:"capital_twa_usd"`
 	OpenedAt         *string  `json:"opened_at"`

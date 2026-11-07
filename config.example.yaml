@@ -52,6 +52,10 @@ targets:
     dex: "Lighter (Robinhood Chain) / Lighter Core"
     # Optional: inherited from docs/buckets.md when omitted.
     bucket: subsidy
+    # Optional: a label (not an account id) for the account behind this
+    # target's equity. Targets sharing one account set the same label so
+    # the summary's Total equity counts it once (docs/buckets.md).
+    # equity_account: rh-hedge
     # Cost-per-unit KPI for a subsidy bot (bot-strategy#938/#957). Only
     # valid on a target in the subsidy bucket. `unit` must match the unit
     # the bot's own ledger reports, or its units are not rendered — a

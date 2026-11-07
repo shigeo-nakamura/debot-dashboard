@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus, llpPnlSeries, llpPnlChartSvg };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus, llpPnlSeries, llpPnlChartSvg, fleetEquityModel, targetEquityParts, fleetEquityTitle };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -3224,4 +3224,131 @@ test("llp monitor: P&L chart from pnl_history, columns by name, bad rows dropped
   context.__test.renderLLPMonitorStatus(card, { ...llpFixtureV2(), pnl_history: history });
   assert.equal(card.field("llp-pnl-chart-wrap").hidden, false);
   assert.match(card.field("llp-pnl-chart").innerHTML, /llp-pnl-total/);
+});
+
+// ---- Total equity (owner request 2026-11-07): capital, deduped by account ----
+const eqNow = Date.parse("2026-11-07T21:00:00Z");
+const eqFresh = "2026-11-07T20:59:50Z";
+const eqHedge = (name, longUsd, shortUsd, extra = {}) => ({
+  name, service: "debot-xvenue-hedge-holder", bucket: "subsidy", service_status: "active", ...extra,
+  status: { updated_at: eqFresh, dry_run: false, pnl_source: "equity", pnl_total: longUsd + shortUsd,
+    hedge_holder: { legs: {
+      long: { exchange: "lighter", instance: "rh", equity_usd: longUsd },
+      short: { exchange: "lighter", instance: "core", equity_usd: shortUsd },
+    } } },
+});
+
+test("total equity counts one account once when targets share an equity_account label", () => {
+  const m = context.__test.fleetEquityModel([
+    eqHedge("A", 100, 200, { equity_account: "acct-1" }),
+    eqHedge("B", 100, 200, { equity_account: "acct-1" }),
+    eqHedge("C", 10, 20),
+  ], eqNow);
+  assert.equal(m.total, 330);
+  assert.equal(m.accounts, 2);
+  assert.match(context.__test.fleetEquityTitle(m), /Shared accounts counted once: A = B/);
+  // Without labels the same targets are separate accounts.
+  const unlabelled = context.__test.fleetEquityModel([eqHedge("A", 100, 200), eqHedge("B", 100, 200)], eqNow);
+  assert.equal(unlabelled.total, 600);
+  // The freshest snapshot of a shared account wins.
+  const older = eqHedge("Old", 1, 1, { equity_account: "x" });
+  older.status.updated_at = "2026-11-07T20:50:00Z";
+  const newer = eqHedge("New", 5, 5, { equity_account: "x" });
+  assert.equal(context.__test.fleetEquityModel([older, newer], eqNow).total, 10);
+  assert.equal(context.__test.fleetEquityModel([newer, older], eqNow).total, 10);
+  // An older, incomplete snapshot of the same account does not mark the total partial.
+  const olderHalf = eqHedge("OldHalf", 1, 1, { equity_account: "y" });
+  olderHalf.status.updated_at = "2026-11-07T20:50:00Z";
+  olderHalf.status.hedge_holder.legs.short.equity_usd = null;
+  const newerFull = eqHedge("NewFull", 100, 200, { equity_account: "y" });
+  const dm = context.__test.fleetEquityModel([olderHalf, newerFull], eqNow);
+  assert.equal(dm.total, 300);
+  assert.equal(dm.missing, 0);
+});
+
+test("total equity leaves paper, dry-run and shadow books out", () => {
+  const paper = eqHedge("Paper", 500, 500);
+  paper.status.dry_run = true;
+  const shadow = { name: "Shadow", service: "x", bucket: "alpha", service_status: "active",
+    status: { updated_at: eqFresh, pnl_source: "shadow_paper", pnl_total: 9999 } };
+  const m = context.__test.fleetEquityModel([paper, shadow, eqHedge("Real", 1, 2)], eqNow);
+  assert.equal(m.total, 3);
+  assert.equal(JSON.stringify(m.notCounted.map((n) => n.reason)), JSON.stringify(["paper / dry run", "paper / dry run"]));
+});
+
+test("total equity takes only the venue equity of an alpha candidate, never its PnL", () => {
+  const fixture = JSON.parse(fs.readFileSync(`${__dirname}/fixtures/han-bridge-status-v2.json`, "utf8"));
+  const han = (hb) => ({ name: "Han Bridge", service: "engine-b-live", bucket: "alpha_candidate", service_status: "active",
+    status: { ...fixture, updated_at: eqFresh, dry_run: false, pnl_total: 12.9, han_bridge: { ...fixture.han_bridge, ...hb } } });
+  const m = context.__test.fleetEquityModel([han({ venue_equity_usd: 1011.69, venue_equity_stale: false })], eqNow);
+  assert.equal(m.total, 1011.69);
+  const blind = context.__test.fleetEquityModel([han({ venue_equity_usd: null, venue_solvency_reported: false })], eqNow);
+  assert.equal(blind.total, null);
+  assert.equal(blind.missing, 0);
+  assert.match(blind.notCounted[0].reason, /α candidate/);
+  // Solvency reported but the read failed: missing capital, total partial.
+  const failedRead = context.__test.fleetEquityModel([han({ venue_equity_usd: null, venue_solvency_reported: true })], eqNow);
+  assert.equal(failedRead.missing, 1);
+  // A stale venue read keeps the last value but marks the total partial.
+  assert.equal(context.__test.fleetEquityModel([han({ venue_equity_usd: 50, venue_equity_stale: true })], eqNow).stale, 1);
+  // An old sample with the producer flag still false is stale too (same rule
+  // as the card: published age + time since the status was written).
+  const tsNow = Math.floor(eqNow / 1000);
+  const oldSample = han({ venue_equity_usd: 50, venue_equity_stale: false, venue_equity_age_secs: 1000 });
+  oldSample.status.ts = tsNow;
+  assert.equal(context.__test.fleetEquityModel([oldSample], eqNow).stale, 1);
+  const freshSample = han({ venue_equity_usd: 50, venue_equity_stale: false, venue_equity_age_secs: 10 });
+  freshSample.status.ts = tsNow;
+  assert.equal(context.__test.fleetEquityModel([freshSample], eqNow).stale, 0);
+});
+
+test("total equity treats a null leg as missing, not zero, and lists bots without an account value", () => {
+  const halfBlind = eqHedge("Half", 100, 0);
+  halfBlind.status.hedge_holder.legs.short.equity_usd = null;
+  const arcus = { name: "Arcus presence (SPY)", service: "debot-arcus-vol", bucket: "subsidy", service_status: "active",
+    status: { updated_at: eqFresh, arcus_vol: { wallet_label: "W" } } };
+  // A venue outage keeps the last snapshot: counted, but stale.
+  const outage = eqHedge("Outage", 7, 8);
+  outage.status.hedge_holder.feed_problem = "venue unreachable";
+  const om = context.__test.fleetEquityModel([outage], eqNow);
+  assert.equal(om.total, 15);
+  assert.equal(om.stale, 1);
+  assert.equal(context.__test.fleetEquityModel([eqHedge("Ok", 7, 8)], eqNow).stale, 0);
+  const m = context.__test.fleetEquityModel([halfBlind, arcus], eqNow);
+  assert.equal(m.total, 100);
+  assert.equal(m.missing, 1);
+  assert.equal(JSON.stringify(m.notCounted.map((n) => n.name)), JSON.stringify(["Arcus presence (SPY)"]));
+  const none = context.__test.fleetEquityModel([{ name: "Down", service_status: "stale", status: null }], eqNow);
+  assert.equal(none.total, null);
+  assert.equal(none.missing, 1);
+  // Not-started services are neither counted nor missing.
+  const ns = context.__test.fleetEquityModel([{ name: "New", service_status: "not_started", status: null }], eqNow);
+  assert.equal(ns.missing, 0);
+});
+
+test("total equity values the LLP package at NAV and splits venues", () => {
+  const llp = { name: "LLP monitor", service: "llp-monitor", bucket: "unclassified", service_status: "active",
+    status: { updated_at: eqFresh, llp_monitor: { lit: { price: 3.0 }, position: {
+      llp_value_usd: 5000, staked_lit_now: 500, staked_lit: 490, unstaked_lit: 1, collateral: 2700, perp_upnl: -5, spot_usdc: 2,
+    } } } };
+  const m = context.__test.fleetEquityModel([llp, eqHedge("H", 100, 200)], eqNow);
+  assert.equal(m.total, 5000 + 501 * 3 + 2700 - 5 + 2 + 300);
+  assert.deepEqual(Object.fromEntries(m.byVenue), { Lighter: 5000 + 1503 + 2700 - 5 + 2 + 200, "Lighter (Robinhood Chain)": 100 });
+  const noPrice = { ...llp, status: { ...llp.status, llp_monitor: { ...llp.status.llp_monitor, lit: { price: null } } } };
+  assert.equal(context.__test.fleetEquityModel([noPrice], eqNow).missing, 1);
+  // Bull holder splits HL / Lighter; the accumulator is Hyperliquid.
+  const holder = { name: "Bull", service: "debot-bull-holder", bucket: "beta", service_status: "active",
+    status: { updated_at: eqFresh, bull_holder: { total_equity_usdc: 30, hyperliquid: { equity_usdc: 10 }, lighter: { equity_usdc: 20 } } } };
+  const acc = { name: "HYPE", service: "hype-accumulator", bucket: "beta", service_status: "active",
+    status: { updated_at: eqFresh, accumulator: { total_equity_usdc: 7 } } };
+  const m2 = context.__test.fleetEquityModel([holder, acc], eqNow);
+  assert.deepEqual(Object.fromEntries(m2.byVenue), { Hyperliquid: 17, Lighter: 20 });
+  assert.deepEqual(Object.fromEntries(m2.byBucket), { beta: 37 });
+});
+
+test("fleet summary renders the total equity and its partial marker", () => {
+  context.__test.updateFleetSummary([eqHedge("A", 1000, 2000), { name: "Down", service_status: "stale", status: null }]);
+  const value = (name) => fleetFields.get(`[data-field="${name}"]`).textContent;
+  assert.equal(value("fleet-equity-total"), "$3,000");
+  assert.match(value("fleet-equity-note"), /partial: .*1 missing/);
 });
