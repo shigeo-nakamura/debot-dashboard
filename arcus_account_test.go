@@ -159,3 +159,28 @@ func TestEquityCountedByMustNameAnotherTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestArcusAccountReadIsBounded(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	prevURL := arcusAPIBaseURL
+	arcusAPIBaseURL = srv.URL
+	defer func() { arcusAPIBaseURL = prevURL }()
+	defer arcusAccountCacheForTest()()
+	start := time.Now()
+	s := arcusStatus()
+	applyArcusAccountEquity(context.Background(), http.DefaultClient, arcusWalletTarget("SPY", testArcusAddr, nil), s, time.Now())
+	if took := time.Since(start); took > arcusAccountTimeout+2*time.Second {
+		t.Fatalf("a stalled venue read must give up after the timeout, took %s", took)
+	}
+	if s.ArcusVol.AccountEquityUSD != nil || s.ArcusVol.AccountEquityError == "" {
+		t.Fatalf("a timed-out read is an error, never a value: %+v", s.ArcusVol)
+	}
+}

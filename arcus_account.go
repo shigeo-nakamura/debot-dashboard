@@ -33,6 +33,7 @@ var (
 const (
 	arcusAccountTTL      = 60 * time.Second
 	arcusAccountErrorTTL = 30 * time.Second
+	arcusAccountTimeout  = 5 * time.Second
 )
 
 type arcusAccountReading struct {
@@ -105,7 +106,11 @@ func (c *arcusAccountCache) get(ctx context.Context, client *http.Client, addres
 		return *r
 	}
 	r.fetchedAt = now
-	equity, err := fetchArcusAccountEquity(ctx, client, address, index)
+	// Bounded: the lock is held across the read and fetchAll waits for
+	// every target, so a stalled venue must not stall the whole snapshot.
+	fetchCtx, cancel := context.WithTimeout(ctx, arcusAccountTimeout)
+	defer cancel()
+	equity, err := fetchArcusAccountEquity(fetchCtx, client, address, index)
 	if err != nil {
 		// Keep the last good value and its time: the summary shows it as
 		// stale rather than dropping the wallet.
