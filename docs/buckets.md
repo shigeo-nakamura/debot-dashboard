@@ -35,3 +35,20 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 
 表に無い service は `unclassified` として描画され、集計から外れる。
 新しい bot を足すときは bot-strategy の台帳 → この表 → `taxonomyBuckets` の順に更新する。
+
+## 例外: 上部パネルの Total equity (2026-11-07 オーナー決定)
+
+上の「バケツをまたいだ合算には意味がない」は**成績** (PnL・リターン) の話。上部の fleet summary に 1 つだけ置く
+`Total equity` は成績ではなく**資本** — いま各 bot の口座にいくら入っているか — で、オーナーの依頼でバケツ横断
+(`unclassified` の LLP monitor も含む) で合算する。PnL・リターンには決して使わない。
+
+- **口座ごとに 1 回**: 同じ口座を共有する target は `config.yaml` で同じ `equity_account:` ラベル (口座 id や
+  アドレスではなく任意の名前) を付ける。同じラベルの target は最新の snapshot 1 つだけを数える。ラベル無しの
+  target は 1 target = 1 口座。status にはわざと口座 id を出していないので、ラベルが唯一の重複除去キー。
+- **実弾のみ**: `dry_run: true`、`pnl_source` が paper / shadow / sim の帳簿は除外。
+- **α 候補**: 成績は伏せたまま。solvency 例外として既に出している venue equity (Han Bridge の
+  `han_bridge.venue_equity_usd`) だけを数える。
+- **LLP package**: #1255 readout と同じ NAV = LLP 時価 + 保有 LIT (stake 分 + 未 stake 分) × LIT 価格 + perp collateral +
+  perp 含み損益 + spot USDC。
+- **口座価値を出さない target** (Arcus volume bot) は 0 と見なさず「Not counted」に列挙する。stale / 欠損は最後の値を
+  使い、合計に `partial` を付ける。内訳 (venue 別・バケツ別) は tooltip。24 h 変化は出さない (target ごとの履歴が揃わない)。

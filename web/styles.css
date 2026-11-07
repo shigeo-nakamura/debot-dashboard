@@ -310,6 +310,16 @@ body::after {
   color: var(--ink);
 }
 
+/* Total equity: the one capital figure on the summary (account value, not PnL). */
+.fleet-stat.fleet-equity {
+  cursor: help;
+}
+
+.fleet-stat-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .fleet-stat.severity .fleet-stat-value {
   color: var(--muted);
 }

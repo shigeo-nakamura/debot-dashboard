@@ -92,6 +92,11 @@ type TargetConfig struct {
 	// Accumulator carries the operator-verified DCA window for the HYPE
 	// accumulator (bot-strategy#956).
 	Accumulator *AccumulatorConfig `yaml:"accumulator"`
+	// EquityAccount is an operator label (never an account id or address)
+	// naming the venue account behind the target's equity. Targets that
+	// share one account set the same label so the summary's Total equity
+	// counts that account once. Empty: the target is its own account.
+	EquityAccount string `yaml:"equity_account"`
 }
 
 type StatusPosition struct {
@@ -636,6 +641,9 @@ type TargetStatus struct {
 	// the frontend, error-watch and any other API reader can group and
 	// filter by it (bot-strategy#959).
 	Bucket string `json:"bucket"`
+	// EquityAccount is the configured account label for the Total equity
+	// dedupe (TargetConfig.EquityAccount); omitted when unset.
+	EquityAccount string `json:"equity_account,omitempty"`
 	// SubsidyKPI is the configured cost-per-unit KPI plus its staleness
 	// verdict; nil for a target that is not a configured subsidy bot.
 	SubsidyKPI *SubsidyKPI `json:"subsidy_kpi,omitempty"`
@@ -999,6 +1007,7 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			}
 			// Set last: both fetchers rebuild the TargetStatus wholesale.
 			results[i].Bucket = target.Bucket
+			results[i].EquityAccount = strings.TrimSpace(target.EquityAccount)
 			results[i].SubsidyKPI = resolveSubsidyKPI(target.Subsidy)
 			var gate *GateStatus
 			if results[i].Status != nil {

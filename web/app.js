@@ -190,10 +190,10 @@ const render = (data) => {
   }
   reconcileBucketOrder();
 
-  // Fleet summary: health counters only. Money aggregates moved into the
-  // per-bucket headers — a fleet-wide equity or PnL sum mixes a held
-  // asset balance, a subsidy bot's intentional cost and a paper book's
-  // reference capital into one meaningless number (bot-strategy#959).
+  // Fleet summary: health counters plus Total equity, the one fleet-wide
+  // capital figure (account value, deduped by account, real money only —
+  // see fleetEquityModel). Performance aggregates stay in the per-bucket
+  // headers (bot-strategy#959).
   updateFleetSummary(data.targets);
 
   if (!hasRendered) {
@@ -626,10 +626,10 @@ const updateFleetSummary = (targets) => {
     fleetSummaryEl.hidden = true;
     return;
   }
-  // Health counters only. Equity, PnL and return aggregates live in the
-  // per-bucket headers: summing a β bot's held asset value, a subsidy
-  // bot's deliberate cost and an α candidate's paper equity produces a
-  // number no decision can be made from (bot-strategy#959).
+  // Health counters, plus one capital figure (Total equity, below). PnL
+  // and return aggregates live in the per-bucket headers: summing a β
+  // bot's gain, a subsidy bot's deliberate cost and an α candidate's paper
+  // result produces a number no decision can be made from (bot-strategy#959).
   let halts = 0;
   let killSwitches = 0;
   let servicesDown = 0;
@@ -685,7 +685,192 @@ const updateFleetSummary = (targets) => {
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
   setField("fleet-halts-24h", `${halts24h}`, halts24h > 0 ? "alert" : null);
+  renderFleetEquity(fleetEquityModel(targets));
   fleetSummaryEl.hidden = false;
+};
+
+// ---- Total equity: capital deployed across the fleet (owner request 2026-11-07) ----
+//
+// The one fleet-wide money figure. #959 removed fleet-wide equity / PnL sums
+// because they read as performance; this one is CAPITAL — what the bots'
+// accounts are worth right now — and never PnL or a return. The rules that
+// keep it honest:
+//  - one account counted once: targets that set the same `equity_account`
+//    label in config.yaml (served as target.equity_account) share one
+//    account, and only the freshest of them counts. A target without the
+//    label is its own account. The status payloads carry no account ids on
+//    purpose, so the label is the only dedupe key.
+//  - real money only: a dry-run / paper / shadow book is left out.
+//  - an α candidate (blinded bucket) contributes only the venue equity it
+//    already shows as a solvency exception (Han Bridge
+//    han_bridge.venue_equity_usd, deploy/alpha-gate.md), never its PnL.
+//  - a target whose status carries no account value (the Arcus volume bots)
+//    is listed as not counted, not silently treated as zero.
+//  - stale or missing targets keep the last known value and mark the total
+//    partial.
+const EQUITY_NOT_REAL_SOURCE = /paper|shadow|sim/i;
+
+const equityVenueLabel = (exchange, instance) => {
+  const e = typeof exchange === "string" ? exchange.toLowerCase() : "";
+  const i = typeof instance === "string" ? instance.toLowerCase() : "";
+  if (e.includes("arcus")) return "Arcus";
+  if (e.includes("variational")) return "Variational";
+  if (e.includes("hyperliquid")) return "Hyperliquid";
+  if (e.includes("lighter")) {
+    if (i === "rh" || e.includes("robinhood")) return "Lighter (Robinhood Chain)";
+    return "Lighter";
+  }
+  return exchange && String(exchange).trim() ? String(exchange).trim() : "other";
+};
+
+// Pure: the account value of one target as venue parts, or why it has none.
+// Returns { parts: [{ venue, usd }], incomplete, reason }.
+const targetEquityParts = (target, data) => {
+  const bucket = bucketOf(target);
+  const dexVenue = equityVenueLabel(data.dex);
+  if (isArcusVolStatus(data)) return { parts: [], reason: "no account value in its status" };
+  if (isBlindedBucket(bucket)) {
+    const v = isHanBridgeStatus(data) ? holderNumber(data.han_bridge.venue_equity_usd) : null;
+    return v === null
+      ? { parts: [], reason: "α candidate: no venue equity reported (PnL stays blinded)" }
+      : { parts: [{ venue: dexVenue, usd: v }] };
+  }
+  if (isBullHolderStatus(data)) {
+    const b = data.bull_holder;
+    const hl = holderNumber(b.hyperliquid && b.hyperliquid.equity_usdc);
+    const li = holderNumber(b.lighter && b.lighter.equity_usdc);
+    if (hl !== null && li !== null) return { parts: [{ venue: "Hyperliquid", usd: hl }, { venue: "Lighter", usd: li }] };
+    const total = holderNumber(b.total_equity_usdc);
+    return total === null ? { parts: [], incomplete: true } : { parts: [{ venue: "Hyperliquid + Lighter", usd: total }] };
+  }
+  if (isAccumulatorStatus(data)) {
+    const v = holderNumber(data.accumulator.total_equity_usdc);
+    return v === null ? { parts: [], incomplete: true } : { parts: [{ venue: "Hyperliquid", usd: v }] };
+  }
+  if (isHedgeHolderStatus(data)) {
+    const legs = data.hedge_holder.legs && typeof data.hedge_holder.legs === "object" ? Object.values(data.hedge_holder.legs) : [];
+    const parts = [];
+    let incomplete = legs.length === 0;
+    legs.forEach((leg) => {
+      const v = leg ? holderNumber(leg.equity_usd) : null;
+      if (v === null) incomplete = true;
+      else parts.push({ venue: equityVenueLabel(leg.exchange, leg.instance), usd: v });
+    });
+    return { parts, incomplete };
+  }
+  if (isLLPMonitorStatus(data)) {
+    // Package NAV, the #1255 readout's definition: LLP shares at the pool
+    // price + owned LIT (staked incl. rewards + unstaked) at the LIT price +
+    // perp collateral + unrealised perp PnL + spot USDC.
+    const m = data.llp_monitor;
+    const pos = m.position && typeof m.position === "object" ? m.position : {};
+    const litPx = holderNumber(m.lit && m.lit.price);
+    const llp = holderNumber(pos.llp_value_usd);
+    const stakedNow = holderNumber(pos.staked_lit_now);
+    const staked = stakedNow !== null ? stakedNow : holderNumber(pos.staked_lit);
+    const unstaked = holderNumber(pos.unstaked_lit) || 0;
+    const collateral = holderNumber(pos.collateral);
+    const upnl = holderNumber(pos.perp_upnl);
+    const spot = holderNumber(pos.spot_usdc) || 0;
+    if ([litPx, llp, staked, collateral, upnl].some((x) => x === null)) return { parts: [], incomplete: true };
+    return { parts: [{ venue: "Lighter", usd: llp + (staked + unstaked) * litPx + collateral + upnl + spot }] };
+  }
+  if (isBookStatus(data) && data.book.equity_ready === false) return { parts: [], incomplete: true };
+  const v = snapshotEquityValue(data);
+  return v === null ? { parts: [], incomplete: true } : { parts: [{ venue: dexVenue, usd: v }] };
+};
+
+// Pure: the fleet's total account value. nowMs is injectable for tests.
+const fleetEquityModel = (targets, nowMs = Date.now()) => {
+  const accounts = new Map();
+  const notCounted = [];
+  let missing = 0;
+  (targets || []).forEach((target, index) => {
+    const name = target.name || target.service || `target ${index + 1}`;
+    if (target.service_status === SERVICE_NOT_STARTED) {
+      notCounted.push({ name, reason: "not started" });
+      return;
+    }
+    const data = target.status;
+    if (!data) {
+      missing += 1;
+      notCounted.push({ name, reason: "no status" });
+      return;
+    }
+    if (data.dry_run === true || (typeof data.pnl_source === "string" && EQUITY_NOT_REAL_SOURCE.test(data.pnl_source))) {
+      notCounted.push({ name, reason: "paper / dry run" });
+      return;
+    }
+    const res = targetEquityParts(target, data);
+    if (res.reason) {
+      notCounted.push({ name, reason: res.reason });
+      return;
+    }
+    if (res.incomplete) missing += 1;
+    if (res.parts.length === 0) {
+      notCounted.push({ name, reason: "equity not reported" });
+      return;
+    }
+    const updated = data.updated_at ? new Date(data.updated_at) : null;
+    const updatedMs = updated && Number.isFinite(updated.getTime()) ? updated.getTime() : -Infinity;
+    const stale = target.service_status === "stale" ||
+      isStale(updated, target.stale_after_secs) ||
+      Boolean(isHanBridgeStatus(data) && data.han_bridge.venue_equity_stale === true);
+    const label = typeof target.equity_account === "string" ? target.equity_account.trim() : "";
+    const key = label ? `account:${label}` : `target:${keyForTarget(target, index)}`;
+    const entry = { name, bucket: bucketOf(target), parts: res.parts, stale, updatedMs };
+    const prev = accounts.get(key);
+    if (!prev) accounts.set(key, { ...entry, shared: [] });
+    else if (entry.updatedMs > prev.updatedMs) accounts.set(key, { ...entry, shared: [...prev.shared, prev.name] });
+    else prev.shared.push(name);
+  });
+  let total = 0;
+  let stale = 0;
+  const byVenue = new Map();
+  const byBucket = new Map();
+  accounts.forEach((a) => {
+    if (a.stale) stale += 1;
+    a.parts.forEach((p) => {
+      total += p.usd;
+      byVenue.set(p.venue, (byVenue.get(p.venue) || 0) + p.usd);
+      byBucket.set(a.bucket, (byBucket.get(a.bucket) || 0) + p.usd);
+    });
+  });
+  const counted = Array.from(accounts.values());
+  return {
+    total: counted.length ? total : null,
+    counted,
+    accounts: counted.length,
+    stale,
+    missing,
+    notCounted,
+    byVenue: Array.from(byVenue.entries()).sort((a, b) => b[1] - a[1]),
+    byBucket: Array.from(byBucket.entries()).sort((a, b) => b[1] - a[1]),
+  };
+};
+
+const fleetEquityTitle = (model) => {
+  const usd0 = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
+  const lines = ["Account value of the bots' accounts (capital, not PnL); each account counted once."];
+  if (model.byVenue.length) lines.push(`By venue: ${model.byVenue.map(([v, n]) => `${v} ${usd0(n)}`).join(" · ")}`);
+  if (model.byBucket.length) lines.push(`By bucket: ${model.byBucket.map(([b, n]) => `${BUCKET_LABELS[b] || b} ${usd0(n)}`).join(" · ")}`);
+  const shared = model.counted.filter((a) => a.shared.length);
+  if (shared.length) lines.push(`Shared accounts counted once: ${shared.map((a) => [a.name, ...a.shared].join(" = ")).join("; ")}`);
+  if (model.stale) lines.push(`${model.stale} stale (last known value included)`);
+  if (model.notCounted.length) lines.push(`Not counted: ${model.notCounted.map((n) => `${n.name} (${n.reason})`).join("; ")}`);
+  return lines.join("\n");
+};
+
+const renderFleetEquity = (model) => {
+  const usd0 = (n) => (n === null ? "—" : `$${Math.round(n).toLocaleString("en-US")}`);
+  setField("fleet-equity-total", usd0(model.total));
+  const notes = [];
+  if (model.stale) notes.push(`${model.stale} stale`);
+  if (model.missing) notes.push(`${model.missing} missing`);
+  setField("fleet-equity-note", notes.length ? `partial: ${notes.join(" · ")}` : `${model.accounts} accounts`);
+  const el = fleetSummaryEl.querySelector('[data-field="fleet-equity-total"]');
+  const stat = el && typeof el.closest === "function" ? el.closest(".fleet-stat") : null;
+  if (stat) stat.title = fleetEquityTitle(model);
 };
 
 const setField = (field, text, severity) => {
