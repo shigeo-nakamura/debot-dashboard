@@ -50,5 +50,12 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
   `han_bridge.venue_equity_usd`) だけを数える。
 - **LLP package**: #1255 readout と同じ NAV = LLP 時価 + 保有 LIT (stake 分 + 未 stake 分) × LIT 価格 + perp collateral +
   perp 含み損益 + spot USDC。
-- **口座価値を出さない target** (Arcus volume bot) は 0 と見なさず「Not counted」に列挙する。stale / 欠損は最後の値を
+- **Arcus volume bot の wallet** (owner 2026-11-07): runtime の status に口座価値が無いので、`arcus_vol.account_address`
+  (+ `account_index`、既定 0) を設定した target について dashboard server が venue の公開 account endpoint
+  (`GET /v1/account?address=&accountIndex=`、鍵・署名なし、60 s cache) から equity を読む。アドレスは server の外に
+  出さず、一方向の `account_key` だけを返す → 同じ wallet の target (SPY / GLD …) は 1 口座。鮮度は wallet の読み取り
+  時刻で判定する (止めた market の古い status で wallet を stale にしない)。**別 target が既に数えている wallet**
+  (例: #1228 の hedge holder の Arcus leg = 0x812B) に volume bot target を置くときは `account_address` の代わりに
+  `equity_counted_by: <その target 名>` を書く (二重計上防止。存在しない名前は起動時エラー、両方の指定もエラー)。
+- **口座価値を出さない target** (アドレス未設定の Arcus volume bot など) は 0 と見なさず「Not counted」に列挙する。stale / 欠損は最後の値を
   使い、合計に `partial` を付ける。内訳 (venue 別・バケツ別) は tooltip。24 h 変化は出さない (target ごとの履歴が揃わない)。

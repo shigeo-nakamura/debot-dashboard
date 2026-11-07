@@ -7,8 +7,16 @@ a band. The card answers "is it quoting, and what did the fills cost", not
 "what did it earn": a presence bot's PnL is the price paid for being on the
 book.
 
-The dashboard reads the runtime's own `status.json` on the same host. It
-makes no venue calls and reads no credential or operator config file.
+The dashboard reads the runtime's own `status.json` on the same host and
+reads no credential or operator config file. Its only venue call is
+optional: with `arcus_vol.account_address` set, the server reads the
+wallet's value for the top-panel Total equity from the venue's public
+account endpoint (`GET https://api.arcus.xyz/v1/account?address=&accountIndex=`,
+no key, no signature; one request per wallet per 60 s, shared by every
+target on that wallet). The address stays in config.yaml; the API serves
+only a one-way `account_key`. For a wallet another target already counts
+(a hedge holder's Arcus leg), set `equity_counted_by: <that target's name>`
+instead. See docs/buckets.md "Total equity".
 
 ## What the card shows
 

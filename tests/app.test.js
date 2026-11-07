@@ -3352,3 +3352,64 @@ test("fleet summary renders the total equity and its partial marker", () => {
   assert.equal(value("fleet-equity-total"), "$3,000");
   assert.match(value("fleet-equity-note"), /partial: .*1 missing/);
 });
+
+// Arcus volume-bot wallets (owner 2026-11-07 "include the Arcus wallets too").
+const eqArcus = (name, wallet, extra = {}, statusExtra = {}) => ({
+  name, service: name, bucket: "subsidy", service_status: "active",
+  status: { updated_at: eqFresh, ...statusExtra, arcus_vol: { wallet_label: "W", account_configured: true, account_key: wallet,
+    account_equity_usd: 5000, account_equity_at_ms: eqNow - 30 * 1000, ...extra } },
+});
+
+test("total equity counts an Arcus wallet once across its market targets, fresh by the wallet reading", () => {
+  // GLD's runtime is stopped (status file hours old) but trades the same
+  // wallet as SPY: one account, and the wallet reading decides freshness.
+  const gld = eqArcus("Arcus presence (GLD)", "k1", {}, { updated_at: "2026-11-01T00:00:00Z" });
+  gld.service_status = "stale";
+  const m = context.__test.fleetEquityModel([eqArcus("Arcus presence (SPY)", "k1"), gld, eqHedge("H", 100, 200)], eqNow);
+  assert.equal(m.total, 5300);
+  assert.equal(m.accounts, 2);
+  assert.equal(m.stale, 0);
+  assert.equal(m.missing, 0);
+  assert.equal(JSON.stringify(m.byVenue.find(([v]) => v === "Arcus")), JSON.stringify(["Arcus", 5000]));
+  // Only the stopped market's target on the wallet: the money is still in
+  // the wallet and its reading is fresh, so it is not stale.
+  const alone = context.__test.fleetEquityModel([gld], eqNow);
+  assert.equal(alone.total, 5000);
+  assert.equal(alone.stale, 0);
+  // Two different wallets are two accounts.
+  assert.equal(context.__test.fleetEquityModel([eqArcus("A", "k1"), eqArcus("B", "k2", { account_equity_usd: 700 })], eqNow).total, 5700);
+});
+
+test("total equity does not count a wallet twice when a hedge holder already counts it", () => {
+  // The #1228 hold test trades its own Arcus wallet: its Arcus leg is in the
+  // hedge holder's status; a volume-bot target on that wallet points there.
+  const hold = eqHedge("Arcus Hold Test (AAPL)", 8700, 10600);
+  hold.status.hedge_holder.legs.long.exchange = "arcus";
+  const aapl = eqArcus("Arcus presence (AAPL)", "k9", { equity_counted_by: "Arcus Hold Test (AAPL)", account_configured: false, account_key: undefined, account_equity_usd: undefined });
+  const m = context.__test.fleetEquityModel([hold, aapl, eqArcus("Arcus presence (SPY)", "k1")], eqNow);
+  assert.equal(m.total, 8700 + 10600 + 5000);
+  assert.ok(m.notCounted.some((n) => n.name === "Arcus presence (AAPL)" && /counted in Arcus Hold Test/.test(n.reason)));
+  // No address configured: listed, not counted, not missing.
+  const bare = eqArcus("Bare", "x", { account_configured: false });
+  const bm = context.__test.fleetEquityModel([bare], eqNow);
+  assert.equal(bm.total, null);
+  assert.equal(bm.missing, 0);
+  assert.ok(bm.notCounted.some((n) => /no account address/.test(n.reason)));
+});
+
+test("total equity: an unread Arcus wallet is one missing account, an old reading is stale", () => {
+  const unread = (name) => eqArcus(name, "k1", { account_equity_usd: null, account_equity_at_ms: undefined, account_equity_error: "account API unavailable" });
+  const m = context.__test.fleetEquityModel([unread("SPY"), unread("GLD")], eqNow);
+  assert.equal(m.total, null);
+  assert.equal(m.missing, 1);
+  // Another target on the same wallet has the reading: nothing missing.
+  const m2 = context.__test.fleetEquityModel([unread("GLD"), eqArcus("SPY", "k1")], eqNow);
+  assert.equal(m2.total, 5000);
+  assert.equal(m2.missing, 0);
+  const old = eqArcus("Old", "k3", { account_equity_at_ms: eqNow - 10 * 60 * 1000 });
+  assert.equal(context.__test.fleetEquityModel([old], eqNow).stale, 1);
+  const failedRefresh = eqArcus("Kept", "k4", { account_equity_error: "account API HTTP 502" });
+  const fm = context.__test.fleetEquityModel([failedRefresh], eqNow);
+  assert.equal(fm.total, 5000);
+  assert.equal(fm.stale, 1);
+});

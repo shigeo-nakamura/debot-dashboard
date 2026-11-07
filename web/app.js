@@ -704,8 +704,16 @@ const updateFleetSummary = (targets) => {
 //  - an α candidate (blinded bucket) contributes only the venue equity it
 //    already shows as a solvency exception (Han Bridge
 //    han_bridge.venue_equity_usd, deploy/alpha-gate.md), never its PnL.
-//  - a target whose status carries no account value (the Arcus volume bots)
-//    is listed as not counted, not silently treated as zero.
+//  - Arcus volume bots: their runtime publishes no account value, so the
+//    server reads the wallet's value from the venue's public account
+//    endpoint (arcus_vol.account_address in config.yaml) and serves a
+//    one-way account_key: targets on one wallet are counted once, and the
+//    wallet's own reading time decides freshness (a stopped market on a
+//    live wallet does not make the wallet stale). A wallet another target
+//    already counts (a hedge holder's Arcus leg) sets equity_counted_by and
+//    is listed as counted there. No address configured = not counted.
+//  - a target whose status carries no account value is listed as not
+//    counted, not silently treated as zero.
 //  - stale or missing targets keep the last known value and mark the total
 //    partial.
 const EQUITY_NOT_REAL_SOURCE = /paper|shadow|sim/i;
@@ -728,7 +736,7 @@ const equityVenueLabel = (exchange, instance) => {
 const targetEquityParts = (target, data, nowMs = Date.now()) => {
   const bucket = bucketOf(target);
   const dexVenue = equityVenueLabel(data.dex);
-  if (isArcusVolStatus(data)) return { parts: [], reason: "no account value in its status" };
+  if (isArcusVolStatus(data)) return arcusWalletEquityParts(data.arcus_vol, nowMs);
   if (isBlindedBucket(bucket)) {
     const v = isHanBridgeStatus(data) ? holderNumber(data.han_bridge.venue_equity_usd) : null;
     if (v === null) {
@@ -792,9 +800,31 @@ const targetEquityParts = (target, data, nowMs = Date.now()) => {
   return v === null ? { parts: [], incomplete: true } : { parts: [{ venue: dexVenue, usd: v }] };
 };
 
+// An Arcus wallet reading older than this is shown as stale (the server
+// refreshes it every 60 s while the page polls).
+const ARCUS_WALLET_STALE_MS = 5 * 60 * 1000;
+
+const arcusWalletEquityParts = (a, nowMs) => {
+  const by = typeof a.equity_counted_by === "string" ? a.equity_counted_by.trim() : "";
+  if (by) return { parts: [], reason: `wallet counted in ${by}` };
+  if (a.account_configured !== true) return { parts: [], reason: "no account address configured" };
+  const key = typeof a.account_key === "string" && a.account_key ? `arcus:${a.account_key}` : null;
+  const v = holderNumber(a.account_equity_usd);
+  const atMs = holderNumber(a.account_equity_at_ms);
+  if (v === null) return { parts: [], incomplete: true, accountKey: key };
+  return {
+    parts: [{ venue: "Arcus", usd: v }],
+    accountKey: key,
+    // Freshness is the wallet reading's, not the bot status file's.
+    asOfMs: atMs !== null ? atMs : -Infinity,
+    readingStale: atMs === null || nowMs - atMs > ARCUS_WALLET_STALE_MS || Boolean(a.account_equity_error),
+  };
+};
+
 // Pure: the fleet's total account value. nowMs is injectable for tests.
 const fleetEquityModel = (targets, nowMs = Date.now()) => {
   const accounts = new Map();
+  const unreadWallets = new Set();
   const notCounted = [];
   let missing = 0;
   (targets || []).forEach((target, index) => {
@@ -818,24 +848,39 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
       notCounted.push({ name, reason: res.reason });
       return;
     }
+    const label = typeof target.equity_account === "string" ? target.equity_account.trim() : "";
+    const key = label ? `account:${label}` : res.accountKey ? `account:${res.accountKey}` : `target:${keyForTarget(target, index)}`;
     if (res.parts.length === 0) {
-      missing += 1;
+      // A shared wallet (Arcus) without a reading is one missing account,
+      // and none at all if another target on it has a reading: decided
+      // after every target is seen.
+      if (res.accountKey) unreadWallets.add(key);
+      else missing += 1;
       notCounted.push({ name, reason: "equity not reported" });
       return;
     }
-    const updated = data.updated_at ? new Date(data.updated_at) : null;
-    const updatedMs = updated && Number.isFinite(updated.getTime()) ? updated.getTime() : -Infinity;
-    const limitSecs = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
-    const stale = target.service_status === "stale" ||
-      !Number.isFinite(updatedMs) || (nowMs - updatedMs) / 1000 > limitSecs ||
-      res.readingStale === true;
-    const label = typeof target.equity_account === "string" ? target.equity_account.trim() : "";
-    const key = label ? `account:${label}` : `target:${keyForTarget(target, index)}`;
+    let updatedMs;
+    let stale;
+    if (res.asOfMs !== undefined) {
+      // A venue reading of the wallet itself (Arcus): its own time decides.
+      updatedMs = res.asOfMs;
+      stale = res.readingStale === true;
+    } else {
+      const updated = data.updated_at ? new Date(data.updated_at) : null;
+      updatedMs = updated && Number.isFinite(updated.getTime()) ? updated.getTime() : -Infinity;
+      const limitSecs = Number.isFinite(target.stale_after_secs) && target.stale_after_secs > 0 ? target.stale_after_secs : 180;
+      stale = target.service_status === "stale" ||
+        !Number.isFinite(updatedMs) || (nowMs - updatedMs) / 1000 > limitSecs ||
+        res.readingStale === true;
+    }
     const entry = { name, bucket: bucketOf(target), parts: res.parts, stale, incomplete: res.incomplete === true, updatedMs };
     const prev = accounts.get(key);
     if (!prev) accounts.set(key, { ...entry, shared: [] });
     else if (entry.updatedMs > prev.updatedMs) accounts.set(key, { ...entry, shared: [...prev.shared, prev.name] });
     else prev.shared.push(name);
+  });
+  unreadWallets.forEach((key) => {
+    if (!accounts.has(key)) missing += 1;
   });
   let total = 0;
   let stale = 0;
