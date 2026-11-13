@@ -153,6 +153,29 @@ targets:
 # they are repeated here as display values. `bucket: subsidy` is declared
 # until the return-source taxonomy lists the service. See
 # deploy/arcus-vol.md.
+# Arcus points holds (bot-strategy#1293): the xvenue_hedge_holder binary with an Arcus long leg, one
+# instance per wallet/market. Same card as "Robinhood Hedge" (the status carries a hedge_holder
+# block); the services are in the taxonomy as subsidy, so no bucket: is needed. See deploy/robinhood-hedge.md.
+#  - name: Arcus Hold (AAPL)
+#    instance_id: i-0095af4fe0efbc5dd
+#    service: debot-xvenue-hedge-arcus
+#    region: ap-northeast-1
+#    source: s3
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: debot/status/robinhood-lighter/xvenue-hedge-arcus.json
+#    dex: "Arcus / Lighter Core"
+#  - name: Arcus Hold (NVDA)
+#    instance_id: i-0095af4fe0efbc5dd
+#    service: debot-xvenue-hedge-arcus-nvda
+#    region: ap-northeast-1
+#    source: s3
+#    s3_bucket: debot-dashboard
+#    s3_region: eu-central-1
+#    s3_key: debot/status/robinhood-lighter/xvenue-hedge-arcus-nvda.json
+#    dex: "Arcus / Lighter Core"
+# Arcus volume bots (debot-arcus-vol*): ALL stopped since 2026-11-12 (bot-strategy#1093); the block
+# below stays only as the arcus_vol reference.
 #  - name: Arcus presence (SPY)
 #    instance_id: i-xxxxxxxxxxxxxxxxx
 #    service: debot-arcus-vol

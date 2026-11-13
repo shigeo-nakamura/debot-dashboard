@@ -112,13 +112,18 @@ func TestResolveBucket(t *testing.T) {
 			want:   BucketAlphaCandidate,
 		},
 		{
-			name:   "the #1228 hold test inherits the experimental bucket",
+			name:   "the #1293 AAPL hold inherits subsidy (was the experimental #1228 test)",
 			target: TargetConfig{Service: "debot-xvenue-hedge-arcus"},
-			want:   BucketExperimental,
+			want:   BucketSubsidy,
 		},
 		{
-			name:    "a subsidy label on the experiment contradicts the taxonomy",
-			target:  TargetConfig{Service: "debot-xvenue-hedge-arcus", Bucket: BucketSubsidy},
+			name:   "the #1293 NVDA hold instance inherits subsidy too",
+			target: TargetConfig{Service: "debot-xvenue-hedge-arcus-nvda"},
+			want:   BucketSubsidy,
+		},
+		{
+			name:    "an experimental label on the standing hold contradicts the taxonomy",
+			target:  TargetConfig{Service: "debot-xvenue-hedge-arcus", Bucket: BucketExperimental},
 			wantErr: "contradicts the return-source taxonomy",
 		},
 		{

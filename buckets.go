@@ -37,18 +37,19 @@ const (
 // fails when the two drift apart, so a bot moving between buckets is a
 // documentation change first and a code change second.
 var taxonomyBuckets = map[string]string{
-	"debot-bull-holder":            BucketBeta,
-	"hype-accumulator":             BucketBeta,
-	"debot-pair-robinhood-lighter": BucketSubsidy,
-	"debot-xvenue-hedge-holder":    BucketSubsidy,
-	"debot-xvenue-hedge-arcus":     BucketExperimental,
-	"debot-arcus-vol":              BucketSubsidy,
-	"debot-arcus-vol-gld":          BucketSubsidy,
-	"debot-arcus-vol-qqq":          BucketSubsidy,
-	"debot-arcus-vol-nvda":         BucketSubsidy,
-	"engine-b-live":                BucketAlphaCandidate,
-	"book-runtime-xsmom-695":       BucketAlpha,
-	"xsmom-695-shadow":             BucketAlphaCandidate,
+	"debot-bull-holder":             BucketBeta,
+	"hype-accumulator":              BucketBeta,
+	"debot-pair-robinhood-lighter":  BucketSubsidy,
+	"debot-xvenue-hedge-holder":     BucketSubsidy,
+	"debot-xvenue-hedge-arcus":      BucketSubsidy,
+	"debot-xvenue-hedge-arcus-nvda": BucketSubsidy,
+	"debot-arcus-vol":               BucketSubsidy,
+	"debot-arcus-vol-gld":           BucketSubsidy,
+	"debot-arcus-vol-qqq":           BucketSubsidy,
+	"debot-arcus-vol-nvda":          BucketSubsidy,
+	"engine-b-live":                 BucketAlphaCandidate,
+	"book-runtime-xsmom-695":        BucketAlpha,
+	"xsmom-695-shadow":              BucketAlphaCandidate,
 }
 
 func validBucket(bucket string) bool {
