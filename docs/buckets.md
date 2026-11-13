@@ -20,7 +20,8 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 | HYPE Accumulator | `hype-accumulator` | `beta` | #849。β + carry — staking 利回りは価格 β と分けて計上する (#956) |
 | Robinhood Freq / B | `debot-pair-robinhood-lighter` | `subsidy` | #798 / #938。points 捕獲。signal の α はゼロ判定 (#935)。2026-09-19 停止 (#1046、bleed) |
 | Robinhood Hedge | `debot-xvenue-hedge-holder` | `subsidy` | #1046。RH long / Core short の hedged hold で points 捕獲。cost = ARM 以降の equity 変化 |
-| Arcus Hold Test (AAPL) | `debot-xvenue-hedge-arcus` | `experimental` | #1228 (旧 #1123)。Arcus long / Core short の hedged hold が Arcus points を生むかの 1 週間テスト (AAPL、約 $20k/leg、2026-10-25 → 11-04 の drop 後に DISARM)。判定は #1228 の gate (11-04 drop で 0x812B ≥ 10 pt)。KPI (cost / point) は未設定 |
+| Arcus Hold (AAPL) | `debot-xvenue-hedge-arcus` | `subsidy` | #1293 (standing allocation; 旧 #1228 hold test は `experimental` だった)。Arcus AAPL long / Lighter Core AAPL short の hedged hold (~$40k/leg) で Arcus points を取る。cost = ARM (2026-11-12) 以降の equity 変化 |
+| Arcus Hold (NVDA) | `debot-xvenue-hedge-arcus-nvda` | `subsidy` | #1293。同じ bot の 2 本目 (Arcus NVDA long / Core NVDA short、~$20k/leg、別 wallet)。2026-11-13 DRY_RUN 設置、ARM は owner |
 | Arcus presence (SPY) | `debot-arcus-vol` | `subsidy` | #1093。Arcus points。cost = 純損失、KPI = cost / point |
 | Arcus presence (GLD) | `debot-arcus-vol-gld` | `subsidy` | #1093 |
 | Arcus presence (QQQ) | `debot-arcus-vol-qqq` | `subsidy` | #1093 |

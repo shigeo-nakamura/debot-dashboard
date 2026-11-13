@@ -586,9 +586,11 @@ func TestHedgeHolderArcusInstanceDecodes(t *testing.T) {
 			t.Fatalf("%s did not survive re-encode: %s", want, out)
 		}
 	}
-	target := TargetConfig{Service: "debot-xvenue-hedge-arcus"}
-	if err := resolveBucket(&target); err != nil || target.Bucket != BucketExperimental {
-		t.Fatalf("resolveBucket = %v / %q, want nil / %q", err, target.Bucket, BucketExperimental)
+	for _, svc := range []string{"debot-xvenue-hedge-arcus", "debot-xvenue-hedge-arcus-nvda"} {
+		target := TargetConfig{Service: svc}
+		if err := resolveBucket(&target); err != nil || target.Bucket != BucketSubsidy {
+			t.Fatalf("resolveBucket(%s) = %v / %q, want nil / %q", svc, err, target.Bucket, BucketSubsidy)
+		}
 	}
 }
 
