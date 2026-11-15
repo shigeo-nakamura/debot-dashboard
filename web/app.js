@@ -1169,7 +1169,7 @@ const createCard = (key) => {
       </div>
       <div class="positions" data-field="positions-list"></div>
       <div class="han-bridge-view" data-field="han-bridge-view" hidden>
-        <div class="han-bridge-header">Engine B (Han Bridge)</div>
+        <div class="han-bridge-header">Night Bridge</div>
         <div class="row"><span>Pair</span><strong data-field="han-bridge-pair"></strong></div>
         <div class="row"><span>Today</span><strong class="tone-neutral" data-field="han-bridge-today"></strong></div>
         <div class="row" data-field="han-bridge-schedule-row" hidden><span data-field="han-bridge-schedule-label">Exit</span><strong data-field="han-bridge-schedule"></strong></div>
