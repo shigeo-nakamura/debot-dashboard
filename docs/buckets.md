@@ -26,7 +26,7 @@ bot-strategy 側の台帳を更新する**。ダッシュボード側の変更�
 | Arcus presence (GLD) | `debot-arcus-vol-gld` | `subsidy` | #1093 |
 | Arcus presence (QQQ) | `debot-arcus-vol-qqq` | `subsidy` | #1093 |
 | Arcus presence (NVDA) | `debot-arcus-vol-nvda` | `subsidy` | #1093 |
-| Han Bridge (Engine B) | `engine-b-live` | `alpha_candidate` | #866。gate 未通過 |
+| Night Bridge (ex Engine B / Han Bridge) | `engine-b-live` | `alpha_candidate` | #866。gate 未通過 |
 | XSMOM | `book-runtime-xsmom-695` | `alpha` | #695。2026-10-08 readout VERDICT GO で α 候補から昇格 (taxonomy §4.4)、live $1000 (10-08〜)。PnL / equity を表示する |
 | XSMOM shadow track | `xsmom-695-shadow` | `alpha_candidate` | #695 の shadow-paper ledger。**2026-10-02 の gate を判定するのはこちら** (#964)。gate 進捗のみ、PnL は出さない |
 
