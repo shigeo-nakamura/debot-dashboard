@@ -3461,3 +3461,23 @@ test("aave panel: health factor tones, liquidation distance, stale and no-debt a
   assert.equal(t.aavePanelModel(null), null);
   assert.equal(t.aavePanelModel({ accounts: [] }), null);
 });
+
+test("total equity adds each Aave account at collateral − debt; unread is missing, failed refresh is stale", () => {
+  const t = context.__test;
+  const now = eqNow;
+  const aave = { chain: "Base", accounts: [
+    { label: "main", address: "0x23a3…7888", at_ms: now - 30_000, collateral_usd: 1000, debt_usd: 600 },
+    { label: "sub", address: "0xb6c7…ff81", at_ms: now - 30_000, collateral_usd: 500, debt_usd: 200, error: "Aave RPC unavailable" },
+    { label: "new", address: "0xad72…f37f", at_ms: 0, assets: [] },
+  ] };
+  const m = t.fleetEquityModel([eqHedge("A", 100, 200)], now, aave);
+  assert.equal(m.total, 300 + 400 + 300);
+  assert.equal(m.accounts, 3);
+  assert.equal(m.stale, 1);
+  assert.equal(m.missing, 1);
+  assert.match(t.fleetEquityTitle(m), /Aave \$700/);
+  assert.match(t.fleetEquityTitle(m), /Aave \(own accounts\) \$700/);
+  assert.match(t.fleetEquityTitle(m), /Aave new \(Aave account not read yet\)/);
+  // No aave block: unchanged.
+  assert.equal(t.fleetEquityModel([eqHedge("A", 100, 200)], now).total, 300);
+});

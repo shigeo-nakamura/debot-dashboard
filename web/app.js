@@ -195,7 +195,7 @@ const render = (data) => {
   // capital figure (account value, deduped by account, real money only —
   // see fleetEquityModel). Performance aggregates stay in the per-bucket
   // headers (bot-strategy#959).
-  updateFleetSummary(data.targets);
+  updateFleetSummary(data.targets, data.aave);
   renderAavePanel(aavePanelEl, data.aave);
 
   if (!hasRendered) {
@@ -622,7 +622,7 @@ const currentUtcMonthStartMs = () => {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 };
 
-const updateFleetSummary = (targets) => {
+const updateFleetSummary = (targets, aave = null) => {
   if (!fleetSummaryEl) return;
   if (!targets || targets.length === 0) {
     fleetSummaryEl.hidden = true;
@@ -687,7 +687,7 @@ const updateFleetSummary = (targets) => {
   setField("fleet-kill-switches", `${killSwitches}`, killSwitches > 0 ? "alert" : null);
   setField("fleet-services-down", `${servicesDown}`, servicesDown > 0 ? "alert" : null);
   setField("fleet-halts-24h", `${halts24h}`, halts24h > 0 ? "alert" : null);
-  renderFleetEquity(fleetEquityModel(targets));
+  renderFleetEquity(fleetEquityModel(targets, Date.now(), aave));
   fleetSummaryEl.hidden = false;
 };
 
@@ -823,8 +823,34 @@ const arcusWalletEquityParts = (a, nowMs) => {
   };
 };
 
+// Aave accounts as Total equity entries: net value (collateral − debt) at
+// the Pool's own USD totals; stale when the server's reading is old or its
+// last refresh failed (the last good value is still counted).
+const aaveEquityEntries = (aave, nowMs) => {
+  if (!aave || !Array.isArray(aave.accounts)) return [];
+  return aave.accounts.map((a) => {
+    const name = `Aave ${a.label || a.address || ""}`.trim();
+    const atMs = Number(a.at_ms);
+    const coll = holderNumber(a.collateral_usd);
+    const debt = holderNumber(a.debt_usd);
+    const read = atMs > 0 && coll !== null && debt !== null;
+    return {
+      key: `aave:${a.address || a.label}`,
+      name,
+      bucket: "aave",
+      parts: read ? [{ venue: "Aave", usd: coll - debt }] : [],
+      stale: !read || nowMs - atMs > AAVE_STALE_MS || Boolean(a.error),
+      incomplete: false,
+      updatedMs: read ? atMs : -Infinity,
+      shared: [],
+    };
+  });
+};
+
 // Pure: the fleet's total account value. nowMs is injectable for tests.
-const fleetEquityModel = (targets, nowMs = Date.now()) => {
+// `aave` is /api/status `.aave` (the owner's Aave v3 accounts, aave.go):
+// each account counts once at its net value, collateral − debt.
+const fleetEquityModel = (targets, nowMs = Date.now(), aave = null) => {
   const accounts = new Map();
   const unreadWallets = new Set();
   const notCounted = [];
@@ -884,6 +910,14 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
   unreadWallets.forEach((key) => {
     if (!accounts.has(key)) missing += 1;
   });
+  aaveEquityEntries(aave, nowMs).forEach((e) => {
+    if (e.parts.length === 0) {
+      missing += 1;
+      notCounted.push({ name: e.name, reason: "Aave account not read yet" });
+      return;
+    }
+    accounts.set(e.key, e);
+  });
   let total = 0;
   let stale = 0;
   const byVenue = new Map();
@@ -914,9 +948,9 @@ const fleetEquityModel = (targets, nowMs = Date.now()) => {
 
 const fleetEquityTitle = (model) => {
   const usd0 = (n) => `$${Math.round(n).toLocaleString("en-US")}`;
-  const lines = ["Account value of the bots' accounts (capital, not PnL); each account counted once."];
+  const lines = ["Account value of the bots' accounts (capital, not PnL); each account counted once. Aave accounts at collateral − debt."];
   if (model.byVenue.length) lines.push(`By venue: ${model.byVenue.map(([v, n]) => `${v} ${usd0(n)}`).join(" · ")}`);
-  if (model.byBucket.length) lines.push(`By bucket: ${model.byBucket.map(([b, n]) => `${BUCKET_LABELS[b] || b} ${usd0(n)}`).join(" · ")}`);
+  if (model.byBucket.length) lines.push(`By bucket: ${model.byBucket.map(([b, n]) => `${b === "aave" ? "Aave (own accounts)" : BUCKET_LABELS[b] || b} ${usd0(n)}`).join(" · ")}`);
   const shared = model.counted.filter((a) => a.shared.length);
   if (shared.length) lines.push(`Shared accounts counted once: ${shared.map((a) => [a.name, ...a.shared].join(" = ")).join("; ")}`);
   if (model.stale) lines.push(`${model.stale} stale (last known value included)`);
