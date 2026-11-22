@@ -4916,6 +4916,7 @@ const aavePanelModel = (aave, nowMs = Date.now()) => {
       availableUsd: read ? a.available_borrow_usd : null,
       liqThreshold: a.liq_threshold,
       emode: a.emode_id,
+      priceMismatch: Boolean(a.price_mismatch),
       supplies,
       borrows,
       borrowApr,
@@ -4941,7 +4942,9 @@ const aavePanelHtml = (model, nowMs = Date.now()) => {
   const e = escapeHtml;
   const rows = model.rows.map((r) => {
     const amounts = (list, key) => list.map((x) => `${e(aaveAmount(x[key]))} ${e(x.symbol)}`).join(" + ") || "—";
-    const liq = r.liq.length === 0
+    const liq = r.priceMismatch
+      ? '<span class="tone-caution" title="Oracle prices disagree with the Pool\'s collateral total (custom e-mode price source?); liquidation price not computed">n/a — price mismatch</span>'
+      : r.liq.length === 0
       ? (r.debtUsd > 0 ? "—" : "no debt")
       : r.liq.map((l) => `${e(l.symbol)} ${e(aavePrice(l.price))}<div class="arcus-muted">${l.drop === null ? "" : `${e(aavePct(l.drop))} from now`}</div>`).join("");
     const note = r.error

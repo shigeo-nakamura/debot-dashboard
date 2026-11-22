@@ -259,3 +259,17 @@ func TestAaveLiqPriceTwoCollaterals(t *testing.T) {
 		t.Fatalf("X alone cannot liquidate, got %v", *st2.Assets[0].LiqPriceUSD)
 	}
 }
+
+func TestAaveLiqPriceSkippedWhenPricesDisagreeWithPool(t *testing.T) {
+	// Codex PR #83: a custom e-mode price source would value collateral
+	// differently from getAssetPrice; the Pool's total then disagrees with
+	// the per-asset sum and no liquidation price is published.
+	hf := 1.3
+	st := AaveAccountStatus{CollateralUSD: 120, DebtUSD: 80, LiqThreshold: 0.85, HealthFactor: &hf, Assets: []AaveAsset{
+		{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true},
+	}}
+	applyAaveLiqPrices(&st)
+	if !st.PriceMismatch || st.Assets[0].LiqPriceUSD != nil {
+		t.Fatalf("want mismatch and no liq price: %+v", st)
+	}
+}

@@ -3456,6 +3456,8 @@ test("aave panel: health factor tones, liquidation distance, stale and no-debt a
   assert.match(html, /1\.375/);
   assert.equal(t.aaveHfTone(1.2), "caution");
   assert.equal(t.aaveHfTone(null), "neutral");
+  const mm = t.aavePanelModel({ accounts: [{ ...aave.accounts[0], price_mismatch: true }] }, now);
+  assert.match(t.aavePanelHtml(mm, now), /price mismatch/);
   assert.equal(t.aavePanelModel(null), null);
   assert.equal(t.aavePanelModel({ accounts: [] }), null);
 });

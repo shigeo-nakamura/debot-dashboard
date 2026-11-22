@@ -31,6 +31,10 @@ const (
 	aaveTTL      = 60 * time.Second
 	aaveErrorTTL = 30 * time.Second
 	aaveTimeout  = 10 * time.Second
+	// Relative gap allowed between Σ collateral × oracle price and the
+	// Pool's collateral total (balances and prices are read in different
+	// batches, a block or two apart).
+	aavePriceTolerance = 0.005
 )
 
 var aaveAddressRe = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
@@ -124,9 +128,14 @@ type AaveAccountStatus struct {
 	LTV          float64 `json:"ltv"`
 	// HealthFactor is nil when the account has no debt (the Pool returns
 	// uint256 max); liquidatable below 1.
-	HealthFactor *float64    `json:"health_factor,omitempty"`
-	EModeID      int64       `json:"emode_id"`
-	Assets       []AaveAsset `json:"assets"`
+	HealthFactor *float64 `json:"health_factor,omitempty"`
+	EModeID      int64    `json:"emode_id"`
+	// PriceMismatch: the collateral valued at the oracle prices read here
+	// does not match the Pool's own collateral total (e.g. a custom e-mode
+	// price source on an older Pool), so the per-asset liquidation prices
+	// would be wrong and are left out.
+	PriceMismatch bool        `json:"price_mismatch,omitempty"`
+	Assets        []AaveAsset `json:"assets"`
 	// AtMs is when this reading was taken; Error is the last refresh's
 	// failure (the previous reading is kept, so AtMs then lags).
 	AtMs  int64  `json:"at_ms"`
@@ -563,6 +572,18 @@ func readAaveAccounts(ctx context.Context, client *http.Client, cfg *AaveConfig,
 // also moves if the account borrows the same asset; HF = 1 solves for k.
 func applyAaveLiqPrices(st *AaveAccountStatus) {
 	if st.DebtUSD <= 0 || st.CollateralUSD <= 0 || st.HealthFactor == nil {
+		return
+	}
+	// The liquidation prices rest on the per-asset oracle prices matching
+	// what the Pool used for its totals; check that before trusting them.
+	var priced float64
+	for _, a := range st.Assets {
+		if a.Collateral {
+			priced += a.SuppliedUSD
+		}
+	}
+	if math.Abs(priced-st.CollateralUSD) > aavePriceTolerance*st.CollateralUSD {
+		st.PriceMismatch = true
 		return
 	}
 	weighted := st.CollateralUSD * st.LiqThreshold
