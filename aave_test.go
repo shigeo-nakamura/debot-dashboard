@@ -240,8 +240,8 @@ func TestAaveLiqPriceTwoCollaterals(t *testing.T) {
 	// Two collaterals at the same threshold: moving only one of them.
 	hf := 1.7
 	st := AaveAccountStatus{CollateralUSD: 200, DebtUSD: 100, LiqThreshold: 0.85, HealthFactor: &hf, Assets: []AaveAsset{
-		{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true},
-		{Symbol: "Y", PriceUSD: 1, Supplied: 100, SuppliedUSD: 100, Collateral: true},
+		{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.85},
+		{Symbol: "Y", PriceUSD: 1, Supplied: 100, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.85},
 	}}
 	applyAaveLiqPrices(&st)
 	// (85 + k·85) = 100 → k = 15/85
@@ -251,8 +251,8 @@ func TestAaveLiqPriceTwoCollaterals(t *testing.T) {
 	}
 	// Plenty of collateral elsewhere: X alone cannot liquidate.
 	st2 := AaveAccountStatus{CollateralUSD: 200, DebtUSD: 50, LiqThreshold: 0.85, HealthFactor: &hf, Assets: []AaveAsset{
-		{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true},
-		{Symbol: "Y", PriceUSD: 1, Supplied: 100, SuppliedUSD: 100, Collateral: true},
+		{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.85},
+		{Symbol: "Y", PriceUSD: 1, Supplied: 100, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.85},
 	}}
 	applyAaveLiqPrices(&st2)
 	if st2.Assets[0].LiqPriceUSD != nil {
@@ -271,5 +271,30 @@ func TestAaveLiqPriceSkippedWhenPricesDisagreeWithPool(t *testing.T) {
 	applyAaveLiqPrices(&st)
 	if !st.PriceMismatch || st.Assets[0].LiqPriceUSD != nil {
 		t.Fatalf("want mismatch and no liq price: %+v", st)
+	}
+}
+
+func TestAaveLiqPriceUsesPerReserveThresholds(t *testing.T) {
+	// Codex PR #83: collaterals with different thresholds. W = 100·0.8 +
+	// 100·0.5 = 130 (LT 0.65 on 200). Debt 100, X moves: 50 + k·80 = 100.
+	hf := 1.3
+	mk := func() AaveAccountStatus {
+		return AaveAccountStatus{CollateralUSD: 200, DebtUSD: 100, LiqThreshold: 0.65, HealthFactor: &hf, Assets: []AaveAsset{
+			{Symbol: "X", PriceUSD: 10, Supplied: 10, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.8},
+			{Symbol: "Y", PriceUSD: 1, Supplied: 100, SuppliedUSD: 100, Collateral: true, liqThreshold: 0.5},
+		}}
+	}
+	st := mk()
+	applyAaveLiqPrices(&st)
+	if st.Assets[0].LiqPriceUSD == nil || math.Abs(*st.Assets[0].LiqPriceUSD-10*50.0/80.0) > 1e-9 {
+		t.Fatalf("X liq %v", st.Assets[0].LiqPriceUSD)
+	}
+	// Reserve thresholds that do not add up to the Pool's (an e-mode
+	// override): no guess.
+	st = mk()
+	st.LiqThreshold = 0.9
+	applyAaveLiqPrices(&st)
+	if st.Assets[0].LiqPriceUSD != nil || st.Assets[1].LiqPriceUSD != nil {
+		t.Fatalf("want no liq price on a threshold mismatch")
 	}
 }

@@ -114,6 +114,9 @@ type AaveAsset struct {
 	// health factor to 1 with every other price unchanged; nil when the
 	// account has no debt or this asset alone cannot get it there.
 	LiqPriceUSD *float64 `json:"liq_price_usd,omitempty"`
+	// liqThreshold is the reserve's own (non-e-mode) threshold, used to
+	// split the Pool's weighted collateral across several collaterals.
+	liqThreshold float64
 }
 
 type AaveAccountStatus struct {
@@ -346,6 +349,7 @@ type aaveReserveInfo struct {
 	variableDebt string
 	supplyAPR    float64
 	borrowAPR    float64
+	liqThreshold float64
 }
 
 var aaveRay = new(big.Float).SetFloat64(1e27)
@@ -477,7 +481,8 @@ func readAaveAccounts(ctx context.Context, client *http.Client, cfg *AaveConfig,
 			return nil, err
 		}
 		dec := new(big.Int).And(new(big.Int).Rsh(conf, 48), big.NewInt(0xff)).Int64()
-		info[i] = aaveReserveInfo{asset: reserves[i], decimals: int(dec), aToken: aToken, variableDebt: vDebt,
+		lt := new(big.Int).And(new(big.Int).Rsh(conf, 16), big.NewInt(0xffff)).Int64()
+		info[i] = aaveReserveInfo{asset: reserves[i], decimals: int(dec), aToken: aToken, variableDebt: vDebt, liqThreshold: float64(lt) / 1e4,
 			supplyAPR: aaveRayToFloat(liq), borrowAPR: aaveRayToFloat(vb)}
 	}
 
@@ -536,13 +541,14 @@ func readAaveAccounts(ctx context.Context, client *http.Client, cfg *AaveConfig,
 			sym = aaveShortAddress(in.asset)
 		}
 		asset := AaveAsset{
-			Symbol:     sym,
-			PriceUSD:   prices[r.i],
-			Supplied:   aaveScaled(s, in.decimals),
-			Borrowed:   aaveScaled(d, in.decimals),
-			Collateral: accts[r.k].coll[r.i],
-			SupplyAPR:  in.supplyAPR,
-			BorrowAPR:  in.borrowAPR,
+			Symbol:       sym,
+			PriceUSD:     prices[r.i],
+			Supplied:     aaveScaled(s, in.decimals),
+			Borrowed:     aaveScaled(d, in.decimals),
+			Collateral:   accts[r.k].coll[r.i],
+			SupplyAPR:    in.supplyAPR,
+			BorrowAPR:    in.borrowAPR,
+			liqThreshold: in.liqThreshold,
 		}
 		asset.SuppliedUSD = asset.Supplied * asset.PriceUSD
 		asset.BorrowedUSD = asset.Borrowed * asset.PriceUSD
@@ -564,12 +570,14 @@ func readAaveAccounts(ctx context.Context, client *http.Client, cfg *AaveConfig,
 // applyAaveLiqPrices sets each collateral asset's liquidation price: the
 // price at which, all else unchanged, the health factor reaches 1.
 //
-// HF = W / D with W = Σ collateral_j · price_j · LT_j. The Pool reports W
-// as collateral × the weighted LT; asset i's share of W is approximated by
-// its share of the collateral value (exact with one collateral asset, or
-// when every collateral has the same threshold, e.g. inside one e-mode).
-// Moving price_i by a factor k gives HF = (W − w_i + k·w_i) / D' where D'
-// also moves if the account borrows the same asset; HF = 1 solves for k.
+// HF = W / D with W = Σ collateral_j · price_j · LT_j, which the Pool
+// reports as collateral × the weighted LT. Moving price_i by a factor k
+// gives HF = (W − w_i + k·w_i) / D' where D' also moves if the account
+// borrows the same asset; HF = 1 solves for k. w_i is exact with one
+// collateral asset (w_i = W). With several, w_i = value_i · LT_i from the
+// reserve thresholds, used only when they add up to the Pool's W — an
+// e-mode overriding some thresholds breaks that sum, and then no
+// liquidation price is published rather than a proportional guess.
 func applyAaveLiqPrices(st *AaveAccountStatus) {
 	if st.DebtUSD <= 0 || st.CollateralUSD <= 0 || st.HealthFactor == nil {
 		return
@@ -587,12 +595,27 @@ func applyAaveLiqPrices(st *AaveAccountStatus) {
 		return
 	}
 	weighted := st.CollateralUSD * st.LiqThreshold
+	share := map[int]float64{}
+	var shareSum float64
+	for j, a := range st.Assets {
+		if a.Collateral && a.SuppliedUSD > 0 {
+			share[j] = a.SuppliedUSD * a.liqThreshold
+			shareSum += share[j]
+		}
+	}
+	if len(share) == 1 {
+		for j := range share {
+			share[j] = weighted
+		}
+	} else if math.Abs(shareSum-weighted) > aavePriceTolerance*weighted {
+		return
+	}
 	for j := range st.Assets {
 		a := &st.Assets[j]
 		if !a.Collateral || a.SuppliedUSD <= 0 || a.PriceUSD <= 0 {
 			continue
 		}
-		wi := weighted * a.SuppliedUSD / st.CollateralUSD
+		wi := share[j]
 		// (weighted − wi + k·wi) = (D − b_i + k·b_i)
 		denom := wi - a.BorrowedUSD
 		if denom <= 0 {
