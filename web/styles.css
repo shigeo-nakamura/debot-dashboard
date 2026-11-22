@@ -1253,3 +1253,22 @@ body::after {
   stroke-width: 1;
   stroke-dasharray: 2 2;
 }
+
+/* Aave v3 borrow positions (aave.go): a full-width panel under the fleet
+   summary, reusing the Arcus panel's header and table styles. */
+.aave-panel {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+}
+
+.aave-panel-table {
+  min-width: 760px;
+}
+
+.aave-panel .arcus-panel-totals .tone-ok { color: var(--success); }
+.aave-panel .arcus-panel-totals .tone-caution { color: var(--warning); }

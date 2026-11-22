@@ -38,6 +38,8 @@ type Config struct {
 	PollIntervalSecs int            `yaml:"poll_interval_secs"`
 	Targets          []TargetConfig `yaml:"targets"`
 	Auth             *AuthConfig    `yaml:"auth"`
+	// Aave is the optional Aave v3 borrow-positions panel (aave.go).
+	Aave *AaveConfig `yaml:"aave"`
 }
 
 type AuthConfig struct {
@@ -673,6 +675,8 @@ type DashboardSnapshot struct {
 	UpdatedAt        time.Time      `json:"updated_at"`
 	PollIntervalSecs int            `json:"poll_interval_secs"`
 	Targets          []TargetStatus `json:"targets"`
+	// Aave is the Aave v3 borrow-positions panel; omitted when not configured.
+	Aave *AaveStatus `json:"aave,omitempty"`
 }
 
 type StatusCache struct {
@@ -836,6 +840,11 @@ func normalizeConfig(cfg *Config) error {
 	}
 	if len(cfg.Targets) == 0 {
 		return errors.New("no targets configured")
+	}
+	if cfg.Aave != nil {
+		if err := cfg.Aave.normalize(); err != nil {
+			return err
+		}
 	}
 	for i := range cfg.Targets {
 		target := &cfg.Targets[i]
@@ -1038,11 +1047,20 @@ func fetchAll(ctx context.Context, cfg Config, s3pool *S3ClientPool, includeHist
 			applyAccumulatorDecisionStaleness(results[i].Status, time.Now())
 		}()
 	}
+	var aave *AaveStatus
+	if cfg.Aave != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			aave = fetchAaveStatus(ctx, http.DefaultClient, cfg.Aave, time.Now())
+		}()
+	}
 	wg.Wait()
 	return DashboardSnapshot{
 		UpdatedAt:        time.Now(),
 		PollIntervalSecs: cfg.PollIntervalSecs,
 		Targets:          results,
+		Aave:             aave,
 	}
 }
 

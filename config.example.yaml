@@ -271,3 +271,20 @@ targets:
 #    stale_after_secs: 7200
 #    dex: "Lighter (LLP + LIT perp hedge)"
 #    bucket: subsidy
+
+# Aave v3 borrow positions panel (optional, top level). The dashboard reads
+# the Pool over a public JSON-RPC endpoint (eth_call only, cached 60 s) and
+# shows each account's health factor, collateral, debt and the collateral
+# price at which it gets liquidated. Keep the real addresses in the host's
+# config.yaml only — this repo is public; the API serves shortened ones.
+# chain / rpc_url / pool default to Base, https://base-rpc.publicnode.com
+# and the Aave v3 Base Pool.
+#aave:
+#  chain: Base
+#  rpc_url: https://base-rpc.publicnode.com
+#  pool: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
+#  accounts:
+#    - label: main
+#      address: "0x0000000000000000000000000000000000000001"
+#    - label: sub
+#      address: "0x0000000000000000000000000000000000000002"

@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = `${fs.readFileSync(`${__dirname}/../web/app.js`, "utf8")}
-globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus, llpPnlSeries, llpPnlChartSvg, fleetEquityModel, targetEquityParts, fleetEquityTitle };`;
+globalThis.__test = { isStale, renderRiskHistory, isAccumulatorStatus, isTargetUnhealthy, accumulatorViewModel, isHanBridgeStatus, hanBridgeViewModel, isHanBridgeHalted, bullHolderViewModel, renderBullHolderStatus, holderMoney, updateFleetSummary, snapshotToPoint, renderHolderSummary, holderLastTradeText, holderSigned, isBookStatus, isBookHalted, bookViewModel, hanBridgeScheduleViewModel, snapshotEquityValue, formatPnl, formatUsdc, usdCurrency, formatHype, bucketOf, isBlindedBucket, bucketAggregateStats, BUCKET_LABELS, BUCKET_BENCHMARKS, BUCKET_ORDER, updateHistoryCache, baselineEquityAt, keyForTarget, benchmarkEquityValue, pairedSeries, updateBenchmarkCache, benchmarkByKey, historyByKey, formatSignedUsdc, maxDrawdownPct, calmarRatio, renderHolderBenchmark, snapshotToBenchmarkPoint, renderSubsidyPanel, subsidyCostFallback, costPerUnit, subsidyAggregateStats, renderGatePanel, gateHealthText, formatCadence, entryBlockingHalts, blindAlphaCandidate, alphaAggregateStats, gateDeadlineText, renderRiskPanel, renderAccumulatorDCA, renderAccumulatorStatus, isHedgeHolderStatus, isHedgeHolderHalted, isHedgeHolderFeedBlind, hedgeHolderViewModel, renderHedgeHolderStatus, isHolderAgentRed, holderTime, isArcusVolStatus, isArcusVolHalted, isArcusVolDegraded, isArcusVolKeyRed, arcusVolHaltLabel, arcusVolViewModel, renderArcusVolStatus, isArcusVolTarget, arcusPanelModel, arcusPanelHtml, isLLPMonitorStatus, isLLPMonitorDegraded, llpMonitorFeedErrors, llpMonitorViewModel, llpWeeklyHtml, renderLLPMonitorStatus, llpPnlSeries, llpPnlChartSvg, fleetEquityModel, targetEquityParts, fleetEquityTitle, aavePanelModel, aavePanelHtml, aaveHfTone };`;
 const fleetFields = new Map();
 const fleet = { querySelector(selector) {
   if (!fleetFields.has(selector)) fleetFields.set(selector, { textContent: "", closest() { return null; }, classList: { toggle() {}, add() {}, remove() {} } });
@@ -3412,4 +3412,50 @@ test("total equity: an unread Arcus wallet is one missing account, an old readin
   const fm = context.__test.fleetEquityModel([failedRefresh], eqNow);
   assert.equal(fm.total, 5000);
   assert.equal(fm.stale, 1);
+});
+
+test("aave panel: health factor tones, liquidation distance, stale and no-debt accounts", () => {
+  const now = 1_800_000_000_000;
+  const aave = {
+    chain: "Base",
+    accounts: [
+      {
+        label: "main", address: "0x23a3…7888", at_ms: now - 10_000,
+        collateral_usd: 288525, debt_usd: 178371, available_borrow_usd: 58219,
+        liq_threshold: 0.85, ltv: 0.82, health_factor: 1.375, emode_id: 10,
+        assets: [
+          { symbol: "USDC", price_usd: 1, supplied: 0, supplied_usd: 0, borrowed: 178385, borrowed_usd: 178371, collateral: false, borrow_apr: 0.06 },
+          { symbol: "cbBTC", price_usd: 60668, supplied: 4.7558, supplied_usd: 288525, borrowed: 0, borrowed_usd: 0, collateral: true, borrow_apr: 0.006, liq_price_usd: 44125 },
+        ],
+      },
+      { label: "near", address: "0xb6c7…ff81", at_ms: now - 10 * 60_000, error: "Aave RPC unavailable",
+        collateral_usd: 100, debt_usd: 80, health_factor: 1.06, liq_threshold: 0.85, assets: [] },
+      { label: "0xad72…f37f", address: "0xad72…f37f", at_ms: 0, assets: [] },
+    ],
+  };
+  const t = context.__test;
+  const m = t.aavePanelModel(aave, now);
+  assert.equal(m.rows.length, 3);
+  assert.equal(m.rows[0].tone, "ok");
+  assert.equal(m.rows[0].liq[0].symbol, "cbBTC");
+  assert.ok(Math.abs(m.rows[0].liq[0].drop - (44125 / 60668 - 1)) < 1e-12);
+  assert.ok(Math.abs(m.rows[0].interestYearUsd - 178371 * 0.06) < 1e-6);
+  assert.equal(m.rows[1].tone, "warn");
+  assert.equal(m.rows[1].stale, true);
+  assert.equal(m.rows[2].read, false);
+  assert.equal(m.rows[2].collateralUsd, null);
+  // Never-read accounts stay out of the totals.
+  assert.equal(m.collateral, 288625);
+  assert.equal(m.minHf, 1.06);
+  assert.equal(m.minTone, "warn");
+  assert.equal(JSON.stringify(m.prices), JSON.stringify([["cbBTC", 60668]]));
+  const html = t.aavePanelHtml(m, now);
+  assert.match(html, /\$44,125/);
+  assert.match(html, /-27\.3% from now/);
+  assert.match(html, /Aave RPC unavailable · last known/);
+  assert.match(html, /1\.375/);
+  assert.equal(t.aaveHfTone(1.2), "caution");
+  assert.equal(t.aaveHfTone(null), "neutral");
+  assert.equal(t.aavePanelModel(null), null);
+  assert.equal(t.aavePanelModel({ accounts: [] }), null);
 });
