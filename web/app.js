@@ -3,6 +3,7 @@ const fleetSummaryEl = document.getElementById("fleet-summary");
 const lastUpdatedEl = document.getElementById("last-updated");
 const pollIntervalEl = document.getElementById("poll-interval");
 const rangeToggleEl = document.getElementById("range-toggle");
+const aavePanelEl = document.getElementById("aave-panel");
 
 const POLL_MS = 5000;
 // main.go serviceStatusNotStarted: the target's status object does not
@@ -195,6 +196,7 @@ const render = (data) => {
   // see fleetEquityModel). Performance aggregates stay in the per-bucket
   // headers (bot-strategy#959).
   updateFleetSummary(data.targets);
+  renderAavePanel(aavePanelEl, data.aave);
 
   if (!hasRendered) {
     hasRendered = true;
@@ -4862,6 +4864,128 @@ const formatAge = (ms) => {
   const hours = Math.floor(mins / 60);
   const remMins = mins - hours * 60;
   return remMins === 0 ? `${hours}h` : `${hours}h${remMins}m`;
+};
+
+// Aave v3 borrow positions (aave.go): the owner's collateral + debt
+// accounts, read by the server straight from the Pool. The question the
+// panel answers is "how far is each account from liquidation".
+const AAVE_STALE_MS = 5 * 60 * 1000;
+// Health-factor tones: liquidatable below 1.0; red under 1.1, amber under 1.25.
+const aaveHfTone = (hf) => (hf === null ? "neutral" : hf < 1.1 ? "warn" : hf < 1.25 ? "caution" : "ok");
+const aaveUsd = (v) => (Number.isFinite(v) ? `$${groupedFixed(v, 0)}` : "—");
+const aavePrice = (v) => (Number.isFinite(v) ? `$${groupedFixed(v, v >= 100 ? 0 : 4)}` : "—");
+const aaveAmount = (v) => (Number.isFinite(v) ? groupedFixed(v, Math.abs(v) >= 1000 ? 0 : 4) : "—");
+const aavePct = (v, digits = 1) => (Number.isFinite(v) ? `${(v * 100).toFixed(digits)}%` : "—");
+
+const aavePanelModel = (aave, nowMs = Date.now()) => {
+  if (!aave || !Array.isArray(aave.accounts) || aave.accounts.length === 0) return null;
+  const prices = new Map();
+  let collateral = 0;
+  let debt = 0;
+  let minHf = null;
+  let anyIssue = false;
+  const rows = aave.accounts.map((a) => {
+    const read = Number(a.at_ms) > 0;
+    const stale = !read || nowMs - Number(a.at_ms) > AAVE_STALE_MS;
+    const hf = read && Number.isFinite(a.health_factor) ? a.health_factor : null;
+    const assets = Array.isArray(a.assets) ? a.assets : [];
+    assets.forEach((x) => { if (Number.isFinite(x.price_usd)) prices.set(x.symbol, x.price_usd); });
+    const liq = assets
+      .filter((x) => x.collateral && Number.isFinite(x.liq_price_usd))
+      .map((x) => ({ symbol: x.symbol, price: x.liq_price_usd, drop: x.price_usd > 0 ? x.liq_price_usd / x.price_usd - 1 : null }));
+    const borrows = assets.filter((x) => x.borrowed > 0);
+    const supplies = assets.filter((x) => x.supplied > 0);
+    const debtUsd = borrows.reduce((s, x) => s + x.borrowed_usd, 0);
+    const borrowApr = debtUsd > 0 ? borrows.reduce((s, x) => s + x.borrowed_usd * x.borrow_apr, 0) / debtUsd : null;
+    if (read) {
+      collateral += a.collateral_usd || 0;
+      debt += a.debt_usd || 0;
+    }
+    if (hf !== null && (minHf === null || hf < minHf)) minHf = hf;
+    if (stale || a.error) anyIssue = true;
+    return {
+      label: a.label,
+      address: a.address,
+      read,
+      stale,
+      error: a.error || "",
+      hf,
+      tone: aaveHfTone(hf),
+      collateralUsd: read ? a.collateral_usd : null,
+      debtUsd: read ? a.debt_usd : null,
+      availableUsd: read ? a.available_borrow_usd : null,
+      liqThreshold: a.liq_threshold,
+      emode: a.emode_id,
+      priceMismatch: Boolean(a.price_mismatch),
+      supplies,
+      borrows,
+      borrowApr,
+      // Yearly interest on today's debt, for "how fast does the
+      // liquidation price creep up".
+      interestYearUsd: borrowApr === null ? null : debtUsd * borrowApr,
+      liq,
+    };
+  });
+  return {
+    chain: aave.chain || "",
+    rows,
+    collateral,
+    debt,
+    minHf,
+    minTone: aaveHfTone(minHf),
+    anyIssue,
+    prices: Array.from(prices.entries()).filter(([sym]) => !/^USD/.test(sym)),
+  };
+};
+
+const aavePanelHtml = (model, nowMs = Date.now()) => {
+  const e = escapeHtml;
+  const rows = model.rows.map((r) => {
+    const amounts = (list, key) => list.map((x) => `${e(aaveAmount(x[key]))} ${e(x.symbol)}`).join(" + ") || "—";
+    const liq = r.priceMismatch
+      ? '<span class="tone-caution" title="Oracle prices disagree with the Pool\'s collateral total (custom e-mode price source?); liquidation price not computed">n/a — price mismatch</span>'
+      : r.liq.length === 0
+      ? (r.debtUsd > 0 ? "—" : "no debt")
+      : r.liq.map((l) => `${e(l.symbol)} ${e(aavePrice(l.price))}<div class="arcus-muted">${l.drop === null ? "" : `${e(aavePct(l.drop))} from now`}</div>`).join("");
+    const note = r.error
+      ? `<div class="tone-warn">${e(r.error)}${r.read ? " · last known" : ""}</div>`
+      : r.stale ? '<div class="tone-warn">stale</div>' : "";
+    return `<tr class="${r.tone === "warn" || r.error || r.stale ? "arcus-row-warn" : ""}">
+      <td><b>${e(r.label)}</b>${r.label !== r.address ? `<div class="arcus-muted">${e(r.address)}</div>` : ""}${note}</td>
+      <td class="tone-${r.tone}"><b>${r.hf === null ? (r.read ? "∞" : "—") : r.hf.toFixed(3)}</b><div class="arcus-muted">LT ${e(aavePct(r.liqThreshold, 0))}${r.emode ? ` · e-mode ${e(r.emode)}` : ""}</div></td>
+      <td>${e(aaveUsd(r.collateralUsd))}<div class="arcus-muted">${amounts(r.supplies, "supplied")}</div></td>
+      <td>${e(aaveUsd(r.debtUsd))}<div class="arcus-muted">${amounts(r.borrows, "borrowed")}</div></td>
+      <td>${liq}</td>
+      <td>${e(aavePct(r.borrowApr, 2))}<div class="arcus-muted">${r.interestYearUsd === null ? "" : `≈ ${e(aaveUsd(r.interestYearUsd))}/yr`}</div></td>
+      <td>${e(aaveUsd(r.availableUsd))}</td>
+    </tr>`;
+  }).join("");
+  const prices = model.prices.map(([sym, p]) => `${e(sym)} ${e(aavePrice(p))}`).join(" · ");
+  return `
+    <header class="arcus-panel-header">
+      <h3>Aave v3 positions <span class="arcus-muted">${e(model.chain)} · ${model.rows.length} ${model.rows.length === 1 ? "account" : "accounts"}</span></h3>
+      <div class="arcus-panel-totals">
+        <span title="Lowest health factor across the accounts; liquidation starts below 1.0">Lowest HF <b class="tone-${model.minTone}">${model.minHf === null ? "—" : model.minHf.toFixed(3)}</b></span>
+        <span>Collateral ${e(aaveUsd(model.collateral))}</span>
+        <span>Debt ${e(aaveUsd(model.debt))}</span>
+        <span>Net ${e(aaveUsd(model.collateral - model.debt))}</span>
+        ${prices ? `<span class="arcus-muted">Oracle ${prices}</span>` : ""}
+      </div>
+    </header>
+    <div class="arcus-panel-scroll">
+      <table class="arcus-panel-table aave-panel-table">
+        <thead><tr><th>Account</th><th title="Health factor = Σ collateral × liquidation threshold / debt. Liquidatable below 1.0 (red < 1.1, amber < 1.25).">Health factor</th><th>Collateral</th><th>Debt</th><th title="Oracle price at which this collateral alone takes the health factor to 1.0, all else unchanged. Interest accrual raises it over time.">Liquidation price</th><th title="Variable borrow APR, debt-weighted; the yearly interest on today's debt">Borrow APR</th><th title="What the account can still borrow at its LTV">Borrow room</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+};
+
+const renderAavePanel = (el, aave) => {
+  if (!el) return;
+  const model = aavePanelModel(aave);
+  el.hidden = model === null;
+  if (model === null) return;
+  el.innerHTML = aavePanelHtml(model);
 };
 
 const isStale = (updatedAt, staleAfterSecs = 180) => {
